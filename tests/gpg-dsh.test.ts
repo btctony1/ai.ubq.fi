@@ -839,6 +839,14 @@ test("a seed left in the shared dsh-gnupg layout is discarded with its agent", a
   });
 });
 
+test("installation drains a live legacy rebuild before allowing new-layout signing", async () => {
+  const fixture = fileURLToPath(new URL("./fixtures/gpg-dsh-migration.sh", import.meta.url));
+  const output = await runFixture("/bin/sh", { args: [fixture, HELPER], env: { PATH: HOST_PATH, TMPDIR: tmpdir() } });
+  assert.equal(output.code, 0, decoder.decode(output.stderr));
+  assert.match(decoder.decode(output.stdout), /install=0 new=0 legacy=0 lock-and-stage-preserved=true/);
+  assert.match(decoder.decode(output.stdout), /PASS: installation quiescence/);
+}, 30_000);
+
 test("the sandboxed-signing decision records the helper and its private-key invalidation", async () => {
   const decisions = await readFile(DECISIONS, "utf8");
   const entry = decisions.split(/^## /m).find((section) => section.startsWith("Sandboxed commits sign through a GNUPGHOME inside writable roots"));
