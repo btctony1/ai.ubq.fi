@@ -541,6 +541,7 @@ const deliverMeteredResponse = async (
       reasoningSummary: isRecord(body.reasoning) ? (nonEmptyString(body.reasoning.summary) ?? undefined) : undefined,
       reasoningReplayScope: options.reasoningReplayScope,
       provider: "metered",
+      toolNames: native.toolNames,
     });
   }
   if (!isSurplusClaudeModel(body.model)) return response;

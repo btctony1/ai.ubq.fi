@@ -199,7 +199,6 @@ test("OpenLux keeps requested effort and unrepresentable controls on the origina
     { reasoning: { effort: "max", summary: "auto" } },
     { reasoning: { effort: "none" } },
     { prompt_cache_retention: "24h" },
-    { text: { format: { type: "json_schema", name: "answer", schema: { type: "object" } } } },
     { input: [{ type: "reasoning", id: "external-reasoning", encrypted_content: "opaque" }] },
     { model: "claude-unadvertised", max_output_tokens: 128 },
   ]) {
@@ -213,6 +212,28 @@ test("OpenLux keeps requested effort and unrepresentable controls on the origina
     assert.equal(result.prompt_cache_mode, undefined);
     await result.response.body?.cancel();
   }
+});
+
+test("OpenLux native Messages preserves JSON-schema output config", async () => {
+  const { calls, fetcher } = capture();
+  const schema = {
+    type: "object",
+    properties: { title: { type: "string" } },
+    required: ["title"],
+    additionalProperties: false,
+  };
+  const result = await fetchMeteredResponses(
+    {
+      model,
+      input: "Generate a title",
+      max_output_tokens: 128,
+      text: { format: { type: "json_schema", strict: true, name: "answer", schema } },
+    },
+    { apiKey: "fixture-key", fetcher }
+  );
+  assert.equal(calls[0].url, "https://api.openlux.ai/v1/messages");
+  assert.deepEqual(calls[0].body.output_config, { format: { type: "json_schema", schema } });
+  await result.response.body?.cancel();
 });
 
 test("OpenLux transport restores native signed tool history only within the authenticated provider scope", async () => {
