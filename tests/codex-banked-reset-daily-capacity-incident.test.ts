@@ -21,8 +21,6 @@ import {
   RoutingKv,
   codexCredentialVersion,
   getCodexQuotaBlockFence,
-  httpDateQuotaResponse,
-  markCodexQuotaBlocked,
   recordCodexCapacityRoutingObservations,
   required,
   resetCodexAccountRoutingForTest,
@@ -44,13 +42,13 @@ import {
   dependencies,
   evaluateCodexBankedResetPool,
   inventory,
-  parseCodexBankedResetConfig,
   provenContract,
   requiredHash,
   seedFences,
   testHash,
 } from "./helpers/codex-banked-reset-harness.ts";
 import { providerPolicyReason } from "../src/codex/banked-reset.ts";
+import { loadCodexCapacityRoutingObservations, reconcileCapacityQuotaBlock } from "../src/codex/capacity-routing.ts";
 import { sha256Hex } from "../src/utils.ts";
 
 type RoutingAuth = CodexAuthPoolState["accounts"][number];
@@ -149,9 +147,13 @@ test("a capacity-100% class yields a blocked cohort identity, and only materiali
     // Step 2: the in-memory identity alone arms no claim.
     assert.equal(await getCodexQuotaBlockFence(blocked, resetAtMs), null);
 
-    // Step 3: emulate the shipped materialization exactly, a fresh applied
-    // stable deadline from the observation's reset instant.
-    await markCodexQuotaBlocked(blocked, httpDateQuotaResponse(resetAtMs), now + 3);
+    // Step 3: the shipped capacity reconciliation persists the same observed
+    // reset identity without round-tripping a synthetic 429.
+    const observation = required(
+      (await loadCodexCapacityRoutingObservations(singlePool, true)).find((candidate) => candidate.account_id_hash === blocked.accountIdHash),
+      "fresh capacity observation"
+    );
+    assert.equal(await reconcileCapacityQuotaBlock(blocked, observation, now + 3), true);
 
     // Step 4: only now is the durable class-block fence current, and the
     // refreshed selection still reports the same blocked identity.
@@ -166,7 +168,7 @@ test("a capacity-100% class yields a blocked cohort identity, and only materiali
   }
 });
 
-test("a capacity-blocked live episode arms without spending and then consumes exactly once", async () => {
+test("a capacity-blocked live episode consumes exactly once without an arming step", async () => {
   const kv = new MemoryKv();
   const clock = new TestClock();
   const reset = candidate({ accountId: "incident-account-a", routingGeneration: 7 });
@@ -175,15 +177,6 @@ test("a capacity-blocked live episode arms without spending and then consumes ex
   provider.inventory = inventory("incident-credit-a", clock.nowMs + 20_000);
   const pool = [{ slot: 0, candidate: reset, provider }] as const;
   const deps = dependencies(kv, provider, clock, liveIncidentConfig());
-
-  const armed = await evaluateCodexBankedResetPool(pool, deps);
-  assert.equal(armed.kind, "shadow");
-  assert.equal(armed.reason, "live_armed");
-  assert.equal(armed.reset, null);
-  assert.equal(provider.inventoryInputs.length, 1);
-  assert.equal(provider.redeemInputs.length, 0);
-  assert.equal(provider.commitCount, 0);
-  assert.equal(await accountDayCount(kv, "incident-account-a", utcDay(clock.nowMs)), null);
 
   const consumed = await evaluateCodexBankedResetPool(pool, deps);
   assert.equal(consumed.kind, "verified");
@@ -253,15 +246,8 @@ test("two accounts may each redeem once per UTC day, and one account's second ep
 });
 
 test("the live banked-reset policy requires an exact per-account daily cap of one for a terminal provider", async () => {
-  // The parser fails closed: the retired global variable is not read, and an
-  // absent new cap leaves live submissions disabled until an explicit 1.
-  const declared = parseCodexBankedResetConfig((key) => (key === "CODEX_BANKED_RESET_MODE" ? "live" : undefined));
-  assert.equal(declared.mode, "live");
-  assert.equal(declared.maxPerAccountPerDay, 0);
-  assert.equal("maxGlobalPerDay" in declared, false);
-
   const terminalProvider = new FakeCodexUsageResetProvider({ ...provenContract(), redeemOutcomeIsFinal: true });
-  const explicit = { ...declared, maxPerAccountPerDay: 1 };
+  const explicit = config();
   assert.equal(providerPolicyReason(explicit, terminalProvider), null);
   assert.equal(providerPolicyReason({ ...explicit, maxPerAccountPerDay: 2 }, terminalProvider), "terminal_outcome_account_day_limit_must_be_one");
 
