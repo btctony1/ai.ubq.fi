@@ -1,4 +1,5 @@
 import { createFetchMock } from "./helpers/fetch-mock.ts";
+import { waitForCatalogLeaseRelease } from "./helpers/codex-catalog-refresh.ts";
 import { setKvForTest } from "../src/kv.ts";
 import { test } from "bun:test";
 import { type Kv, type KvEntryMaybe, type KvKey, type KvListSelector } from "#kv";
@@ -301,6 +302,7 @@ test("codex catalog: stale catalogs survive refresh failures but expired catalog
     assert.equal(stale.status, 200);
     assert.equal(stale.headers.get("x-uos-cache"), "stale");
     assert.equal(((await stale.json()) as { models: { slug: string }[] }).models[0].slug, `gpt-${version}`);
+    await waitForCatalogLeaseRelease(kvStore, keyToString([...CODEX_CATALOG_LEASE_PREFIX, version]));
     assert.deepEqual(degradationSignals, [observedAtMs]);
 
     const metadata = kvStore.get(keyToString(catalogKey(version)))?.value as { fetched_at_ms: number };
@@ -338,6 +340,7 @@ test("codex catalog: stale catalogs signal masked upstream transport failures", 
     });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("x-uos-cache"), "stale");
+    await waitForCatalogLeaseRelease(kvStore, keyToString([...CODEX_CATALOG_LEASE_PREFIX, version]));
     assert.deepEqual(degradationSignals, [observedAtMs]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -416,6 +419,7 @@ test("codex catalog: stale catalogs signal response body transport failures", as
     });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("x-uos-cache"), "stale");
+    await waitForCatalogLeaseRelease(kvStore, keyToString([...CODEX_CATALOG_LEASE_PREFIX, version]));
     assert.deepEqual(degradationSignals, [observedAtMs]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -441,9 +445,10 @@ test("codex catalog: stale upstream ETags revalidate upstream without validating
   try {
     const response = await handleCodexCatalogModels(request(version, { "If-None-Match": '"catalog-etag"' }), version);
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get("x-uos-cache"), "revalidated");
-    assert.equal(upstreamIfNoneMatch, '"catalog-etag"');
+    assert.equal(response.headers.get("x-uos-cache"), "stale");
     assert.equal(await response.text(), catalogBody(version));
+    await waitForCatalogLeaseRelease(kvStore, keyToString([...CODEX_CATALOG_LEASE_PREFIX, version]));
+    assert.equal(upstreamIfNoneMatch, '"catalog-etag"');
   } finally {
     globalThis.fetch = originalFetch;
   }
