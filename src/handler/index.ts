@@ -14,6 +14,7 @@ import {
   handleAdminClaudeCodeAuthGet,
   handleAdminClaudeCodeAuthSet,
   handleAdminClaudeCodeQuotaClear,
+  handleAdminClaudeCodeQuotaRefresh,
   handleAdminCodexAuth,
   handleAdminCodexBankedResetShadowDecisions,
   handleAdminCodexCacheScopeExperiment,
@@ -74,6 +75,7 @@ import {
 } from "../auth/passkeys.ts";
 
 import { handleRoot, handleStaticAsset } from "../static.ts";
+import { handlePassportRoute } from "../auth/passport.ts";
 
 import { handleProviderCapacity, handleProviderCapacityRollups } from "../provider/capacity.ts";
 import {} from "../sentinel/replay-capture.ts";
@@ -171,6 +173,7 @@ const ADMIN_ROUTES: readonly AdminRouteEntry[] = [
   { methods: ["POST"], path: "/admin/providers/claude-code/auth", run: (req) => handleAdminClaudeCodeAuthSet(req) },
   { methods: ["DELETE"], path: "/admin/providers/claude-code/auth", run: (req) => handleAdminClaudeCodeAuthDelete(req) },
   { methods: ["POST"], path: "/admin/providers/claude-code/quota/clear", run: (req) => handleAdminClaudeCodeQuotaClear(req) },
+  { methods: ["POST"], path: "/admin/providers/claude-code/quota/refresh", run: (req) => handleAdminClaudeCodeQuotaRefresh(req) },
   { methods: ["GET"], path: "/admin/providers/quota-projection", run: (req) => handleAdminProvidersQuotaProjection(req) },
   { methods: ["POST"], path: "/admin/providers/quota-projection/backfill", run: (req) => handleAdminProvidersQuotaProjectionBackfill(req) },
   { methods: ["GET"], path: "/admin/prompt-cache-analytics", run: (req) => handleAdminPromptCacheAnalytics(req) },
@@ -227,6 +230,8 @@ const handleHealthRoute = async (req: Request, path: string): Promise<Response |
 
 /** Serves the passkey and session routes; null when no auth route matches. */
 const handleAuthRoute = async (req: Request, path: string): Promise<Response | null> => {
+  const passport = await handlePassportRoute(req, path);
+  if (passport) return passport;
   if (req.method === "POST" && path === "/api/auth/register/start") {
     const auth = await authenticateAdmin(req);
     if (!auth.ok) return auth.response;
