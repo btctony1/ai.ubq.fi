@@ -77,6 +77,11 @@ test("static assets register frontend module dependencies", () => {
   assert.match(chatScript, /from "\.\/toast\.js\?v=passport-design-20260922";/);
 });
 
+test("chat uses the branded Ubiquity Passport sign-in button", () => {
+  assert.match(chatHtml, /id="passport-login"[\s\S]*?data-passport-signin[\s\S]*?Sign in with Ubiquity/);
+  assert.match(chatHtml, /viewBox="0 0 96 96"/);
+});
+
 test("chat response stats use one conversation bar below the composer", () => {
   assert.equal((chatHtml.match(/\bdata-chat-stats\b/g) ?? []).length, 1);
   assert.match(chatHtml, /<\/form>\s*<div data-chat-stats role="status" aria-live="polite" aria-atomic="true" hidden><\/div>/);
@@ -103,11 +108,12 @@ test("chat falls back to the loopback development principal without a token", ()
 test("public models page is registered", () => {
   assert.equal(hasStaticAsset("/models"), true);
   assert.equal(hasStaticAsset("/models.html"), true);
-  assert.match(modelsHtml, /<script type="module" src="\/models\.js\?v=passport-design-20260922"><\/script>/);
+  assert.match(modelsHtml, /<script type="module" src="\/models\.js\?v=decision-models-20261025"><\/script>/);
+  assert.match(modelsScript, /Decisions · POST \/v1\/decisions/);
 });
 
 test("public console pages share versioned styles, canonical navigation, and accurate active states", () => {
-  const sharedAssetVersion = "passport-design-20260922";
+  const sharedAssetVersion = "ubiquity-signin-20261025";
   const canonicalLinks = [
     { href: "/models", label: "Models" },
     { href: "/developers", label: "Developers" },
@@ -373,8 +379,9 @@ test("admin analytics view places capacity history before current providers", ()
   assert.match(adminHtml, /id="card-provider-capacity">Provider analytics/);
   assert.match(adminHtml, /id="view-tab-analytics"[\s\S]*?>\s*Analytics\s*</);
   assert.doesNotMatch(adminHtml, /Fifteen-minute capacity, cached-input, and cache-write history/);
-  assert.match(adminHtml, /admin\.css\?v=passport-design-20260922/);
-  assert.match(adminHtml, /admin\.js\?v=admin-supervisor-v4-20261009/);
+  assert.match(adminHtml, /admin\.css\?v=claude-usage-refresh-20261025/);
+  assert.match(adminHtml, /admin\.js\?v=claude-usage-direct-20261025/);
+  assert.match(adminScript, /endpoints\.has\("\/v1\/decisions"\)/);
   assert.match(adminScript, /toLocaleString\(undefined,/);
   assert.match(adminScript, /timeZoneName: "short"/);
   assert.match(adminScript, /creditExpiries/);
@@ -524,6 +531,7 @@ test("OpenAPI discovery contract describes the public inference API", () => {
     ["/v1/models", "get"],
     ["/v1/chat/completions", "post"],
     ["/v1/responses", "post"],
+    ["/v1/decisions", "post"],
     ["/v1/images/generations", "post"],
     ["/v1/images/edits", "post"],
     ["/uos/models/capabilities", "get"],
@@ -715,6 +723,103 @@ test("public HEAD routes preserve GET metadata without a response body", async (
     );
     assert.equal(await headResponse.text(), "", path);
   }
+});
+
+test("admin routes and page aliases are never cacheable before authentication", async () => {
+  const adminRoutes = [
+    ["GET", "/admin/passkey-users"],
+    ["PATCH", "/admin/passkey-users"],
+    ["POST", "/admin/codex/auth"],
+    ["GET", "/admin/providers/codex/banked-resets"],
+    ["PATCH", "/admin/providers/codex/banked-resets"],
+    ["GET", "/admin/providers/codex/overage-usage"],
+    ["PATCH", "/admin/providers/codex/overage-usage"],
+    ["GET", "/admin/providers/codex/banked-resets/shadow-decisions"],
+    ["GET", "/admin/providers/codex/cache-scope-experiment"],
+    ["POST", "/admin/providers/codex/cache-scope-experiment"],
+    ["GET", "/admin/codex/models"],
+    ["POST", "/admin/codex/models"],
+    ["GET", "/admin/models/whitelist"],
+    ["POST", "/admin/models/whitelist"],
+    ["GET", "/admin/models/catalog"],
+    ["POST", "/admin/models/refresh"],
+    ["POST", "/admin/codex/prompts/purge"],
+    ["POST", "/admin/kv-migration/import"],
+    ["GET", "/admin/kv-migration/validate"],
+    ["GET", "/admin/sentinel/replay-captures"],
+    ["GET", "/admin/sentinel/incidents"],
+    ["GET", "/admin/codex/supervisor/sessions"],
+    ["GET", "/admin/codex/supervisor/output"],
+    ["POST", "/admin/codex/supervisor/brief"],
+    ["GET", "/admin/errors"],
+    ["GET", "/admin/defaults"],
+    ["POST", "/admin/defaults"],
+    ["GET", "/admin/debug/routing"],
+    ["POST", "/admin/debug/routing"],
+    ["DELETE", "/admin/debug/routing"],
+    ["GET", "/admin/providers"],
+    ["GET", "/admin/providers/selection"],
+    ["POST", "/admin/providers/selection"],
+    ["GET", "/admin/providers/capacity"],
+    ["POST", "/admin/providers/capacity/observations"],
+    ["GET", "/admin/providers/capacity/rollups"],
+    ["GET", "/admin/providers/claude-code/access"],
+    ["POST", "/admin/providers/claude-code/access"],
+    ["POST", "/admin/providers/claude-code/accounts/active"],
+    ["GET", "/admin/providers/claude-code/auth"],
+    ["POST", "/admin/providers/claude-code/auth"],
+    ["DELETE", "/admin/providers/claude-code/auth"],
+    ["POST", "/admin/providers/claude-code/quota/clear"],
+    ["POST", "/admin/providers/claude-code/quota/refresh"],
+    ["GET", "/admin/providers/quota-projection"],
+    ["POST", "/admin/providers/quota-projection/backfill"],
+    ["GET", "/admin/prompt-cache-analytics"],
+    ["GET", "/admin/api-keys"],
+    ["POST", "/admin/api-keys"],
+    ["PATCH", "/admin/api-keys"],
+    ["DELETE", "/admin/api-keys"],
+    ["GET", "/admin/api-keys/changes"],
+    ["POST", "/admin/api-keys/revoke"],
+    ["POST", "/admin/api-keys/unrevoke"],
+    ["GET", "/admin/kernel-usage"],
+    ["POST", "/admin/kernel-usage"],
+    ["DELETE", "/admin/kernel-usage"],
+    ["GET", "/admin/kernel-policy-queue"],
+    ["GET", "/admin/kernel-pubkeys"],
+    ["POST", "/admin/kernel-pubkeys"],
+    ["DELETE", "/admin/kernel-pubkeys"],
+    ["POST", "/admin/providers/codex/1/recheck"],
+    ["GET", "/admin/api-keys/example/paid-fallbacks"],
+  ] as const;
+  const requests = [
+    ["GET", "/admin"],
+    ["HEAD", "/admin"],
+    ["GET", "/admin.html"],
+    ["HEAD", "/admin.html"],
+    ["OPTIONS", "/admin/defaults"],
+    ["GET", "/admin/not-a-real-route"],
+    ...adminRoutes,
+  ] as const;
+  for (const authorization of [undefined, "Bearer definitely-wrong"] as const) {
+    for (const [method, path] of requests) {
+      const headers = authorization ? { Authorization: authorization } : undefined;
+      const response = await handler(new Request(`https://ai.ubq.fi${path}`, { method, headers }));
+      assert.equal(response.headers.get("cache-control"), "no-store", `${method} ${path} ${authorization ?? "anonymous"}`);
+      await response.body?.cancel();
+    }
+  }
+});
+
+test("admin API-key expired rows use the warning accent", () => {
+  assert.match(styleCss, /\[data-key\]\[data-state="expired"\][\s\S]*?--key-accent:\s*var\(--warning\)/);
+});
+
+test("admin defaults keep queued edits through reloads and debounce the follow-up", () => {
+  assert.match(adminScript, /if \(!defaultsLoaded\) \{\s+queueDefaultsSave\(\);\s+return;/);
+  assert.match(adminScript, /const scheduleQueuedDefaultsSave = \(loadTarget\) =>/);
+  assert.match(adminScript, /const clearDefaultsSaveQueue = \(\) => \{\s+cancelDefaultsSaveSchedule\(\);/);
+  assert.match(adminScript, /defaultsEditRevision \+= 1;\s+clearDefaultsSaveQueue\(\);/);
+  assert.match(adminScript, /else scheduleDefaultsSave\(\);/);
 });
 
 test("unknown public HEAD routes remain 404", async () => {

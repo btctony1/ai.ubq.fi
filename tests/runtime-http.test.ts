@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { connect } from "node:net";
+import { Agent, request as httpRequest } from "node:http";
 import { serveHttp, trackRequestTask } from "#http";
 import WebSocket from "ws";
 
@@ -13,6 +14,51 @@ const deferred = <T>() => {
   });
   return { promise, resolve, reject };
 };
+
+test("HTTP admin handler failures are marked no-store", async () => {
+  const server = serveHttp({ hostname: "127.0.0.1", port: 0 }, () => {
+    throw new Error("fixture handler failure");
+  });
+  try {
+    const address = await server.ready;
+    for (const path of ["/admin/fixture-failure", "/admin.html"]) {
+      const response = await fetch(`http://127.0.0.1:${address.port}${path}`);
+      assert.equal(response.status, 500, path);
+      assert.equal(response.headers.get("cache-control"), "no-store", path);
+      assert.equal(await response.text(), "Internal Server Error", path);
+    }
+  } finally {
+    await server.shutdown();
+  }
+});
+
+test("HTTP shutdown closes an idle keep-alive socket instead of waiting for systemd", async () => {
+  const server = serveHttp({ hostname: "127.0.0.1", port: 0 }, () => new Response("ok"));
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+  try {
+    const address = await server.ready;
+    await new Promise<void>((resolve, reject) => {
+      const request = httpRequest({ hostname: "127.0.0.1", port: address.port, path: "/", agent }, (response) => {
+        response.resume();
+        response.once("end", resolve);
+        response.once("error", reject);
+      });
+      request.once("error", reject);
+      request.end();
+    });
+    const started = performance.now();
+    await Promise.race([
+      server.shutdown(),
+      Bun.sleep(1_000).then(() => {
+        throw new Error("HTTP shutdown did not close the idle keep-alive socket");
+      }),
+    ]);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  } finally {
+    agent.destroy();
+    await server.shutdown();
+  }
+});
 
 test("HTTP sends fragmented streams, preserves cookies and observes transport completion", async () => {
   const credentialNames = ["UOS_AI_TOKEN", "DENO_DEPLOY_TOKEN", "CODEX_AUTH_JSON_B64", "OPENROUTER_API_KEY", "SURPLUS_API_KEY", "METERED_API_KEY"];

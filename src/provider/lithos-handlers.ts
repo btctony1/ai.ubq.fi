@@ -1,7 +1,9 @@
+import { chatResponsesProjectionFailure } from "../deepseek/context-admission-failure.ts";
 // LithosAI Chat and Responses handlers, extracted from src/openai.ts.
 
 import { LITHOS_RESPONSES_PROFILE, type OriginalToolName } from "../deepseek/responses.ts";
 import { logForwardedPayloadElisions, toDeepSeekResponsesChatBody } from "../deepseek/chat-projection.ts";
+import { logForwardedPayloadExemptions } from "../deepseek/forwarded-payload-policy.ts";
 import { type DeepSeekResponsesEcho, toDeepSeekResponsesPayload } from "../deepseek/responses-payload.ts";
 import {
   fetchLithosChatCompletions,
@@ -275,11 +277,26 @@ type LithosDispatchProgress = Readonly<{
   ladderIndex: number;
   /** Tiers whose refusal explicitly forbade another attempt during this request. */
   noRetryModels: ReadonlySet<string>;
-  /** Waited time spent so far, so the total pause stays bounded. */
+  /** Planned wait time so far, so the total pause stays bounded. */
   waitedMs: number;
+  /** Actual time spent waiting so far, for terminal telemetry. */
+  elapsedWaitMs: number;
   /** Absorbed pauses so far, so a stream of tiny windows cannot loop forever. */
   waits: number;
 }>;
+
+/** Waits out one planned window while recording the elapsed time, including an abort. */
+const waitForLithosRateLimit = async (input: LithosDispatchInput, plannedWaitMs: number, elapsedWaitMs: number): Promise<number> => {
+  let elapsed = 0;
+  try {
+    await waitForLithosRetry(plannedWaitMs, input.requestSignal, (measuredMs) => {
+      elapsed = measuredMs;
+    });
+  } finally {
+    recordLithosRateLimitWaitMs(input.usageContext, elapsedWaitMs + elapsed);
+  }
+  return elapsed;
+};
 
 /** One provider attempt with the route's transport hooks. */
 const lithosDispatchAttempt = async (
@@ -381,6 +398,7 @@ type LithosPendingDispatch = Readonly<{
   pending: Promise<LithosDispatchOutcome>;
   requestSignal: AbortSignal;
   downstreamSignal: AbortSignal;
+  cancel: (reason?: unknown) => void;
 }>;
 
 type LithosDispatchResult = LithosDispatchOutcome | LithosPendingDispatch;
@@ -432,6 +450,7 @@ const lithosDispatchPass = async (
       ladderIndex: retryStart.ladderIndex,
       noRetryModels,
       waitedMs,
+      elapsedWaitMs: progressed.elapsedWaitMs,
       waits: progressed.waits + 1,
     };
     if (defer) {
@@ -449,11 +468,10 @@ const lithosDispatchPass = async (
       waited_ms: waitedMs,
       cap_ms: LITHOS_REFUSAL_WAIT_CAP_MS,
     });
-    recordLithosRateLimitWaitMs(input.usageContext, waitedMs);
     // The refused body is never read, so it is released here.
     cancelResponseBody(attempt);
-    await waitForLithosRetry(planned.waitMs, input.requestSignal);
-    return { kind: "retry", state: nextState };
+    const elapsedWaitMs = await waitForLithosRateLimit(input, planned.waitMs, progressed.elapsedWaitMs);
+    return { kind: "retry", state: { ...nextState, elapsedWaitMs: progressed.elapsedWaitMs + elapsedWaitMs } };
   }
   // This pass is terminal: its refusal body is read by the responders below, so
   // it must not be cancelled here (only the discarded attempts above are).
@@ -496,25 +514,31 @@ const runLithosDispatch = async (
         waited_ms: pass.state.waitedMs,
         cap_ms: LITHOS_REFUSAL_WAIT_CAP_MS,
       });
-      recordLithosRateLimitWaitMs(input.usageContext, pass.state.waitedMs);
+      const cancellation = new AbortController();
+      const requestSignal = AbortSignal.any([input.requestSignal, cancellation.signal]);
+      const downstreamSignal = AbortSignal.any([input.downstreamSignal, cancellation.signal]);
+      const pendingInput: LithosDispatchInput = { ...input, requestSignal, downstreamSignal };
       return {
         pending: (async (): Promise<LithosDispatchOutcome> => {
           try {
-            await waitForLithosRetry(pass.planned.waitMs, input.requestSignal);
-            const continued = await runLithosDispatch(input, pass.state, policy, false);
+            const elapsedWaitMs = await waitForLithosRateLimit(pendingInput, pass.planned.waitMs, pass.state.elapsedWaitMs);
+            const continued = await runLithosDispatch(pendingInput, { ...pass.state, elapsedWaitMs: pass.state.elapsedWaitMs + elapsedWaitMs }, policy, false);
             if ("pending" in continued) throw new Error("A resumed LithosAI dispatch cannot defer again.");
             return continued;
           } catch (error) {
             return {
               ok: false,
-              response: await respondLithosChatDispatchFailure(error, input.downstreamSignal, input.usageContext),
-              requestSignal: input.requestSignal,
-              downstreamSignal: input.downstreamSignal,
+              response: await respondLithosChatDispatchFailure(error, downstreamSignal, input.usageContext),
+              requestSignal,
+              downstreamSignal,
             };
           }
         })(),
-        requestSignal: input.requestSignal,
-        downstreamSignal: input.downstreamSignal,
+        requestSignal,
+        downstreamSignal,
+        cancel: (reason) => {
+          if (!cancellation.signal.aborted) cancellation.abort(reason);
+        },
       };
     }
     state = pass.state;
@@ -534,10 +558,14 @@ const dispatchLithosUpstreamResult = async (
   body: Record<string, unknown>,
   modelRaw: string,
   usageContext: UsageContext | undefined,
-  streamed: boolean
+  streamed: boolean,
+  refusalWaitPolicy?: LithosRefusalWaitPolicy
 ): Promise<LithosDispatchResult> => {
   const downstreamSignal = downstreamSignalFor(req, usageContext);
   const requestSignal = inferenceSignal(req, usageContext);
+  // Keep the upstream attempt identity canonical while letting the rate-limit
+  // seam apply the same case-insensitive lookup to the client's spelling.
+  const canonicalModel = lithosUpstreamModelFor(modelRaw) ?? modelRaw.trim();
   // A tier whose window is open is served by the ladder target it points at
   // without asking the saturated tier again, and that decision is announced
   // exactly like a per-request failover. A deeper target resumes mid-ladder, so
@@ -548,16 +576,24 @@ const dispatchLithosUpstreamResult = async (
   if (stickyTarget !== null) {
     logLithosRateLimitFailover({
       request_id: usageContext?.requestId ?? null,
-      model: modelRaw,
+      model: canonicalModel,
       sibling_model: stickyTarget,
       attempt: 1,
     });
     recordLithosFailoverModel(usageContext, stickyTarget);
   }
   return await runLithosDispatch(
-    { body, modelRaw, requestSignal, downstreamSignal, usageContext },
-    { attempt: 0, attemptModel: stickyTarget ?? modelRaw, ladderIndex: stickyIndex + 1, noRetryModels: new Set(), waitedMs: 0, waits: 0 },
-    streamed ? LITHOS_STREAMED_REFUSAL_WAIT_POLICY : LITHOS_BUFFERED_REFUSAL_WAIT_POLICY,
+    { body, modelRaw: canonicalModel, requestSignal, downstreamSignal, usageContext },
+    {
+      attempt: 0,
+      attemptModel: stickyTarget ?? canonicalModel,
+      ladderIndex: stickyIndex + 1,
+      noRetryModels: new Set(),
+      waitedMs: 0,
+      elapsedWaitMs: 0,
+      waits: 0,
+    },
+    refusalWaitPolicy ?? (streamed ? LITHOS_STREAMED_REFUSAL_WAIT_POLICY : LITHOS_BUFFERED_REFUSAL_WAIT_POLICY),
     streamed
   );
 };
@@ -631,7 +667,8 @@ export const handleLithosChatCompletions = async (
       dispatched.downstreamSignal,
       dispatched.requestSignal,
       upstreamModel,
-      () => servedModel.current
+      () => servedModel.current,
+      dispatched.cancel
     );
   }
   if (!dispatched.ok) {
@@ -812,7 +849,8 @@ export const handleLithosResponses = async (
   req: Request,
   rawRecord: Record<string, unknown>,
   modelRaw: string,
-  usageContext?: UsageContext
+  usageContext?: UsageContext,
+  options: Readonly<{ refusalWaitPolicy?: LithosRefusalWaitPolicy }> = {}
 ): Promise<Response> => {
   const parsedStream = parseStreamField(rawRecord.stream);
   if (!parsedStream.ok) return openaiError(400, parsedStream.message, "invalid_request_error", { param: "stream" });
@@ -823,9 +861,15 @@ export const handleLithosResponses = async (
   if (!upstreamModel) return openaiError(400, `model '${modelRaw}' is not a LithosAI official model`, "invalid_request_error", { param: "model" });
 
   const translated = toDeepSeekResponsesChatBody(rawRecord, modelRaw, clientWantsStream, LITHOS_RESPONSES_PROFILE);
-  if (!translated.ok) return openaiError(400, translated.message, translated.code ?? "invalid_request_error", { param: translated.param });
+  if (!translated.ok) return chatResponsesProjectionFailure(req, rawRecord, translated, usageContext);
   const { body: chatBody, toolNames, customToolNames } = translated.value;
   if (translated.value.elisions.length) logForwardedPayloadElisions(translated.value.elisions);
+  if (translated.value.exemptions.length)
+    logForwardedPayloadExemptions(translated.value.exemptions, {
+      requestId: usageContext?.requestId,
+      model: modelRaw,
+      promptAdmission: translated.value.promptAdmission,
+    });
 
   const echo: DeepSeekResponsesEcho = {
     tools: rawRecord.tools,
@@ -853,7 +897,7 @@ export const handleLithosResponses = async (
   });
 
   const createdAtSeconds = Math.floor(Date.now() / 1000);
-  const dispatched = await dispatchLithosUpstreamResult(req, chatBody, modelRaw, usageContext, clientWantsStream);
+  const dispatched = await dispatchLithosUpstreamResult(req, chatBody, modelRaw, usageContext, clientWantsStream, options.refusalWaitPolicy);
   if ("pending" in dispatched) {
     // The streamed route opens its SSE response now and its keepalive frames
     // hold the client while the vendor's own window passes behind it. The
@@ -883,7 +927,8 @@ export const handleLithosResponses = async (
       dispatched.downstreamSignal,
       dispatched.requestSignal,
       upstreamModel,
-      () => servedModel.current
+      () => servedModel.current,
+      dispatched.cancel
     );
   }
   if (!dispatched.ok) {

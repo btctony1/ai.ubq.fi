@@ -66,27 +66,72 @@ export const reconcileCompletedRefusal = (emittedRefusal: string, completedRefus
 
 const chatOutputTextPartIndexText = (value: unknown): string => (typeof value === "number" || typeof value === "string" ? String(value) : "0");
 
+const chatOutputTextPartPositionKey = (event: Record<string, unknown>): string | null => {
+  if (typeof event.output_index !== "number" && typeof event.output_index !== "string") return null;
+  return `output:${chatOutputTextPartIndexText(event.output_index)}:${chatOutputTextPartIndexText(event.content_index ?? 0)}`;
+};
+
 export const chatOutputTextPartKey = (event: Record<string, unknown>): string => {
   const itemId = getString(event.item_id)?.trim();
   if (itemId) return `item:${itemId}:${chatOutputTextPartIndexText(event.content_index ?? 0)}`;
   return `output:${chatOutputTextPartIndexText(event.output_index ?? 0)}:${chatOutputTextPartIndexText(event.content_index ?? 0)}`;
 };
 
+export const chatOutputTextPartStorageKey = (event: Record<string, unknown>): string => chatOutputTextPartPositionKey(event) ?? chatOutputTextPartKey(event);
+
+const chatOutputTextPartItemAliasKey = (event: Record<string, unknown>): string | null => {
+  if (chatOutputTextPartPositionKey(event) === null || !getString(event.item_id)?.trim()) return null;
+  return chatOutputTextPartKey(event);
+};
+
+// Positional deltas need an item-id alias because terminal events may omit output_index.
+export const setChatOutputTextPart = (parts: Map<string, string>, event: Record<string, unknown>, value: string): void => {
+  parts.set(chatOutputTextPartStorageKey(event), value);
+  const itemAliasKey = chatOutputTextPartItemAliasKey(event);
+  if (itemAliasKey !== null) parts.set(itemAliasKey, value);
+};
+
 type ReconciledChatContent = Readonly<{ outputText: string; refusal: string }>;
 
 /**
- * True when an identity-less completed part only repeats content this stream has
- * already delivered. Compatible upstreams repeat the complete message content in
- * their terminal payload, and one that omits the message id there -- Surplus
- * drops `id` inside `response.completed` -- cannot address the per-part entry its
- * own deltas wrote, so the repeat would otherwise look like new content.
- * Comparing it against everything emitted so far keeps the message delivered
- * once; a longer or conflicting payload still takes the ordinary path.
+ * Returns the previously emitted text when an identity-less completed part only
+ * repeats content this stream has already delivered at the same output/content
+ * position or across all buffered positions. Compatible upstreams repeat the
+ * complete message content in their terminal payload, and one that omits the
+ * message id there -- Surplus drops `id` inside `response.completed` --
+ * may not address the per-part entry its own deltas wrote, so the repeat would
+ * otherwise look like new content. A longer or conflicting payload still takes
+ * the ordinary path.
  */
-const completedPartRepeatsEmittedContent = (emittedParts: ReadonlyMap<string, string>, completed: string): boolean => {
-  if (!completed) return false;
-  const emitted = [...emittedParts.values()].join("");
-  return emitted === completed || emitted.startsWith(completed);
+const completedPartRepeatsEmittedContent = (emittedParts: ReadonlyMap<string, string>, event: Record<string, unknown>, completed: string): string | null => {
+  if (!completed) return null;
+  const matches = (emitted: string | undefined): string | null =>
+    emitted !== undefined && (emitted === completed || emitted.startsWith(completed)) ? emitted : null;
+  const positionKey = chatOutputTextPartPositionKey(event);
+  if (positionKey !== null) {
+    const repeated = matches(emittedParts.get(positionKey));
+    if (repeated !== null) return repeated;
+  }
+  const itemParts = [...emittedParts.entries()].filter(([key]) => key.startsWith("item:"));
+  if (itemParts.length === 1) {
+    const repeated = matches(itemParts[0][1]);
+    if (repeated !== null) return repeated;
+  }
+  const positionalParts = [...emittedParts.entries()].filter(([key]) => key.startsWith("output:"));
+  const aggregateParts = positionalParts.length > 0 ? positionalParts : [...emittedParts.entries()];
+  if (aggregateParts.length < 2) return null;
+  const aggregate = aggregateParts.map(([, value]) => value).join("");
+  return aggregate === completed ? aggregate : null;
+};
+
+const completedPartRepeatForUnidentified = (
+  emittedParts: ReadonlyMap<string, string>,
+  event: Record<string, unknown>,
+  completed: string,
+  identified: boolean
+): string | null => {
+  if (identified) return null;
+  return completedPartRepeatsEmittedContent(emittedParts, event, completed);
 };
 
 export const reconcileChatContentPart = (
@@ -99,20 +144,22 @@ export const reconcileChatContentPart = (
     return malformedFunctionCallStream("Upstream completed content part is missing its part object.");
   }
   const type = getString(part.type);
-  const key = chatOutputTextPartKey(event);
-  // Without an item id this part cannot address the entry its own deltas wrote.
+  const key = chatOutputTextPartStorageKey(event);
+  // Without an item id this part may not address the entry its own deltas wrote.
   const identified = Boolean(getString(event.item_id)?.trim());
   if (type === "output_text" || type === "text") {
     const completedText = getString(part.text);
     if (completedText === null) {
       return malformedFunctionCallStream("Upstream completed content part is missing string output text.");
     }
-    if (!identified && !outputTextParts.has(key) && completedPartRepeatsEmittedContent(outputTextParts, completedText)) {
+    const repeatedText = completedPartRepeatForUnidentified(outputTextParts, event, completedText, identified);
+    if (repeatedText !== null) {
+      setChatOutputTextPart(outputTextParts, event, repeatedText);
       return { outputText: "", refusal: "" };
     }
     const emittedText = outputTextParts.get(key) ?? "";
     const suffix = reconcileCompletedOutputText(emittedText, completedText);
-    outputTextParts.set(key, `${emittedText}${suffix}`);
+    setChatOutputTextPart(outputTextParts, event, `${emittedText}${suffix}`);
     return { outputText: suffix, refusal: "" };
   }
   if (type === "refusal") {
@@ -120,12 +167,14 @@ export const reconcileChatContentPart = (
     if (completedRefusal === null) {
       return malformedFunctionCallStream("Upstream completed content part is missing string refusal text.");
     }
-    if (!identified && !refusalParts.has(key) && completedPartRepeatsEmittedContent(refusalParts, completedRefusal)) {
+    const repeatedRefusal = completedPartRepeatForUnidentified(refusalParts, event, completedRefusal, identified);
+    if (repeatedRefusal !== null) {
+      setChatOutputTextPart(refusalParts, event, repeatedRefusal);
       return { outputText: "", refusal: "" };
     }
     const emittedRefusal = refusalParts.get(key) ?? "";
     const suffix = reconcileCompletedRefusal(emittedRefusal, completedRefusal);
-    refusalParts.set(key, `${emittedRefusal}${suffix}`);
+    setChatOutputTextPart(refusalParts, event, `${emittedRefusal}${suffix}`);
     return { outputText: "", refusal: suffix };
   }
   return { outputText: "", refusal: "" };
@@ -413,8 +462,8 @@ const applyPreparedChatEvent = (
     case "response.output_text.delta": {
       const delta = getString(ev.delta);
       if (delta === null) return "Upstream output-text delta is not a string.";
-      const key = chatOutputTextPartKey(ev);
-      state.outputTextParts.set(key, `${state.outputTextParts.get(key) ?? ""}${delta}`);
+      const key = chatOutputTextPartStorageKey(ev);
+      setChatOutputTextPart(state.outputTextParts, ev, `${state.outputTextParts.get(key) ?? ""}${delta}`);
       state.outputText += delta;
       break;
     }
@@ -423,18 +472,18 @@ const applyPreparedChatEvent = (
       if (completedText === null) {
         return "Upstream completed output text is not a string.";
       }
-      const key = chatOutputTextPartKey(ev);
+      const key = chatOutputTextPartStorageKey(ev);
       const partText = state.outputTextParts.get(key) ?? "";
       const suffix = reconcileCompletedOutputText(partText, completedText);
-      state.outputTextParts.set(key, `${partText}${suffix}`);
+      setChatOutputTextPart(state.outputTextParts, ev, `${partText}${suffix}`);
       state.outputText += suffix;
       break;
     }
     case "response.refusal.delta": {
       const delta = getString(ev.delta);
       if (delta === null) return "Upstream refusal delta is not a string.";
-      const key = chatOutputTextPartKey(ev);
-      state.refusalParts.set(key, `${state.refusalParts.get(key) ?? ""}${delta}`);
+      const key = chatOutputTextPartStorageKey(ev);
+      setChatOutputTextPart(state.refusalParts, ev, `${state.refusalParts.get(key) ?? ""}${delta}`);
       state.refusal += delta;
       break;
     }
@@ -443,10 +492,10 @@ const applyPreparedChatEvent = (
       if (completedRefusal === null) {
         return "Upstream completed refusal is not a string.";
       }
-      const key = chatOutputTextPartKey(ev);
+      const key = chatOutputTextPartStorageKey(ev);
       const partRefusal = state.refusalParts.get(key) ?? "";
       const suffix = reconcileCompletedRefusal(partRefusal, completedRefusal);
-      state.refusalParts.set(key, `${partRefusal}${suffix}`);
+      setChatOutputTextPart(state.refusalParts, ev, `${partRefusal}${suffix}`);
       state.refusal += suffix;
       break;
     }

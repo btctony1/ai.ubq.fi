@@ -30,7 +30,7 @@ import {
   readLithosApiKey,
 } from "../provider/lithos.ts";
 import { codexSnapshotMetadataHint, codexSubscriptionMetadataHint, resolveModelMetadata } from "../models/metadata.ts";
-import { openRouterModelsSnapshot } from "../models/openrouter-models.ts";
+import { openRouterModelSupportsText, openRouterModelsSnapshot } from "../models/openrouter-models.ts";
 import { readOpenRouterApiKey } from "../provider/openrouter.ts";
 import { CODEX_CATALOG_AUTH_GENERATION_KEY } from "./types.ts";
 import { claudeCodeReasoningLevels, type ClaudeCodeModel } from "../provider/claude-code-models.ts";
@@ -289,15 +289,21 @@ const deepSeekOfficialCodexModels = (): Record<string, unknown>[] => {
 };
 
 /**
- * Appends the official ids that the stored catalog does not already advertise.
- * A discovery source may already publish the legacy alias with equivalent
- * tiers, and replacing it would churn that record for no behavioral gain.
+ * Ensures official rows win over discovery records for the same id, then
+ * appends any official ids that are still missing from the catalog.
  */
 const withDeepSeekOfficialModels = (models: readonly Record<string, unknown>[]): Record<string, unknown>[] => {
   const configured = deepSeekOfficialCodexModels();
   if (!configured.length) return [...models];
-  const present = new Set(models.map((model) => getString(model.slug) ?? getString(model.id) ?? ""));
-  return [...models, ...configured.filter((model) => !present.has(String(model.slug)))];
+  const modelId = (model: Record<string, unknown>): string => {
+    const slug = getString(model.slug)?.trim();
+    if (slug) return slug;
+    return getString(model.id)?.trim() ?? "";
+  };
+  const configuredById = new Map(configured.map((model) => [modelId(model), model]));
+  const present = new Set(models.map(modelId));
+  const merged = models.map((model) => configuredById.get(modelId(model)) ?? model);
+  return [...merged, ...configured.filter((model) => !present.has(modelId(model)))];
 };
 
 /**
@@ -510,7 +516,7 @@ const withCerebrasModels = (models: readonly Record<string, unknown>[]): Record<
  */
 const openRouterCodexModels = (): Record<string, unknown>[] => {
   if (readOpenRouterApiKey() === null) return [];
-  return (openRouterModelsSnapshot()?.models ?? []).map((model) => {
+  return (openRouterModelsSnapshot()?.models ?? []).filter(openRouterModelSupportsText).map((model) => {
     const resolved = resolveModelMetadata(model.id);
     const levels = ascendingExternalReasoningLevels(resolved.supported_reasoning_levels);
     return {

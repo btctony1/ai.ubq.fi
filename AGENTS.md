@@ -9,6 +9,19 @@
 - Pinned Deno is permitted only for the explicit offline legacy V8 codec and reverse-conversion helper, plus the external tool-owned evidence helper. It is not the application runtime or an ordinary build, test, or CI dependency. Preserve real OS read/write/network/process confinement; unsupported platform enforcement must fail closed rather than use a JavaScript permission facade.
 - The Bun migration PR does not authorize production or Mac service activation, live database conversion, credential changes, or provider-credit spend. Retain every credential, routing, accounting, review, ownership, immutable-release, and client-acceptance rule below.
 
+## Rust Port Rules
+
+- The owner's Rust rules are non-negotiable for every first-party crate under `rust/crates` and every new Rust source file; they were recorded from <https://x.com/dj_d_sol/status/2113543433516421153> on 2026-10-23.
+- No first-party crate may exceed 1000 lines. Measure the crate's owned production Rust source under `src/`; integration tests and vendored dependencies are separate crates.
+- No re-exports. Do not forward names with `pub use`; import each item from its defining module.
+- No `#[path = "..."]`. Keep the module tree conventional and move shared test or support code into a real module.
+- No `include!`. Use modules and typed constants instead of splicing source text into a crate.
+- The current port predates these rules and is not compliant. Treat existing violations as mandatory migration debt, not precedent: no change may add or enlarge a violation, new or substantially rewritten crates must comply immediately, and the port cannot be accepted as complete until every remaining violation is removed.
+- `scripts/rust-quality.ts` is the structural ratchet: `bun run rust:quality` enforces crate size and all rule violations; `bun run rust:quality:update` may only tighten the baseline.
+- Lint policy is selective. No `#[allow]` or `#[expect]` suppressions; no whole `pedantic`/`restriction` groups. Stage a noisy lint with `--force-warn` plus a baseline before making it fatal. Do not copy the TypeScript cognitive-complexity number into Clippy; use the 120-line function, 7-argument, nesting-5 thresholds in `rust/clippy.toml`.
+- Compile performance is measured, not assumed. Keep `[profile.release]` unchanged until the complete Worker build is measured; use the separate `release-candidate` profile for thin-LTO experiments, and keep dev/test debug at line tables only.
+- New crates target one cohesive responsibility at 600-850 lines. Test targets are separate crates with the same 1000-line cap. The full policy and migration order are in `docs/research/rust-quality-compile-performance-2026-10-23.md`.
+
 ## Local Credential Recovery Safety
 
 - A request to repair one invalid local provider account does not authorize invalidating, revoking, rotating, or
@@ -51,8 +64,8 @@
 - Route ordinary Codex inference through one durable global active subscription shared by every principal, key, and
   model: bootstrap the first eligible configured account, keep it despite headroom, idle time, restarts, old per-key
   affinities, reorder, or successful same-identity credential refresh, and move it only for authoritative
-  model-applicable quota or capacity exhaustion, a classified current-credential invalidity, or removal/replacement of
-  the account in the auth pool. Never restore a retired per-key affinity override or a capacity-balancing order, and
+  model-applicable quota or capacity exhaustion, a classified current-credential invalidity, removal/replacement of
+  the account in the auth pool, or the explicitly authenticated manual banked-reset promotion recorded in `docs/DECISIONS.md`. Never restore a retired per-key affinity override or a capacity-balancing order, and
   advance the provider waterfall only after fresh strong proof that every selected pool account has applicable quota or
   capacity exhaustion or invalid credentials matching its current credential fingerprint. Keep quota-only proof separate
   for reset eligibility and redemption; preserve the existing paid limits and provider selection.
@@ -111,6 +124,20 @@
 - Treat malformed, incomplete, or identity-mismatched review data as fail-closed: preserve the exact evidence, ingest
   nothing, and surface the failure. Never drop findings, salvage a partial parse, or mark a failed review complete.
 
+## GitHub Actions Budget
+
+- The repository is optimizing GitHub Actions usage because the owner's GitHub Free monthly minute allowance is being
+  exhausted. `.github/workflows/deno-deploy.yml` is the problematic high-cost workflow. It may run only after a pull
+  request merge or through explicit manual dispatch; do not add push, pull-request-open/synchronize, merge-group, or
+  scheduled triggers.
+- Do not dispatch, rerun, re-enable, or trigger any workflow merely to validate a branch. Leave a manually disabled
+  workflow disabled unless the owner explicitly asks to enable it. Use the change-scoped local gates and report missing
+  hosted evidence rather than spending minutes on a convenience run.
+- While this quota policy is active, it supersedes the normal expectation of hosted CI before merging a bounded change.
+  Merge after the selected local gates pass, then use the post-merge run as the hosted receipt. Never describe a
+  post-merge run as pre-merge acceptance, and request owner authorization for any extra run that is not the automatic
+  post-merge execution.
+
 ## Repository Completion and Checkout Handoff
 
 - Do not leave completed or accepted work only in a worktree, local branch, or unpushed commit. Commit and push every
@@ -127,7 +154,13 @@
 
 ## Lint, Format and Type Gates
 
-- Run `bun --no-env-file run verify` (or `sh scripts/verify.sh`) before declaring any change ready. The public script is `bun run verify`; it aggregates strict TypeScript checking, Prettier, ESLint, Knip, the file-size ratchet, and the configured deterministic test segments rather than stopping at the first failure. Both root and `tools/lint/bun.lock` must exist before a frozen install; never regenerate either lockfile to make verification pass or fall back to another package manager.
+- Select verification from the changed surface. Before running a gate, list the changed paths and map them to the smallest checks that can detect a regression in that change. Do not run unrelated repository tests merely because they are available.
+- A documentation-only change requires formatting of the changed documents and `git diff --check`. Do not run `verify`, repository-wide ESLint, Knip, TypeScript, native compilation, test profiles, or deployment tests for a documentation-only change.
+- A source change starts with the tests for the changed module, changed-file lint, and typechecking when types or imports changed. Add the file-size ratchet only when a changed source or test file is near a limit. Run the full `bun --no-env-file run verify` aggregate only when the change crosses a shared runtime, schema, migration, release, or deployment boundary that focused checks cannot prove.
+- The repository test entrypoints intentionally enforce dependency scope. A changed TypeScript or JavaScript path runs only test files whose transitive imports reach that path; unrelated tests must not execute. A documentation-only change, or a source change that reaches no test, prints `TEST EXECUTION INTENTIONALLY SKIPPED` and exits `0`. `bun test`, `bun run test`, and `bun run verify` use this selection; use `TEST_SCOPE_FORCE=1` only for an explicitly requested full test run.
+- GitHub Actions consumes the same selector before installing dependencies or compiling native artifacts. Documentation-only changes run only changed-document formatting; source changes run affected tests; native, macOS, and release-artifact jobs run only when the selected paths and tests require them.
+- Platform-specific tests run on the matching platform. A macOS host uses focused local checks and the configured Darwin jobs; it must not run Linux-only fixtures that require `/usr/bin/unshare` or another unavailable platform facility. A failed or skipped incompatible local check is not evidence to rerun the whole suite.
+- Preserve the frozen dependency rule: both root and `tools/lint/bun.lock` must exist before a frozen install, and neither lockfile may be regenerated to make verification pass. Never fall back to another package manager.
 - Prettier owns every supported first-party format through `.prettierrc`, `.prettierignore`, and `scripts/format.sh`: TypeScript and `.mjs` retain 160 columns, supported non-TypeScript formats retain 120, and Markdown preserves paragraph wrapping. Use `bun --no-env-file run format:check`; do not add a Deno formatter fallback or apply a whole-repository autofix.
 - Run `bun --no-env-file run build` and `bun --no-env-file run test` after any `--fix` run. `build` delegates to the strict no-emit `check` task; the explicit TypeScript checker is the type authority, and successful execution or transpilation cannot replace it. Isolated test children disable dotenv and auto-install, retain their original named environment profiles, and run behind the actual supported OS fixture-network boundary. `verify` includes the existing offline benchmark test profile once; stress, live e2e, and live benchmark probes remain separately selected.
 - The TypeScript check and test suite decide whether a lint fix is correct. Never add `eslint-disable`, `@ts-ignore` or `as any` to silence a finding: if a finding is deliberate-by-design, narrow it in `tools/lint/eslint.config.mjs` with the measurement recorded in a comment, the way the existing DIVERGENCE entries do.
@@ -147,6 +180,6 @@
 - Do not re-enter the model only to ask whether external work has finished. Use one persistent execution handle or delivery watcher, emit state changes only, and return once with the terminal result. A poll is justified only by changed external state or a confirmed-live handle.
 - Make delivery a bounded pipeline after an authorized push: identify the exact CI run for the pushed SHA, wait for terminal success, run Mac and VPS deployment concurrently because their hosts and deployment locks are independent, then collect both health and authenticated inference receipts before acceptance. A failed CI run stops deployment, and every claim remains bound to the exact green SHA.
 - Preserve the rule that CI contains no automatic deployment. A local delivery watcher may wait for CI and then invoke the separately authorized deployment commands; it must not add a hosted automatic deployment trigger.
-- Bind pre-push evidence to the exact commit tree. After all writers stop, run the full `bun --no-env-file run verify` gate once on the final tree and record the full commit SHA, tree hash, and result. Any subsequent source edit invalidates that receipt; focused tests, typechecking, lint, or a queued CI run are not substitutes.
-- Run `bun --no-env-file run size:check` immediately after a large source edit as an early signal, but retain the full `verify` run as the final gate.
+- Bind pre-push evidence to the exact commit tree. After all writers stop, run the change-scoped gates selected by the rule above once on the final tree and record the full commit SHA, tree hash, commands, and results. Any subsequent source edit invalidates that receipt. Do not expand to `bun --no-env-file run verify` by default.
+- Run `bun --no-env-file run size:check` immediately after a large source edit as an early signal. It does not by itself require the full `verify` aggregate.
 - Before declaring readiness, reconcile the contract version, changed paths, exact commit and tree, CI run, deployment identities, and live acceptance evidence. Reject stale or partially matching receipts.

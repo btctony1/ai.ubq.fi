@@ -19,6 +19,8 @@ const FIXTURE_PARENT = fileURLToPath(new URL("../.cleanup-evidence/vps-deploy-gu
 const CHILD_TIMEOUT_MS = 30_000;
 const PREFLIGHT_TIMEOUT_MS = 15_000;
 const FIXTURE_IDENTITY = { name: "vps-deploy-guards-fixture", email: "vps-deploy-guards-fixture@example.invalid" } as const;
+const SUPPORTED_LEGACY_LAUNCHER = await readFile(new URL("./fixtures/vps-legacy-launcher.txt", import.meta.url), "utf8");
+const SUPPORTED_LEGACY_UNIT = await readFile(new URL("./fixtures/vps-legacy-unit.txt", import.meta.url), "utf8");
 
 // Every dedicated profile executes its fixture capabilities; no availability skips.
 const fixtureHostPath = process.env.PATH ?? "/usr/bin:/bin";
@@ -27,6 +29,102 @@ assert.equal((await runFixture(process.execPath, { args: ["--no-env-file", "--ve
 type FixtureRun = { code: number; stdout: string; stderr: string };
 type Fixture = { root: string; script: string; env: Record<string, string>; dispose: () => Promise<void>; previous?: string };
 type DeployOptions = { write?: string; env?: Record<string, string>; fakeCommands?: string[]; script?: string; allowLn?: boolean; network?: boolean };
+
+const disposeActivationResources = async (
+  closeReservations: () => Promise<void>,
+  helperServers: Pick<HttpServer, "shutdown">[],
+  releaseFixture: () => Promise<void>
+): Promise<void> => {
+  const cleanupFailures: unknown[] = [];
+  try {
+    await closeReservations();
+  } catch (error) {
+    cleanupFailures.push(error);
+  }
+  try {
+    const settled = await Promise.allSettled(helperServers.splice(0).map((server) => Promise.resolve().then(() => server.shutdown())));
+    cleanupFailures.push(...settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])));
+  } catch (error) {
+    cleanupFailures.push(error);
+  } finally {
+    try {
+      await releaseFixture();
+    } catch (error) {
+      cleanupFailures.push(error);
+    }
+  }
+  if (cleanupFailures.length) throw new AggregateError(cleanupFailures, "VPS fixture cleanup failed");
+};
+
+const runAndDisposeFixture = async (run: () => Promise<void>, dispose: () => Promise<void>): Promise<void> => {
+  let primaryFailure: { value: unknown } | null = null;
+  try {
+    await run();
+  } catch (error) {
+    primaryFailure = { value: error };
+  }
+  try {
+    await dispose();
+  } catch (cleanupError) {
+    if (primaryFailure) throw new AggregateError([primaryFailure.value, cleanupError], "VPS fixture test and cleanup failed", { cause: cleanupError });
+    throw cleanupError;
+  }
+  if (primaryFailure) throw primaryFailure.value;
+};
+
+test("VPS fixture cleanup settles every helper and removes the root after a shutdown rejection", async () => {
+  await mkdir(FIXTURE_PARENT, { recursive: true });
+  const directory = await mkdtemp(`${FIXTURE_PARENT}/cleanup-rejection-`);
+  const calls: string[] = [];
+  const rejected = new Error("injected helper shutdown failure");
+  const helpers = [
+    {
+      shutdown: () => {
+        calls.push("first");
+        return Promise.reject(rejected);
+      },
+    },
+    {
+      shutdown: () => {
+        calls.push("second");
+        return Promise.resolve();
+      },
+    },
+  ];
+  try {
+    await assert.rejects(
+      disposeActivationResources(
+        () => {
+          calls.push("reservations");
+          return Promise.resolve();
+        },
+        helpers,
+        async () => {
+          calls.push("root");
+          await rm(directory, { recursive: true });
+        }
+      ),
+      (error: unknown) => error instanceof AggregateError && error.errors.length === 1 && error.errors[0] === rejected
+    );
+    assert.deepEqual(calls, ["reservations", "first", "second", "root"]);
+    assert.equal(helpers.length, 0);
+    await assert.rejects(lstat(directory), { code: "ENOENT" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("VPS fixture cleanup retains the primary test failure alongside cleanup failures", async () => {
+  const primary = new Error("injected test failure");
+  const cleanup = new Error("injected cleanup failure");
+  await assert.rejects(
+    runAndDisposeFixture(
+      () => Promise.reject(primary),
+      () => Promise.reject(cleanup)
+    ),
+    (error: unknown) => error instanceof AggregateError && error.errors[0] === primary && error.errors[1] === cleanup
+  );
+});
 
 const decode = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
 
@@ -233,7 +331,7 @@ const hash = async (b: Uint8Array): Promise<string> =>
     .join("");
 const calls = async (f: Fixture): Promise<string[]> => (await readFile(f.root + "/.data/trace", "utf8")).trim().split("\n");
 // `bootstrap` is a first deployment: no earlier release, selector or listener exists.
-type Profile = "current" | "unknown" | "env-port" | "legacy" | "bootstrap";
+type Profile = "current" | "unknown" | "env-port" | "legacy" | "legacy-supported" | "bootstrap";
 type Active = { options: DeployOptions; sha: string; oldSha: string; publicHealth: () => Promise<Response> };
 const write = (root: string, path: string, source: string): Promise<void> => writeFile(root + "/" + path, source);
 const archivePrevious = async (f: Fixture, sha: string, preparePayload: VpsPayloadPreparation): Promise<void> => {
@@ -255,6 +353,16 @@ const archivePrevious = async (f: Fixture, sha: string, preparePayload: VpsPaylo
   await chmod(release + "/src/release.ts", 0o600);
   await preparePayload(release, sha, await hash(await readFile(archive)));
   await rm(archive);
+};
+
+const writeSupportedLegacyUnit = async (root: string, profile: Profile): Promise<void> => {
+  if (profile !== "legacy-supported") return;
+  await write(root, "ops/ai-ubq-fi.service", SUPPORTED_LEGACY_UNIT);
+};
+const restoreCurrentUnit = async (f: Fixture, root: string, profile: Profile): Promise<void> => {
+  if (profile !== "legacy-supported") return;
+  await write(root, "ops/ai-ubq-fi.service", await readFile(new URL("../ops/ai-ubq-fi.service", import.meta.url), "utf8"));
+  await runFixtureGit(f.root, f.env, ["add", "--", "ops/ai-ubq-fi.service"]);
 };
 
 const prepareActivationFixture = async (f: Fixture, profile: Profile = "current"): Promise<Active> => {
@@ -290,6 +398,10 @@ const prepareActivationFixture = async (f: Fixture, profile: Profile = "current"
       '// Keep the database and secrets in the repository root across code updates.\nconst root = new URL("../", import.meta.url);\nDeno.chdir(root);\n// Resolve the symlink once: static assets and lazy imports must stay on this release.\nconst releasePath = await Deno.realPath(new URL(".data/current", root));\nconst release = new URL(`file://${releasePath}/`);\nconst { config, runtimeGitSha } = await import(new URL("src/config.ts", release).href);\nconst { initializeKv } = await import(new URL("src/kv.ts", release).href);\nif (config.isDeploy) throw new Error("The VPS entrypoint cannot run in Deno Deploy");\nif (!config.adminTokens.size) throw new Error("DENO_DEPLOY_TOKEN must configure administrator authentication");\nif (Deno.env.get("DENO_TIMELINE") !== "production") throw new Error("The VPS service requires the production timeline");\n\nconst gitSha = runtimeGitSha();\nif (!/^[0-9a-f]{40}$/.test(gitSha) || !releasePath.endsWith(`/releases/${gitSha}`)) {\n  throw new Error("The immutable release does not match its Git identity");\n}\n\nconst database = new URL(".data/kv.sqlite3", root);\nif (!(await Deno.stat(database)).isFile) {\n  throw new Error("Migrate the production KV database before starting the service");\n}\nconst kv = await Deno.openKv(database.pathname);\ninitializeKv(kv);\n\nconst { default: handler } = (await import(new URL("serve.ts", release).href)) as typeof import("../serve.ts");\nconst server = Deno.serve({ hostname: "127.0.0.1", port: 8001, onListen: handler.onListen }, handler.fetch);\nlet stopping = false;\nconst shutdown = () => {\n  if (stopping) return;\n  stopping = true;\n  console.log("[ai.ubq.fi] Draining requests before shutdown");\n  void server.shutdown();\n};\nDeno.addSignalListener("SIGTERM", shutdown);\nDeno.addSignalListener("SIGINT", shutdown);\nconsole.log(`[ai.ubq.fi] VPS serving Git revision ${gitSha}`);\nawait server.finished;\nkv.close();\nDeno.exit(0);\n';
     assert.equal(await hash(new TextEncoder().encode(oldLauncher)), "fde18debbfe01ba17716d34d0e8de2415ec92de75b7d9e3804e4e5cdb627e8ea");
   }
+  if (profile === "legacy-supported") {
+    oldLauncher = SUPPORTED_LEGACY_LAUNCHER.replace("port: 7999", "port: 8001");
+    assert.equal(await hash(new TextEncoder().encode(oldLauncher)), "043e36ae688bdcff5d6f8d78ef9f9830fbe27920fa2d0381fe3de638fdbda1cc");
+  }
   await write(root, "scripts/serve-vps.ts", oldLauncher);
   await write(
     root,
@@ -319,6 +431,7 @@ const prepareActivationFixture = async (f: Fixture, profile: Profile = "current"
   await copyOps(root + "/ops");
   for (const name of ["launch-service.ts", "launch-vps.sh"])
     await write(root, "ops/" + name, await readFile(new URL("../ops/" + name, import.meta.url), "utf8"));
+  await writeSupportedLegacyUnit(root, profile);
   await writePackage(root, { "#kv": "./src/storage/kv.ts", "#http": "./fixture-http.ts" });
   await write(
     root,
@@ -347,6 +460,7 @@ const prepareActivationFixture = async (f: Fixture, profile: Profile = "current"
       stderr: "piped",
     });
     assert.equal(link.code, 0, decode(link.stderr));
+    await restoreCurrentUnit(f, root, profile);
   }
   const fixtureKv = await openKv(root + "/.data/kv-bun.sqlite3");
   await fixtureKv.set(["fixture"], "positive");
@@ -372,11 +486,7 @@ const prepareActivationFixture = async (f: Fixture, profile: Profile = "current"
   };
   const helperServers: HttpServer[] = [];
   const releaseFixture = f.dispose;
-  f.dispose = async () => {
-    await closeReservations();
-    for (const server of helperServers.splice(0)) await server.shutdown();
-    await releaseFixture();
-  };
+  f.dispose = () => disposeActivationResources(closeReservations, helperServers, releaseFixture);
   assert.notEqual(ports[0], ports[1]);
   assert.ok(!ports.includes(7999) && !ports.includes(8001));
   const record = (event: string): Promise<void> =>
@@ -553,12 +663,18 @@ const prepareActivationFixture = async (f: Fixture, profile: Profile = "current"
   // ports, so the release ports can now be handed to the real children.
   await closeReservations();
   try {
-    if (profile !== "bootstrap") await start(profile === "legacy");
+    if (profile !== "bootstrap") await start(profile === "legacy" || profile === "legacy-supported");
   } catch (error) {
-    await f.dispose();
+    try {
+      await f.dispose();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "VPS activation and fixture cleanup failed", { cause: cleanupError });
+    }
     throw error;
   }
   const prefix = "#!/bin/sh\nset -eu\nfixture_root=" + quote(root) + "\nfixture_log=" + quote(root + "/.data/trace") + "\n";
+  // activate saves candidate_ready immediately before invoking this reload command.
+  // The injected stop models process death after that receipt is persisted, not a graceful shutdown.
   const scripts = {
     cc: prefix + 'PATH=/usr/bin:/bin exec /usr/bin/cc "$@"\n',
     git:
@@ -578,7 +694,11 @@ const prepareActivationFixture = async (f: Fixture, profile: Profile = "current"
         ' "-n systemctl restart ai-ubq-fi.service") exec ' +
           quote(process.execPath) +
           ' --no-env-file --no-install "$fixture_root/control-client.ts" restart ;;',
-        ' "-n systemctl reload caddy") exec ' + quote(process.execPath) + ' --no-env-file --no-install "$fixture_root/control-client.ts" reload ;;',
+        ' "-n systemctl reload caddy") ' +
+          'if [ -f "$fixture_root/stop-after-candidate-ready" ]; then ' +
+          '/bin/rm "$fixture_root/stop-after-candidate-ready"; kill -KILL "$PPID"; exit 137; fi; exec ' +
+          quote(process.execPath) +
+          ' --no-env-file --no-install "$fixture_root/control-client.ts" reload ;;',
         ' *) printf "unexpected fixture sudo arguments\\n" >&2; exit 74 ;;',
         "esac",
       ].join("\n") +
@@ -696,14 +816,16 @@ const snapshot = async (root: string): Promise<string> => {
   await walk(root);
   return hash(new TextEncoder().encode(JSON.stringify(entries)));
 };
+const recoveryPhase = async (f: Fixture): Promise<unknown> => JSON.parse(await readFile(f.root + "/.data/deploy-recovery.json", "utf8")).phase;
 const withLauncher = (name: string, run: (f: Fixture, active: Active) => Promise<void>, profile: Profile = "current"): void => {
   test(name, async () => {
     const f = await createFixture({ branch: "development", tracking: "match", relocate: true });
-    try {
-      await run(f, await prepareActivationFixture(f, profile));
-    } finally {
-      await f.dispose();
-    }
+    await runAndDisposeFixture(
+      async () => {
+        await run(f, await prepareActivationFixture(f, profile));
+      },
+      () => f.dispose()
+    );
   });
 };
 withLauncher("VPS actual rollback and persistent/cleared same-SHA retry preserve immutable bytes", async (f, a) => {
@@ -743,6 +865,51 @@ withLauncher("VPS actual rollback and persistent/cleared same-SHA retry preserve
   assert.equal(trace.filter((line) => line === RESTART_COMMAND).length, 5);
   console.log(JSON.stringify({ proof: "same_sha_actual_recovery", candidate: a.sha, previous: a.oldSha, snapshot: saved, trace }));
 });
+withLauncher("VPS same-SHA retry restores the previous release after an interrupted candidate-ready run", async (f, a) => {
+  await write(f.root, "stop-after-candidate-ready", "fault\n");
+  const interrupted = await runDeployFixture(f, a.options);
+  assert.notEqual(interrupted.code, 0);
+  assert.equal(await readlink(f.root + "/.data/current"), "releases/" + a.sha);
+  assert.equal(await recoveryPhase(f), "candidate_ready");
+
+  const before = (await calls(f)).filter((line) => line === RESTART_COMMAND).length;
+  assert.equal(before, 1, "the interrupted first run started the candidate exactly once");
+  await write(f.root, "reload-refused", "fault\n");
+  const retry = await runDeployFixture(f, a.options);
+  assert.notEqual(retry.code, 0);
+  assert.match(retry.stderr, /fixture reload refused/);
+  assert.equal((await calls(f)).filter((line) => line === RESTART_COMMAND).length, before + 1);
+  assert.equal(await readlink(f.root + "/.data/current"), "releases/" + a.oldSha);
+  assert.equal(await identity(await a.publicHealth()), a.oldSha);
+  assert.equal(await recoveryPhase(f), "rolled_back");
+
+  await rm(f.root + "/reload-refused");
+  const accepted = await runDeployFixture(f, a.options);
+  assert.equal(accepted.code, 0, accepted.stderr);
+  assert.equal(await identity(await a.publicHealth()), a.sha);
+  assert.equal(await pathExists(f.root + "/.data/deploy-recovery.json"), false);
+});
+withLauncher(
+  "VPS legacy same-SHA retry refuses cross-codec rollback after an interrupted candidate-ready run",
+  async (f, a) => {
+    await write(f.root, "stop-after-candidate-ready", "fault\n");
+    const interrupted = await runDeployFixture(f, a.options);
+    assert.notEqual(interrupted.code, 0);
+    assert.equal(await readlink(f.root + "/.data/current"), "releases/" + a.sha);
+    assert.equal(await recoveryPhase(f), "candidate_ready");
+
+    const before = (await calls(f)).filter((line) => line === RESTART_COMMAND).length;
+    assert.equal(before, 1, "the interrupted first run started the candidate exactly once");
+    await write(f.root, "reload-refused", "fault\n");
+    const retry = await runDeployFixture(f, a.options);
+    assert.notEqual(retry.code, 0);
+    assert.match(retry.stderr, /Cross-codec rollback/);
+    assert.equal(await readlink(f.root + "/.data/current"), "releases/" + a.sha);
+    assert.equal(await recoveryPhase(f), "candidate_ready");
+    assert.equal((await calls(f)).filter((line) => line === RESTART_COMMAND).length, before);
+  },
+  "legacy-supported"
+);
 withLauncher("VPS post-ingress failure retains candidate and retries without restart", async (f, a) => {
   await write(f.root, "public-refused", "fault\n");
   const first = await runDeployFixture(f, a.options);
@@ -904,7 +1071,6 @@ withLauncher("VPS selected immutable release retries without restart and refuses
   assert.match(refused.stderr, /not ready/);
   assert.equal((await calls(f)).filter((line) => line === RESTART_COMMAND).length, 1);
 });
-const recoveryPhase = async (f: Fixture): Promise<unknown> => JSON.parse(await readFile(f.root + "/.data/deploy-recovery.json", "utf8")).phase;
 const assertUnaccepted = (run: FixtureRun, error: RegExp): void => {
   assert.notEqual(run.code, 0);
   assert.match(run.stderr, error);

@@ -21,7 +21,9 @@ The public scripts are `bun run build`, `bun run test`, and `bun run verify`. Fo
 
 `bun run spec:drift` compares the Chat and Responses request allowlists with the official OpenAI request schemas recorded in `scripts/openai-spec-pin.json` (one `openai/openai-openapi` commit and the SHA-256 of its `openapi.yaml`). On its own it is offline and proves only that the runtime and the pin agree. CI runs it with `--verify-source`, which also downloads that commit-addressed file (retrying a transient failure) and requires its digest and request surfaces to equal the pin; `--repin <commit>` moves the pin to a newer official revision, after which the gate fails until the runtime allowlists in `src/openai-schema.ts` follow; `tests/openapi-runtime-contract.test.ts` then requires `static/openapi.json` to publish exactly those allowlists. Gateway compatibility extensions stay out of the official comparison.
 
-Isolated test children disable dotenv and auto-install, use sparse named environment profiles and disposable state, and require the actual supported OS fixture-network boundary. `verify` includes the existing offline benchmark test profile once; stress, live e2e, and live benchmark probes remain separately selected. The explicitly selected `test:e2e` segment keeps that boundary but adds its `BASE_URL` origin (default `https://ai.ubq.fi`). On Linux it admits exactly that one destination, through a destination-scoped relay that serves only the run's own namespace. On Darwin only a host-loopback `BASE_URL` can be scoped, and the run reuses the deterministic Seatbelt profile, which admits every host-loopback port rather than only the `BASE_URL` port; any other origin, the default included, fails closed. Do not invoke live or paid-provider checks as part of migration verification.
+Isolated test children disable dotenv and auto-install, use sparse named environment profiles and disposable state, and require the actual supported OS fixture-network boundary. `verify` includes the existing offline benchmark test profile once; stress, live e2e, and live benchmark probes remain separately selected. The explicitly selected `test:e2e` segment keeps that boundary but adds its `BASE_URL` origin (default `https://ai.ubq.fi`). On Linux it admits exactly that one destination, through a destination-scoped relay that serves only the run's key-holding forwarder. On Darwin only a host-loopback `BASE_URL` can be scoped, and the run reuses the deterministic Seatbelt profile, which admits every host-loopback port rather than only the `BASE_URL` port; any other origin, the default included, fails closed. Do not invoke live or paid-provider checks as part of migration verification.
+
+Same-user host processes are outside the Linux isolation boundary: where host permissions allow, they can enter the run's user/network namespaces via `setns` through `/proc/<pid>/ns` and use the forwarder, or use `ptrace` to access its key. A deterministic test child of another run remains in sibling user, PID, and mount namespaces and cannot use that host-level access. The owner decision to accept Darwin's loopback-only limit or commission a destination-scoped CONNECT relay remains [pending under #1176](docs/DECISIONS.md#owner-only-follow-ups-from-1132-remain-pending---2026-10-18-1176).
 
 TypeScript starts directly from verified immutable releases. Runtime/dependency/native artifacts must be prepared and manifest-bound before publication; launchers use `--no-env-file --no-install`, explicitly load the repository-root `.env`, and fail closed without downloading, installing, or compiling at startup. `build:native` prepares auxiliary native guard artifacts separately; it is not an application TypeScript compile step. Merging this source does not activate production or convert its database.
 
@@ -186,6 +188,31 @@ curl -sS https://ai.ubq.fi/v1/responses \
     "input": "Summarize this in 1 sentence: ..."
   }'
 ```
+
+Decisions (typed OpenRouter decision models):
+
+```bash
+curl -sS https://ai.ubq.fi/v1/decisions \
+  -H "Authorization: Bearer $UOS_AI_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "model": "baseten/elephant-1:free",
+    "state": "The export button returns a 500 error every time.",
+    "questions": {
+      "is_bug": {
+        "type": "noul",
+        "instructions": "Is the customer reporting a software defect?"
+      },
+      "team": {
+        "type": "choice",
+        "instructions": "Which team should own this?",
+        "criteria": {"payments": "Checkout or billing.", "frontend": "Rendering or browser issues."}
+      }
+    }
+  }'
+```
+
+`/v1/decisions` accepts `noul`, `choice`, `score`, and `box` questions, provider routing preferences, trace metadata, session ids, and text or JSON `state` (including OpenRouter's image/audio/video parts). The response is OpenRouter's typed `answers` envelope with usage. Decision models are listed on `/v1/models`, `/uos/models/catalog`, `/uos/models/capabilities`, and the admin model picker with `/v1/decisions` as their supported endpoint. The older `/v1/systemone` route remains as a Jev-compatible alias.
 
 ## Codex quota reporting
 
@@ -405,7 +432,6 @@ The retained `DENO_DEPLOY_TOKEN` name identifies an admin credential; it does no
 - `UOS_AI_TOKEN` (optional): Comma- or newline-separated client tokens accepted via `Authorization: Bearer ...`. The
   gateway can also accept API keys stored in durable KV (created via `/admin/api-keys`).
 - `DENO_DEPLOY_TOKEN` (optional, recommended): Tokens accepted for admin endpoints.
-- `CODEX_BASE_URL` (optional): Defaults to `https://chatgpt.com/backend-api/codex`.
 - `CEREBRAS_API_KEY` (optional): Server-side credential for explicit non-streaming Chat Completions requests to Cerebras
   `gpt-oss-120b`. It is never accepted from clients or exposed by health responses.
 - `DEEPSEEK_API_KEY` (optional): Server-side credential for Chat Completions requests to DeepSeek's official API
@@ -444,9 +470,21 @@ Bearer` with the documented OAuth beta. Present alone it changes nothing: the ro
   `/admin/providers/capacity` additionally carries a live `claude` analytics row (credential direction, workspace,
   windows, guards, last error) that the Analytics capacity list renders next to the Codex subscription rows; the stored
   Codex/metered capacity snapshot record keeps its own three sources, so the event sampler pays no extra KV reads.
-- `CORS_ALLOW_ORIGIN` (optional): Defaults to `*`.
-- `UOS_API_KEY_DEFAULT_USAGE_LIMIT` (optional): Default usage limit for new API keys in requests/week. Defaults to `50`.
-- `UOS_API_KEY_DEFAULT_EXPIRY_DAYS` (optional): Default expiration for new API keys in days. Defaults to `90`.
+
+Credentials, private account/workspace identifiers, access allowlists, public verification keys, native credential homes (`CODEX_HOME` or `HOME`), and production identity settings remain configurable. Keep `DENO_TIMELINE=production` for the VPS service and retain the existing host security boundaries. The repository-root `.env` resolves to a shared credential file; an unused gateway setting does not make a provider credential or shared metadata safe to delete.
+
+Gateway behavior uses these fixed defaults:
+
+- Compaction follows the selected provider's stock route, with no gateway Jev interception or hybrid residue pass.
+- The CORS fallback origin is `*`; trusted-origin and authentication checks still apply.
+- Images use the gateway's selected/default text model, and the Codex upstream is `https://chatgpt.com/backend-api/codex`.
+- New API keys default to `50` requests per week and expire after `90` days. Explicit per-key settings remain available.
+- TypeScript banked resets are enabled only through the existing per-account consent, eligibility and claim gates, with one redemption per account per UTC day and one per quota window. Rust's persisted account reset policy is unchanged.
+- Mac companion capacity samples use the host identity `mac`.
+
+The retired overrides are `JEV_COMPACTION_DISABLED`, `JEV_COMPACTION_HYBRID`, `CORS_ALLOW_ORIGIN`, `IMAGE_BASE_MODEL`, `CODEX_BASE_URL`, `UOS_API_KEY_DEFAULT_USAGE_LIMIT`, `UOS_API_KEY_DEFAULT_EXPIRY_DAYS`, `CODEX_BANKED_RESET_ENABLED`, `CODEX_BANKED_RESET_MAX_PER_ACCOUNT_PER_DAY`, `CODEX_BANKED_RESET_MAX_PER_ACCOUNT_PER_WINDOW`, and `UOS_CAPACITY_OBSERVATION_HOST_ID`.
+
+For local activation, deploy the accepted immutable release with the old shared environment intact, then verify its release identity, authenticated ordinary inference and a marked native-compaction request using the stock route. After that proof, privately back up and hash-check the shared file, remove only retired behavior settings, preserve every other byte plus symlinks, ownership and permissions, and gracefully reload only the gateway. Never restart the shared Codex daemon. Restore `JEV_COMPACTION_DISABLED=1` before rolling back to interception-capable code. This local procedure does not authorize VPS activation, credential changes, reset redemption or a database rollback.
 
 ## Output-token caps by endpoint and provider
 
@@ -697,6 +735,8 @@ bun run ubq-ai admin keys revoke --id "<id>"
 - `GET /v1/models`
 - `POST /v1/chat/completions` (streaming and non-streaming)
 - `POST /v1/responses` (streaming and non-streaming; non-streaming buffers upstream SSE)
+- `POST /v1/decisions` (typed OpenRouter decision models)
+- `POST /v1/systemone` (Jev compatibility alias)
 
 ## Local dev
 
@@ -717,7 +757,8 @@ the same way; `bun run admin:models` (and its `:spark` variant) use `DENO_DEPLOY
 is `http://localhost:8000`), but an exported token is still sent as `Authorization: Bearer ...`; unset both variables
 if the listener must receive no deployment credential. A non-loopback `BASE_URL`, including a lookalike such as
 `http://localhost.example.com`, requires one, exactly like the loopback server itself, which has admin authentication
-disabled. Both tasks exit non-zero on an HTTP error rather than printing an empty result.
+disabled. Both tasks now exit non-zero on an HTTP error (previously `:spark` printed an empty list and `admin:models`
+printed the error body, both with exit 0).
 
 The dev wrappers explicitly source `.env` before invoking Bun with `--no-env-file`; `dev:local` retains its existing optional native-auth seed. Direct commands below do not discover dotenv files, so export their intended credentials first. The named `application` export and explicit entry point use the receipt-preserving `node:http` server, not Bun's automatic default-export server startup.
 

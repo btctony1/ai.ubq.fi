@@ -6,6 +6,209 @@ higher authority.
 
 Provider routing decisions are maintained separately in `docs/provider-decision-journal.md`.
 
+## CI runs native test profiles after portable gates and uses pinned prebuilt wasm-bindgen - 2026-10-29
+
+After portable validation succeeds, the Linux native job runs the existing deploy-guards, vps, main, sentinel, quality and benchmark profiles with its independently bound native KV receipt. It retains frozen lint-tool preparation, the Bun type patch and native preflight fixtures, and aggregates profile failures. The portable strict TypeScript preflight remains because the scoped aggregate can select zero tests and exit before static gates. Local `verify.sh` keeps its complete aggregate default.
+
+WASM preparation supports Linux ARM64 only and downloads the official `wasm-bindgen` 0.2.129 GNU archive with SHA256 `1797c349a0f45d30946e8986b184135e12839ab576c9a04203e85febfc5dcb35`. The existing checked archive extraction places the binary under the fresh task's `tools/wasm-bindgen`; `WASM_BINDGEN_BIN` binds that absolute path for both version verification and Worker compilation. `worker-build` 0.8.7 remains a locked source install. Fresh application targets, frozen source receipts and offline verification remain required.
+
+Reason: Actions run `40168689356` repeated about 338.3 seconds of portable static gates in the native job, and WASM preparation serially compiled wasm-bindgen from source. This removes those repeated invocations without changing selected native-mode tests or release profiles. The sampled public-repository timing API reported zero billable milliseconds; these are runner-work reductions, not measured quota savings or candidate hosted timings. The manually disabled workflow stays disabled.
+
+## Native catalog windows carry their automatic compaction policy - 2026-10-29
+
+First-party Codex catalog records carry the existing shared automatic compaction policy alongside their context window. The limit is the earlier valid source limit or the shared 85-percent-or-50,000-token-reserve derivation. A 1,050,000-token GPT window therefore carries an 892,500-token limit; an earlier source limit remains authoritative. This repairs native records that previously widened their window while leaving clients to derive a later default trigger.
+
+Verified cached bodies receive the same projection before client conditional validation, including caches persisted before this correction. Stored source bytes, source integrity metadata and the upstream ETag remain unchanged; upstream 304 revalidation still starts from those original bytes. Client ETags continue to hash the final served representation, so an old validator cannot hide the repaired compaction limit.
+
+Reason: real Mac sessions exhausted context near 923,000 tokens before the client's 945,000-token default trigger. Their native catalog advertised the widened window without the gateway's earlier compaction policy. This change adds no interception, provider routing, model choice or user configuration. Exact upstream output reservation is not inferred from those failures.
+
+## Claude capacity is observed only from ordinary response headers - 2026-10-28
+
+The Claude meter and current capacity projection use an explicitly marked response-header observation captured by the existing ordinary-inference quota acceptance path. Subscription windows and API-key limit families retain their own observation timestamps; missing families and headerless responses invent no measurements. Canonical routing quota, proofs, cooldowns and settlement keep their existing behavior. Old canonical values without header provenance and retained direct-usage snapshots are not relabeled as header evidence. New header history carries `source: "response_headers"`; legacy history without a direct snapshot remains readable as header history.
+
+The capacity sampler never calls Claude's OAuth usage endpoint, and direct-usage freshness cannot force a capacity refresh. The former manual refresh route is a passive compatibility read that reports `refreshed: false` with a response-headers reason. The visible meter waits for normal Claude traffic when no proven headers exist. This supersedes the 2026-10-25 direct-usage collection decision and adds no OAuth grant, credential work, synthetic inference, timer or service activation.
+
+Claude history follows the active account in each capacity snapshot without an account dropdown or a pinned manual selection. A missing active projection may use matching subscription metadata, but an explicit empty projection or account/cohort mismatch remains empty. This is a view-only choice: retained history is preserved and other provider charts are unchanged.
+
+## Direct Claude usage honors the provider retry deadline - 2026-10-27
+
+A direct usage HTTP 429 with a valid `Retry-After` stores an absolute retry deadline in that account cohort's usage metadata. Automatic capacity collection and manual usage refresh share the deadline across KV reopen and process restart. A suppressed manual refresh returns HTTP 429 with the remaining `Retry-After`; a successful read clears the deadline. Missing or malformed deadlines retain the existing 30-second attempt freshness, and an expired deadline does not extend that freshness. Failed reads preserve the last successful meter snapshot and never set an inference quota block or cooldown.
+
+Reason: the HTTP reader parsed `Retry-After` but the collector discarded it, allowing another usage request after 30 seconds even when the provider requested a longer pause. Reversal risk: discarding this usage-only deadline restores early retries; placing it in the inference cooldown would incorrectly deny otherwise eligible model requests.
+
+## Passport browser sign-in uses revocable permanent app sessions - 2026-10-27
+
+The Bun gateway requests an explicitly opted-in persistent Passport app grant only through a fresh browser SSO code exchange, using PKCE S256 and the existing fixed issuer, client, audience, origin and callback. Its host-only HttpOnly/Secure/SameSite cookie contains a random local session identifier; existing private KV stores its SHA-256 key and the app-scoped upstream grant without a time-based expiry or a saved administrator-role authority. Every authenticated request introspects the grant against Passport's current user. Demotion denies admin access, deletion or authoritative revocation removes local authority, and temporary verification failures return 503 while retaining the saved session. Legacy JWT cookies remain verification-only until their normal expiry and cannot create permanent grants.
+
+Successful browser auth checks renew the platform-bounded persistent cookie; browser storage removal or browser retention limits can still require sign-in. Explicit logout deletes local authority before best-effort upstream grant revocation and reports an unavailable upstream revoke honestly. An in-flight read cannot recreate a deleted session. Failed login callbacks clear only state and verifier cookies, preserving an existing session; a successfully stored replacement atomically removes the previous local session. The admin UI preserves its last known state during temporary failures, shows an unavailable/retrying status and rechecks on foreground without authorizing server operations from cached roles.
+
+Reason: the previous app cookie directly held a Passport access token whose default lifetime was fifteen minutes, and network or verification failures also appeared as sign-outs. The persistent app grant separates sign-in lifetime from access-token expiry while preserving current central authorization. The same change uses the existing theme surface/text appearance for Ubiquity sign-in buttons without changing their shape or interactions. This source decision does not activate the unshipped Rust port or authorize production credential, database or service changes.
+
+## Decision models use their own first-class wire - 2026-10-25
+
+OpenRouter's decision models are discovered with `output_modalities=text,decisions` and served through `POST /v1/decisions`, which mirrors the upstream Decisions API's `state`, typed `questions` (`noul`, `choice`, `score`, `box`), optional provider routing, trace, session, and user fields, and returns the typed `answers` envelope unchanged. Text models remain limited to Chat Completions and Responses; decision models remain limited to `/v1/decisions`. `/v1/systemone` stays as the bounded Jev compatibility route. Every listing surface attributes decision rows to `/v1/decisions`, while the Codex-native versioned catalog excludes them because Codex cannot select a non-text decision response.
+
+Reason: OpenRouter's default model list omits decision models, so the admin picker and public catalog silently missed newly listed rows such as `baseten/elephant-1:free`; merely widening discovery without a matching request wire would have advertised models that no gateway route could serve.
+
+Reversal risk: returning to the default text-only discovery hides every decision model again. Advertising decision rows on Chat Completions or Responses, or accepting text rows on `/v1/decisions`, would produce guaranteed upstream failures and break the gateway's listed-equals-servable contract.
+
+## Admin Analytics reads Claude subscription usage directly - 2026-10-25
+
+The admin Analytics view restores the Claude subscription capacity rows and chart series. Claude accounts join the existing lease-guarded capacity sampler, so opening Analytics, its visible 30-second poll, foreground resume and existing capacity events collect direct usage for every configured account, including accounts with no prior inference or unavailable inference state. Each row retains a targeted **Refresh usage** action using the same account-fenced helper; a short durable account/cohort lease coalesces manual and automatic collection. The action calls `POST /admin/providers/claude-code/quota/refresh`, which sends `GET https://api.anthropic.com/api/oauth/usage` with the account's OAuth credential and the Claude Code OAuth headers, parses the five-hour and weekly utilization percentages and reset instants, converts the percentages to the existing fractional quota windows, and publishes the accepted observation through the existing quota and history writer. It never sends a Messages request or starts an inference turn. A direct usage attempt within the previous 30 seconds returns the current evidence without another provider call; inference-header recency does not suppress this independent source. The capacity response reads the Claude roster and history after collection so it includes newly persisted observations. Cached reads never invent measurements. Anthropic's OAuth usage endpoint is undocumented and may change; gateway traffic continues to update the meter through the existing rate-limit-header observation path.
+
+Reason: the owner required a working independent usage source and rejected synthetic inference probes. The direct endpoint is the same server-side evidence used by Claude Code's account panel, so it refreshes both windows without spending subscription capacity. A stored OAuth setup token without `user:profile` cannot read this endpoint; that result is recorded as an explicit `scope_missing` usage state, leaves inference routing and health untouched, and is shown in the row diagnostics instead of being treated as credential invalidity.
+
+Reversal risk: removing the refresh action returns the meter to gateway-traffic-only updates. Polling the endpoint too frequently can trigger upstream rate limits, so only one stale-load attempt, one explicit operator read, and a 60-second freshness window are permitted. Reintroducing an inference request as the usage source would make quota observation consume the quota it is trying to measure.
+
+## Direct Claude usage preserves the complete meter snapshot - 2026-10-25
+
+Direct OAuth usage has a separately timestamped, account/cohort-bound successful snapshot. A successful partial reply replaces its complete prior shape; a failed read keeps the original last-success clock and exposes the failed attempt. Inference headers keep their existing canonical 5h/7d routing semantics and never renew the direct snapshot. A valid server `limits` array, including an empty array, defines the displayed meters in server order with the supplied kind, group, scope labels, severity and headline choice; missing or null `limits` uses independently present legacy subscription windows. Source values and nullable resets remain preserved, including percentages above 100; chart bounds are presentation only. Separate spend and credit fields are diagnostics, not quota capacity or management controls.
+
+Claude history retains the snapshot at the accepted-observation seam; direct meter rollups use a separate namespace and keep each meter/cohort/reset independent. Existing legacy records remain readable without backfill or a new shared capacity denominator. No named or dynamic scoped meter gains global routing authority. The Rust source adapter does not yet preserve these additive fields, so Rust adoption requires a separate source-contract preservation gate rather than claiming TypeScript/Rust round-trip parity.
+
+Reason: the native Claude Code 2.1.310 schema permits independent null/missing windows and server-selected scoped meters; requiring both canonical windows discarded valid replies and hid returned quota. Reversal risk: merging individual fields from older snapshots would present missing windows as current, and deriving global guards from scoped meters would block unrelated models.
+
+## Admin console browser sign-in is Passport-only - 2026-10-25
+
+The admin console and chat present the Ubiquity-branded Passport sign-in button established in the Passport `sign-in-buttons` study: the Ubiquity mark plus the label "Sign in with Ubiquity". The admin page exposes only that browser sign-in; its former secondary "Sign in" gate, passkey controls, and admin-token controls are removed from the visible page. Hidden compatibility nodes preserve existing client code and local automation. Programmatic admin tokens and existing passkey relay routes remain available to command-line tooling and separately supported clients.
+
+Reason: the owner reported two login choices and requested Passport as the only login service.
+
+Reversal risk: re-exposing passkey or token fields restores the second visible login path. Removing the server-side token and passkey authorities would break automation and approved relay clients, so that broader change requires a separate decision.
+
+## Bun serves the Passport browser sign-in advertised by its admin page - 2026-10-23
+
+The production Bun gateway implements the existing Passport `ai` registration at `/auth/login`, `/auth/callback`, and `/auth/logout`, matching the fixed issuer, audience, origin, callback, RS256/JWKS verification, host-only secure cookies, and cookie-only admin authority used by the Rust implementation. An administrator claim is required for admin access; agent tokens never become admin sessions, and foreign-origin cookie mutations are rejected. The admin button requests `/admin` as its return destination; that fixed choice is bound into the random login state, while ordinary chat login returns to `/chat`.
+
+Reason: the shared admin page advertised Passport sign-in while the production Bun router returned 404 for `/auth/login`; Rust-only coverage did not exercise the runtime serving the public page.
+
+Reversal risk: removing the Bun routes strands the advertised sign-in button. Accepting arbitrary callback destinations, JWT key sources, audiences, or bearer credentials as admin authority would expand the existing trust boundary.
+
+## Automatic banked resets are live-only - 2026-10-21
+
+Automatic banked resets are now live-only. The `CODEX_BANKED_RESET_MODE` selector and shadow-decision arming gate are retired; `CODEX_BANKED_RESET_ENABLED` remains the immediate kill switch. When enabled, an eligible blocked cohort performs fresh inventory, selects one exact credit, claims the deterministic redemption, and submits it in the same request. The existing one-per-account-per-UTC-day and one-per-window caps, exact fence checks, at-most-once transaction, and post-reset probe remain unchanged. Historical shadow decisions remain readable for audit but do not gate a live redemption.
+
+Reason: the owner explicitly required automatic live behavior; shadow mode and arming made a redeemable reset require a prior decision and a later request.
+
+Reversal risk: removing the arming and audit gate allows an external spend on the first eligible blocked request. Exact caps and fences plus the enabled kill switch are mandatory; `unknown` remains possibly spent and is never replayed.
+
+## Merged-only CI gates expensive jobs behind portable validation - 2026-10-21
+
+This supersedes the merge-group, queue-canary, Sentinel-authored PR, and development-push trigger requirements in "Real CI checks for Sentinel and merge groups" for the current GitHub Actions quota policy. `pull_request: closed` and `workflow_dispatch` are the only triggers, and every job requires a merged pull request or explicit manual dispatch. After `scope`, the portable x64 `portable` gate must pass before `rust-native`; `rust-wasm` follows `rust-native`; `native` and macOS/Darwin work start only after their selected earlier gates pass. The `validate` job remains the required check name and fails closed when a selected portable or Rust gate is missing, skipped, cancelled, or failed. Each job has an explicit timeout, and the workflow never deploys.
+
+Reason: recent failed runs spent 70-90 job-minutes because `native`, `rust-wasm`, and macOS work started even after `rust-native` failed, while `validate` waited for both Rust jobs before running portable checks. The dependency chain preserves every selected check but skips work that cannot be accepted once an earlier selected gate fails.
+
+Reversal risk: removing the dependencies restores parallel quota consumption on failures; treating skipped or cancelled dependencies as success would hide missing checks. Manual dispatch with an explicit `scope_base` remains necessary for squash or rebase merges, whose commits are not ancestry-preserving merge commits.
+
+## Manual complete-set verification for Sentinel pre-merge delivery - 2026-10-22
+
+The owner authorized a pre-merge verification path for Sentinel-authored AI pull requests under the manual-only quota policy. A manual `workflow_dispatch` may pass `base_ref=development` and `sentinel_pr_author=ubiquity-sentinel[bot]` with the exact PR `scope_base`; the workflow then selects the same complete check set as a Sentinel-authored pull request. This does not add an automatic trigger, a push trigger, a merge-queue trigger, or a deployment. The resulting check runs remain bound to the exact dispatched head and are accepted only when every selected job succeeds; skipped, cancelled, neutral, or missing jobs are not success. The normal `pull_request: closed` post-merge run remains the hosted receipt for ordinary merged changes.
+
+## Fresh capacity exhaustion reconciles a retained ambiguous reset identity - 2026-10-21
+
+A fresh `100%`-used capacity observation with a future reset deadline now reconciles an existing class block even when the
+block still carries an older future stable observation. It replaces that observation with the sample's deadline, clears
+`banked_reset_generation_ambiguous`, and preserves the credential/account fences, probe lease, and recovery-probe
+pending state. A live `429` observed after the sample remains newer and cannot be replaced by the older sample.
+
+Reason: the older identity kept a creditless sibling ambiguous while the pool was otherwise fully exhausted. The
+automatic reset evaluator rechecked every blocked account, returned `routing_fence_stale`, and the intentionally
+conservative overage fallback refused that reason. Both enabled bonus paths therefore dead-ended on a gateway quota
+refusal even though another account held an available reset.
+
+Reversal risk: allowing any stale identity to override a newer live signal can spend a reset against the wrong quota
+window. The observation timestamp, account identity, credential fence, and active probe lease remain hard gates.
+
+## Rust audit text preserves source UTF-16 truncation - 2026-10-19
+
+API-key audit fields and target names preserve the source `slice(0, 200)` contract, including a lone surrogate when the cut splits a pair. Audit writes retain ordinary Json records when lossless and use the existing ProfileV2 encoding only when ordinary JSON values cannot represent the event. The audit-only read projection uses validated SourceJson and retains existing Json compatibility, scalar-field selection, timestamp-only visibility and event ordering. This adds no storage family, general codec reinterpretation or live-state conversion.
+
+Reason: Unicode-scalar truncation changed the retained text, and ordinary Rust strings could not represent every source audit value. Source-golden persistence and read-page fixtures cover the exact code units. Migration and latest-state inverse must preserve the same existing ProfileV2 representation before operational acceptance.
+
+## TypeScript-only VPS releases reuse verified payloads - 2026-10-19
+
+The VPS deploy CLI reuses the selected immutable release's `node_modules` and `.native/kv` payload when the root lockfile
+and native input manifest match exactly. A mismatch falls back to the existing fresh install/build path. This avoids
+recompiling the unchanged native KV addon for routing and client-only changes.
+
+Reason: repeated Cargo builds delayed small TypeScript releases and kept the service on stale behavior longer than
+necessary. Reuse is bound to the selected release's verified provenance and the current tracked native inputs.
+
+Reversal risk: reusing across a changed lockfile or native input would violate the immutable release identity, so either
+mismatch must continue to rebuild and verify from source.
+
+## Client Retry-After is bounded independently of quota deadlines - 2026-10-19
+
+Gateway routing errors retain their durable quota or reset deadline, but the client-facing `Retry-After` hint is capped
+at 60 seconds. A weekly Codex quota block previously emitted the full remaining duration, such as 561,000 seconds, and
+clients slept for days instead of retrying or entering an available failover.
+
+Reason: routing availability can change through paid failover, reset recovery, or operator action long before the
+upstream subscription window resets. The upstream deadline is still enforced internally and is not shortened.
+
+Reversal risk: removing the cap restores multi-day client sleeps on ordinary weekly exhaustion. Emitting no header
+would instead invite tight retry loops.
+
+## Shadow banked-reset decisions do not suppress enabled overage - 2026-10-19
+
+In banked-reset shadow mode, `shadow_selected` and `already_would_spend_once` prove that no reset credit was
+redeemed: shadow persists a decision but never consumes it. Both outcomes now qualify for the existing single bounded
+overage probe when the account's `Allow overage spending` setting is on. The per-account allow setting remains a hard
+gate; `live_armed`, a completed live redemption, and fence or configuration failures still never fall back.
+
+A durable reset record stuck at local `claimed` without a provider submission likewise returns
+`unsubmitted_transaction`. Reconciliation cannot advance that record and no external reset was consumed, so the same
+bounded overage probe may proceed. In-progress, live-armed, submitted, unknown, and ambiguous states remain ineligible.
+
+Enabled overage is a serving path, not a single-flight reset recovery probe. It does not claim the reset probe lease, so
+concurrent client requests may use the account directly; each request still performs at most one bounded upstream
+attempt.
+
+Reason: an exhausted account with overage enabled remained stuck behind an existing shadow decision and fell through to
+paid routing, even though shadow mode could not spend the reset it observed.
+
+Reversal risk: removing these reasons restores that dead-end. Adding live-arming or completed-redemption reasons would
+risk spending both a banked reset and overage for one episode.
+
+## Explicit manual banked reset verifies and promotes one account - 2026-10-18
+
+An authenticated admin may use one banked reset for a selected Codex account through `POST /admin/providers/codex/banked-resets/consume`. This explicit manual action works independently of the Automatic resets switch and automatic shadow arming; global `enabled=false` and `mode=disabled` still make zero provider calls. Manual and automatic redemptions share the existing one-per-account-per-UTC-day submission budget, account/window idempotency, exact credential and quota fences, and unknown-consumption refusal. An uncertain consume is never replayed.
+
+After a documented verified consume outcome, the manual action synchronously reads that account's current usage. One atomic transaction stores the fresh account-bound observation, reconciles only quota classes proven recovered, records completed manual promotion and selects that same account with reason `manual_reset`. This explicit operator transition may supersede a healthy active account; ordinary serial routing, provider selection, authentication and model eligibility remain unchanged. Pending propagation or a failed promotion never claims success, and a repeated completed action cannot restore an old priority. The manual intent contains opaque account/credential hashes and quota metadata, never tokens. KV export/import retains the intent together with its authoritative reset-window and account-day ledgers; importing only the intent would lose the consumption and daily-budget proof.
+
+Reason: a manual reset outside the gateway could leave exhausted routing state until a later capacity sample. The button owns verification and promotion directly, without waiting for chart sampling or issuing inference. Acceptance uses isolated upstream fixtures; agents remain forbidden from directly redeeming live credits.
+
+## Allow overage spending false refuses all overage - 2026-10-18
+
+The per-account `Allow overage spending` setting is a hard gate. With the setting off, the gateway may redeem a banked reset, but it must never dispatch an overage probe, including after the reset preflight returns `no_eligible_credit`, empty or ineligible inventory, `inventory_unavailable`, or `account_day_limit_reached`. That case returns the ordinary `codex_quota_blocked` response. With the setting on, the existing resets-first flow and one bounded overage fallback remain unchanged.
+
+Reason: the previous implementation treated off as "try resets first" and still spent overage when no reset was redeemable, which contradicts the operator-facing switch. This change governs gateway-routed inference only; a native Codex client that authenticates directly to ChatGPT is outside the gateway and must be configured or authenticated separately.
+
+Reversal risk: turning the setting off now stops serving an exhausted subscription instead of silently drawing paid overage. That is the requested safe behavior, and re-enabling the setting restores the bounded fallback.
+
+## Real CI checks for Sentinel and merge groups - 2026-10-18
+
+Issue #1206 preserves real successful checks for Sentinel's delivery and base-failure attribution. Run the complete job set for merge groups, PRs targeting exactly `queue-canary`, Sentinel-authored PRs targeting exactly `development`, development pushes, and development PRs changing the CI workflow or selector itself. Use the PR author, not the actor who reruns a workflow. Ordinary owner PRs retain changed-path job selection.
+
+This selects jobs without broadening dependency-scoped test selection. Native KV and Darwin signing fixtures retain their existing eligibility rules; admitted native, sandbox and artifact jobs still execute their real verification commands. Documentation wrappers may truthfully select zero tests. Never substitute successful placeholder checks or accept skipped checks as success. Development and merge-group runs retain their non-cancelling concurrency groups, and CI never deploys.
+
+Sentinel R81 attributes a red head check using the same check name on the exact base. Restoring successful base jobs provides that evidence for future runs; it does not prove identical test-file coverage across differently scoped runs or repair historical skipped evidence. Reversing this exception can strand otherwise eligible Sentinel repairs or queue entries without usable check evidence.
+
+## Owner-only follow-ups from #1132 remain pending - 2026-10-18 (#1176)
+
+PR #1156 closed #1132 on 2026-10-18 without resolving the two owner-only actions below. #1176 tracks both; this entry records pending work, not an owner decision or authorization to change runtime behavior. Keep #1176 open until the owner resolves these actions or each is transferred to a linked open owner task.
+
+- **#1073 item 2 / #139 — hard-cap disposition.** Oldest-first eviction has not been implemented. The retention document previously attributed a decline to the owner on 2026-10-16 in #139, but no supporting owner record is available in #139 or this journal. The owner must confirm and record that reported decline in a comment on #139 or a dated decision here, or correct the attribution. If declined, consider changing #139's close reason from "completed" to "not planned"; its current close reason does not prove eviction exists. The 5 GiB figure remains a growth-alert threshold, not an eviction limit.
+- **#1077 item 2 — non-loopback macOS live e2e.** Darwin live e2e accepts only a host-loopback `BASE_URL`; the default `https://ai.ubq.fi` fails closed. The owner must explicitly accept that limit or open a task for a destination-scoped CONNECT relay (or equivalent). No relay implementation or broader network permission is authorized while that decision is pending.
+
+## VPS join lifecycle bounds and conservative orphan handling - 2026-10-18
+
+For issue #1165, keep PID 1 rows about `ai-ubq-fi.service` out of request counts, but retain completed exit/restart timestamps as lifecycle evidence. Once a fully covered window has an unmatched admission before such a marker, persist `unavailable` / `terminal_lost`, stop its forward scan and release its slice pin. A startup notice, a mere stopping/starting notice or unrelated manager output is not evidence that an admitted request was lost. With `Type=simple`, a `Started` row can follow a live admission from the new process, so it never establishes this cutoff. Matched requests remain countable. Checkpoint schema 3 includes lifecycle markers and terminal-lost state; older schemas fail closed rather than silently discarding that evidence. This does not impose a new maximum stream lifetime or activate the standalone release bridge.
+
+Retain the conservative orphan-terminal rule from #1155: an unmatched accepted-stage or legacy null-stage terminal at or after a window's start can refuse that window even when `at - latency_ms - VPS_METRICS_SLICE_MS >= windowEnd`. Its reported latency bounds the backward admission search, but is not trusted to exclude it from the cohort. Ignoring it would let an under-reported latency hide a lost admission and produce falsely complete counts. Prefer a monitoring restart over that fail-open result; explicit `pre_admission` terminals remain excluded.
+
+Pending windows retain whole ledger slices. Evidence therefore grows with request rate times the longest in-flight lifetime, plus backward lookback and slice/proof overhead, until a terminal/lifecycle bound resolves the window or a configured limit refuses it. The hard byte cap is a refusal boundary, not a promise of constant-size or always-completable evidence. Sizing examples and the remaining no-lifecycle-marker limitation are in `ops/README.md`.
+
 ## Assistant output replay accepts and drops log probabilities - 2026-10-17
 
 Responses `output_text` accepts the official `logprobs` field when it is an array, including an empty array. Validation intentionally checks only the array shape, matching the existing `annotations` rule; neither field's entries affect generation. Both fields are dropped when constructing `MessageContentItem`, so the Codex subscription and paid provider request bodies carry only the replayed text. Non-array values retain a precise nested field error, non-assistant `output_text` remains invalid, and genuinely unknown fields remain rejected.
@@ -596,16 +799,17 @@ manifest is written only after a complete copy, so an interrupted rebuild is reb
 its `dsh-gnupg-<uid>` parent must be real directories owned by the caller and are forced to mode 0700; anything else
 fails closed before gpg runs. `tests/gpg-dsh.test.ts` covers each trigger.
 
-Three rules were added on 2026-10-17 (#1141). A GnuPG configuration file in the seed (`gpg.conf` or a versioned
-`gpg.conf-<version>`, `gpg-agent.conf`, `scdaemon.conf`, `common.conf`, or any other top-level `*.conf` or `*.conf-*`)
-also stops the seed's agent and discards the seed: the helper never writes one, so it was planted from inside the
-sandbox, which can write `$TMPDIR`, and a planted `pinentry-program` would see the passphrase at the next agent start.
-The seed's parent is per user, `dsh-gnupg-<uid>`, rather than one `dsh-gnupg` shared by every user, and a seed left at
-the earlier `$TMPDIR/dsh-gnupg/<uid>` is discarded with its agent when this user owns that parent, together with the
-rebuild lock and any staging or set-aside copy an earlier helper left beside it (`<uid>.lock`, `<uid>.new.*`,
-`<uid>.old.*`). Each pass over the inputs hashes all of them with one digest process (a reused seed takes one pass, a
-rebuild a second one under the rebuild lock), because macOS `shasum` is a perl script and one process per file added a
-perl start per seeded file to every sandboxed commit.
+The #1141 helper changes from #1159 are combined with staged rebuilds (2026-10-18, #1168). A GnuPG configuration
+file in the seed (`gpg.conf` or a versioned `gpg.conf-<version>`, `gpg-agent.conf`, `scdaemon.conf`, `common.conf`, or any
+other top-level `*.conf` or `*.conf-*`, including dangling symlinks) invalidates the recorded manifest and stops the
+seed's agent before replacing the seed. The helper never writes configuration files, so one was planted from inside
+the sandbox; a planted `pinentry-program` could capture the passphrase at the next agent start. The seed's parent is
+per user, even when `TMPDIR` is unset and `/tmp` is shared. Under the new rebuild lock, the helper also stops the agent
+and removes this user's earlier `$TMPDIR/dsh-gnupg/<uid>` seed, rebuild locks and leftover staging/set-aside copies,
+but only when this user owns the real legacy parent and copies. Do not run an older installed helper concurrently during migration.
+Each manifest uses one digest process for all inputs: macOS `shasum` is a perl script, so one process per file added a
+perl start per seeded file to every sandboxed commit. A mismatch is re-hashed under the lock before copying, and all
+copies still go into the private stage, never into a published seed.
 
 Rebuilds are serialized and published whole (added 2026-10-17, #1139). Before this, every call that found a stale
 manifest stopped the agent, removed the shared seed, and rebuilt it in place, with no lock. Calls started together after
@@ -617,10 +821,19 @@ call (a mismatch, a missing seed, or a leftover copy beside it) waits for `<seed
 inputs, so a burst of calls after one change rebuilds once and the others reuse that seed. The holder copies the inputs
 into a private sibling (`<seed>.new.XXXXXX`) and records the manifest there. It then stops the seed's `gpg-agent`,
 renames the old seed aside (`<seed>.old.XXXXXX`), renames the new one into place, and only then removes the old one. No
-call writes into a seed that another call has published, and no call sees a partly copied seed. Leftover siblings from
-a killed rebuild are removed under the lock. A lock held for 15 seconds is treated as left by a killed holder and
-broken, and a waiter gives up (exit 2) after 60 seconds. A signing that is already running from the seed when an input
-changes can still fail, because the rebuild removes the old seed once the new one is in place.
+call writes into a seed that another call has published, and no call sees a partly copied seed. Leftover copies from
+a killed rebuild are removed under the lock, including any nested `*.new.*` or `*.old.*` copies. The post-publication
+check removes unexpected copies and fails closed if portable `mv` nested a stage rather than renaming it. A lock held
+for 15 seconds with no live owner is treated as left by a killed holder and broken. A live slow or hung holder
+retains the lock: taking it over by age alone would let that holder resume and publish alongside its replacement.
+Breakers serialize on `<seed>.lock.break` and re-check the owner under that gate before deleting; lock creation/owner
+writes and release use the same gate so
+neither a blank-owner observation nor delayed cleanup can delete a fresh lock. The owner is read before sampling the
+clock, and a future start time is treated as live, not stale (2026-10-18, #1168). Failed stale-lock removals return to
+waiting rather than aborting the signing, and a waiter gives up (exit 2) after 60 seconds. A SIGKILL while holding
+the short-lived breaker gate can leave it behind: callers time out fail-closed, and the owner must confirm no helper
+is running before removing that gate. A signing that is already running from the seed when an input changes can
+still fail, because the rebuild removes the old seed once the new one is in place.
 
 Reason: the sandbox exposes no configuration hook for adding writable roots — `writableRoots` takes only the policy and
 hard-codes the three roots — so the only durable fix inside the existing policy is to put the signing homedir where the
@@ -631,12 +844,11 @@ Reversal risk: pointing `gpg.program` back at the real `gpg` restores the denial
 private key to a stable non-writable-root location such as `~/.local/share` looks persistent but is unwritable under the
 restricted policy and silently reintroduces the escalation. The seed is not trusted to disappear by itself: `$TMPDIR`
 is not cleared at boot for every caller, and an unset `TMPDIR` falls back to `/tmp`. The manifest check on every call
-is what keeps the seed from becoming a second long-lived key store. Going back to a shared `$TMPDIR/dsh-gnupg` parent
-breaks every other user once one user owns it under a shared `/tmp`, and lets that owner swap a user's seed for a
-symbolic link between the helper's checks; dropping the configuration check lets a planted `gpg-agent.conf` survive
-until the next key change. Going back to a `pubring.kbx`-only trigger lets a deleted or re-protected secret key keep
-signing from the seed. Rebuilding in place, or without the lock, brings back the failed concurrent signings after an
-input change and the window in which a deleted key survives in a seed stamped as current.
+is what keeps the seed from becoming a second long-lived key store. Going back to a `pubring.kbx`-only trigger lets a
+deleted or re-protected secret key keep signing from the seed. Rebuilding in place, or without the lock, brings back
+the failed concurrent signings after an input change and the window in which a deleted key survives in a seed stamped
+as current. Dropping the planted-configuration check restores the pinentry-capture risk, and returning to a shared
+`dsh-gnupg` parent breaks other users under `/tmp` once one user owns it.
 
 ## Forwarded payloads are bounded by a declared, versioned policy, and `truncation: "disabled"` fails closed - 2026-09-25
 
@@ -2094,7 +2306,7 @@ Claude subscription state uses a durable account roster with opaque local identi
 
 Switching the active subscription and advancing to paid providers are separate decisions. Keep the active account across restarts, reordering and unchanged binding; change it only for explicit operator selection, removal or authoritative applicable exhaustion/current-credential invalidity. Paid continuation requires fresh, applicable, current-binding strong evidence for the entire selected eligible pool. Transient transport failures, unknown discovery, configuration rejection and upstream server errors do not prove exhaustion. Quota, health and model capability evidence belongs to its exact account/cohort; an in-flight result cannot overwrite a replacement or reblock a newly cleared guard. Advertised reasoning capabilities and native translations require actual upstream metadata, not a model-name guess.
 
-Claude historical windows and hourly rollups are additive to the existing Codex and metered history contracts. Persist actual upstream observations through the quota writer's accepted-observation seam, registered before the first inference; admin reads never create samples. The source observation clock is the gateway receipt time of raw upstream headers, not a provider-issued timestamp; sampling/persistence time is separate. Preserve missing observation times as null, absent windows and gaps across staleness, cohorts and reset anchors. Bounded sampling, retention and truncation remain explicit. Claude window series share the existing Analytics chart without altering the Codex capacity denominator. Retained legacy unbound evidence is not silently relabeled as an account's history, and host-local persistence is not a claim of cross-host synchronization.
+Claude historical windows and hourly rollups are additive to the existing Codex and metered history contracts. Persist actual upstream observations through the quota writer's accepted-observation seam, registered before the first inference; cached admin reads never create samples; a lease-guarded direct usage refresh records only the actual returned observation. The source observation clock is the gateway receipt time of raw upstream headers, not a provider-issued timestamp; sampling/persistence time is separate. Preserve missing observation times as null, absent windows and gaps across staleness, cohorts and reset anchors. Bounded sampling, retention and truncation remain explicit. Claude window series share the existing Analytics chart without altering the Codex capacity denominator. Retained legacy unbound evidence is not silently relabeled as an account's history, and host-local persistence is not a claim of cross-host synchronization.
 
 Feature parity does not justify invented upstream operations: expose only capabilities supported by the supplied credentials and actual provider contracts. A setup token without refresh material does not establish automatic refresh, a second live account has not been supplied for live failover acceptance, and local fixtures do not establish live banked-reset or redemption support.
 
@@ -2124,3 +2336,309 @@ Reversal risk: the provider-owned base ids must actually track the latest weight
 gateway cannot detect that from a dated row. OpenRouter's `~deepseek/deepseek-flash-latest` alias must remain routable.
 The paid hops use `deepseek-v4.1-flash`, so paid key policies keep their existing base model id rather than requiring a
 new dated snapshot.
+
+## Rust WASM migration starts with isolated shared contracts - 2026-10-18
+
+The owner requested the complete gateway in Rust/WASM on Cloudflare. The first milestone adds the separate `rust/` workspace, pinned dependencies, source-derived domain types, an atomic persistence interface and the actual workers-rs fetch export; it does not replace or activate the existing backend. The [foundation contract](research/rust-wasm-port-contract.md) records the exact boundaries, source references, gates and missing parity. All Rust compiles run on the isolated VPS build workspace unless its recorded failure requires the authorized Mac fallback.
+
+Keep operator provider IDs separate from transport/accounting IDs, preserve distinct administrative/routing account hashes and native-owner credential generations, and retain one original request identity across distinct paid hops. Semantic completion, API-key dispatch quota, kernel settlement, paid reconciliation and actual delivery remain independent; Workers EOF supplies no native delivery receipt and never invents success or a refund. The latest disabled-overage hard gate is unchanged. Hot coordination and retained history share atomic authority without forcing indefinite ledgers into an evicting snapshot.
+
+The foundation refuses every unfinished route with an explicit non-success response; health is only release liveness with validated full-source identity. Full authentication, routing, durable state, native boundaries, protocol/admin parity, migration, CI and live deployment acceptance remain required for the original goal. This scoped Rust decision does not change the existing Bun runtime, locks, production service, credentials, databases, DNS or Sentinel ownership.
+
+## Rust portable keys and queries share one source-compatible tuple codec - 2026-10-18
+
+Before any Rust persistence or deployment, retire provisional JSON-array key identity. Every read, write, query and future migration uses the core `tuple-v1:<lowercase hex>` codec and its exact binary sort bytes. Preserve current source bytes/string/bigint/number/boolean distinctions, signed zeros, infinities, positive NaN and the proven negative-NaN refusal. No per-module JSON comparator, dual-codec fallback or live migration is authorized. A shared typed builder and raw validator prevent different modules from naming or ordering the same source key differently.
+
+The additive query interface preserves pinned source selectors: prefix alone or prefix with one strict descendant start/end bound, and ranges with both bounds. Exact-prefix rows are excluded, start is inclusive and end exclusive; empty prefix is the whole-keyspace form. Pages filter absolute expiry before their limit and use opaque version/selector/direction-bound continuations. Changed limits are allowed on resume; malformed and cross-query tokens fail closed. This shared contract adds no new gateway scheduler or provider behavior, and source/runtime/deployment acceptance remains separate.
+
+## Rust native carrier is finite, authenticated and unactivated - 2026-10-18
+
+The agreed native boundary is an HTTP Rust companion reached only through a constructor-injected trusted `NativeCarrier`/Fetcher capability. The portable version-1 request enum permits supervisor sessions, output and brief operations; it accepts source/thread identifiers and an opaque cursor, never a caller URL, command, token or filesystem path. Fixed `POST /v1/native/rpc` returns a bounded typed response. A supervisor output reply carries only `SupervisorFollow { source_id, thread_id, cursor }`; the native companion validates the configured source and sampled session before minting it and again when `POST /v1/native/follow` opens the actual cancellation-aware SSE stream. A descriptor or JSON/EOF success does not establish stream acceptance.
+
+Requests authenticate with a dedicated constructor-supplied transport identity using HMAC-SHA256 over the exact version/method/path/key-id/time/nonce/body-digest frame defined in `gateway-auth/src/native.rs`. The header names are `x-uos-native-version`, `x-uos-native-key-id`, `x-uos-native-time-ms`, `x-uos-native-nonce` and `x-uos-native-mac`. Nonces contain 32 random bytes; real clock skew is bounded to 30 seconds. The companion consumes a nonce only after valid authentication, caps live nonces at 4096 and refuses capacity rather than evicting a still-valid replay fence. RPC and follow request bodies cap at 1 MiB. Expiry cleanup is request-owned; this adds no scheduler.
+
+The isolated real-runtime fixture uses a dedicated ephemeral transport identity and task-owned immutable source/owner registry, with real OS filesystem/network/process confinement. Provider, admin and synchronized account credentials are not reused for this channel. Access publication remains a separate fixed-owner/account/workspace, monotonic generation/native-refresh contract; a supervisor read capability cannot become arbitrary JSON-RPC or credential mutation. No live binding, secret, default endpoint, host listener, data adoption or production activation is authorized by this decision. The exact candidate carrier route, host placement and dedicated credential residence require a concrete reversible deployment patch and the controller's final activation reconciliation; source and fixture implementation proceed independently.
+
+## Native source graphs preserve identity separately from ordinary profile export - 2026-10-18
+
+The explicit `source-graph-v1` record encoding preserves native-source shared object and backing-buffer identity, sparse arrays, and source-supported Object/Array/Map/Set cycles. Its closed data-only graph keeps Buffer brand, validates reference kinds and view coordinates, and refuses unknown executable/accessor/class nodes and Error.cause. Json/ProfileV1/ProfileV2 remain separate unchanged contracts; ordinary profile export still refuses cycles and is not complete native capture. Identity-free tree projection is explicit and refuses to duplicate shared references. Migration, native-counter transport, source graph JSON/inverse adapters, runtime schema binding and live adoption retain their existing owners and acceptance gates.
+
+## Rust WebAuthn retains the pinned source certificate-path policy - 2026-10-18
+
+The Rust port preserves SimpleWebAuthn server 13.2.2 certificate-path early termination after a provided self-signed issuer verifies, including an issuer that differs from the appended configured anchor. An accepted path therefore does not establish configured-anchor membership. Source-derived fixtures retain the positive unconfigured-root SafetyNet case and the negative issuer-omitted case in `rust/crates/gateway-auth/tests/fixtures/webauthn-source-golden.json`; the maintained verifier compatibility notes record the pinned source and its extension. A stricter terminal-anchor policy is a separately scoped owner decision, not an implicit change in this port.
+
+Certificate revocation-list URLs remain untrusted HTTP(S) inputs after path acceptance. Fetch them with ordinary unauthenticated transport and its default redirects, without provider/admin credentials, privileged headers or the native carrier. The pinned source imposes no application timeout or byte cap on that fetch; preserve actual platform and caller constraints without inventing a numeric source bound. Trusted registration time is injected internally from `AuthHost::now_ms`, and neither these compatibility rules nor passing verifier fixtures authorize a new ceremony origin, RP ID, relay audience or live credential enrollment.
+
+## Surplus inference enables provider secret masking - 2026-10-18
+
+Enable [Surplus Secret Masking](https://www.surplusintelligence.ai/docs/guides/secret-masking) for every Surplus inference POST with exactly one `X-SI-Mask-Secrets: on` header from the shared authenticated-header builder. This covers native Responses and native Claude Chat, streamed and buffered. The provider handles masking and restoration while the gateway retains its existing request and response contracts.
+
+Reason: the owner requested the announced feature. Surplus can globally pause masking and forward requests without protection or a receipt, so this opt-in does not guarantee that every request is masked. The gateway does not require or parse a masking receipt.
+
+Reversal risk: removing the header returns request-level enablement to the provider's defaults.
+
+## Deployment-guard fixtures retain complete bounded coverage - 2026-10-18
+
+CI run `39168411070` passed 33 of the 45 deployment/recovery cases and began the next controlled launcher before the existing ten-minute per-file cap stopped it. The complete `tests/vps-deploy-guards.test.ts` file receives a bounded twenty-minute default; every other file keeps ten minutes, individual Bun test deadlines stay five minutes, and an explicit `--file-timeout-ms` remains capped at ten minutes and overrides the default. No case, assertion, fixture isolation or process-group settlement rule is removed.
+
+Knip treats `cloudflare.config.ts`, `wrangler.config.ts` and `tools/cloudflare/generate-types.ts` as actual external-tool entry points. The configured CLI consumes the two default config exports; `cf` and `wrangler` remain pinned dependencies. Prettier excludes vendored Rust bytes and continues to own the supported first-party formats.
+
+## Rust continuation builds on the Mac and preserves source controls losslessly - 2026-10-19
+
+The owner moved all remaining Rust/WASM implementation, compilation, testing and candidate preparation to the private Mac after VPS resource failures. The one-time evidence import is complete; do not use the VPS as a build or execution fallback. Hosted GitHub CI remains a required merge gate. Keep one serialized Mac compiler lock and the recorded pinned toolchain; this changes neither production hosting nor deployment authority.
+
+Model identifiers and reasoning controls are source UTF16 data, not necessarily Rust Unicode scalar strings. The shared data-only `ModelId` and `JsString16` carriers retain source-permitted code units through routing, provider preparation, policy, observations and named stored control records. Ordinary wire values remain JSON strings. No replacement character, escape-text identifier, synthetic hash, fallback model or new refusal may stand in for an otherwise valid source value. Reasoning metadata does not become an incoming tier-membership allowlist.
+
+Named record adapters opt into one finite `SourceJson` to `PortableValue` codec. Scalar-compatible records retain `Json`; exact UTF16 strings or object keys use the existing explicit `ProfileV2` encoding. The codec preserves revision and absolute expiry without adding family policy, accepts no executable or non-JSON graph nodes, and does not reinterpret generic transaction reads or writes. Each family still validates its complete key, logical version, shape, currentness and original atomic revision fences. Private codecs, imported rows and phase data never reconstruct live authorization.
+
+Fresh ordinary routing journals use logical version 3 and bind the canonical original request using the existing source-request-binding version-2 domain. They have no local-work extension. Legacy ordinary/extras version 1 and local-work version 2 keep their original interpretations; one shared lossless phase parser serves writers, guards and custody readers. No stored request-body transcript, new ledger, key family or lifetime is added.
+
+The source tuple encoder intentionally gives some distinct UTF16 model strings the same physical key bytes. Paid rollup settlement retains the first stored logical label and adds usage, while each attempt retains its own model. Do not invent collision-safe keys or recover logical model labels from replacement-decoded tuple components. Named forward and latest-state inverse validators must preserve those source semantics, original raw keys, revisions and expiries.
+
+These are source-compatibility and execution-location decisions, not final runtime acceptance. Exact combined Mac/WASM/workerd tests, hosted CI, ancestry-preserving integration and candidate evidence remain required. No native networking exception, credential import adaptation, service activation, live-state adoption, provider-credit spend or production hostname cutover is authorized by this entry.
+
+## Native gateway private runtime and request phases, revision 3 - 2026-10-19
+
+The source-only native gateway runtime uses private constructor-bound verification and expiring current-epoch grants to bind an authenticated native identity to durable request lifetimes. API-key and independently verified kernel scopes are separately nullable; GitHub, passkey, allowlist/admin/deploy and policy-free local authentication retain their source principal identities without fabricated API keys or repositories. Permanent constructor-seeded inference capabilities are retired for migrated consumers.
+
+Private binding and SQLite schema revision 3 accept only the new closed DTO phases within their configured authority epoch: open requestId/route/path after authentication and process permission without accounting or body metadata; reserve the applicable API and kernel families; bind immutable validated model/stream/literal reasoning once at the existing parser boundary; bind request-specific routing through a private source port before dispatch or paid exposure. API-free requests acquire no paid entitlement, and a static key policy cannot grant global unrostered/direct-hop permission. Old v2 admission DTOs and existing schema revisions fail closed; no mixed-version overload, generic remote KV, local ledger fallback or live store migration is introduced.
+
+Current grant/context/intent/expiry and applicable raw H/scope checks remain atomic with new effects and historical permission acknowledgments. Existing request-owned terminal, kernel, billing and definite-no-fetch cleanup preserve their native meaning after key revocation; ambiguous transport start and lost acknowledgments never recreate compensation rights. Existing API/kernel/Codex/paid reducers and all legacy/private-control fixture assertions remain required.
+
+This decision authorizes only the coherent source and synthetic fixture foundation. Real native handler/parser/provider and Worker data-plane adoption, owner selection, credentials, publication, state/scheduler migration, real renewal/spend and production/standby activation remain outside this stage. Exact-source Linux mixed acceptance and integrated CI/artifact receipts must follow the local source-ready handback before delivery.
+
+For the private v3 incomplete-migration vector, current-H authentication retains the existing resolver's 503 `server_error` before any request/admission/paid effect. The old synthetic cold-capability `unauthorized` vector moves to that authentication phase; admin no-op/revocation and public gateway HTTP mapping are unchanged. The exact source-bound assertion amendment is retained with the foundation evidence.
+
+A separate constructor-private retained-history verifier permits only API no-fetch release, paid no-fetch release, paid lifecycle observations without fetch/dispatch-start mutation, verified paid billing, paid deferral, and reconciliation claim/finish for existing durable original binding/principal/key/request handles. Current epoch, namespace, expiring grant, private context, intent and target scope are rechecked before effects and replay; cursors and leases also retain the exact grant and handles. It creates no principal or request lifetime and cannot authorize admission, exposure, routing, dispatch or administration. Synthetic restoration of accepted distinct historical principals preserves the all-principal key-deletion invariant while fresh same-key identities remain `api-key:<keyid>`.
+
+## Scoped native connector and native-direct imports approved - 2026-10-19
+
+The owner explicitly approved the isolated Mac connector and native-direct credential/profile import adaptation in this goal session. The connector may use a separate credential-free process whose OS sandbox permits outbound TCP 443 while its code fixes the provider destination to api.openai.com; this is not a claim of OS-enforced hostname restriction. The main companion retains its separate confinement and credential custody. Safe descriptor ownership, cancellation, process settlement and actual enforcement checks remain required.
+
+Credential and refresh-bearing profile documents go directly to the trusted native receiver through the scoped admin-client adaptation, not through Cloudflare. This approval does not select an account or authorize unrelated credential rotation, bulk replacement, live database adoption or a production native service launch. Exact native/reverse-authority origin, identity residence and operational activation still require their concrete scoped reconciliation.
+
+The owner reaffirmed Cloudflare as the Rust/WASM candidate deployment target. Implementation, compilation and local acceptance remain on this Mac; the existing exact-source CI and candidate acceptance gates still apply. Production hostname traffic cutover remains excluded. The current staged-Claude/Worker integration and defined acceptance packet precede these separately approved native implementation changes.
+
+## Native import action v2 preserves one effect lifetime without enabling mutation - 2026-10-19
+
+ExistingAccount import preparation now requires action version 2 with distinct physical native-source and access-projection generations, exact owner/source revisions and the original admin context/deadline. It reuses the existing operation and generation rows with one consumable start permit; replay or uncertain outcomes remain reconciliation-only. Legacy version-1 import rows remain lossless custody data and cannot acquire effects through defaults. Credential documents and their digests stay native-private, and native receipt recovery rechecks the original authority and exact registered-owner file custody; public credential-generation data is not durability proof.
+
+Production mutation remains unavailable because the existing native transport does not exclude the independent credential writer. The durable writer is exercised only in isolated synthetic fixtures; production ownership exclusion, provider validation, guarded access/catalog/default publication and authentic completion remain incomplete. This records the implemented schema/lifecycle boundary, not approval of a new security or writer-exclusion design, live account selection, credential mutation or service activation. Existing scoped connector and native-direct-import approvals are unchanged.
+
+## Native writer safety uses verified custody and owned-process settlement - 2026-10-20
+
+The owner approved source-only native socket and credential-writer safety corrections. Native import keeps its existing action, start permit and unknown-outcome lifetime. The new ownership foundation verifies the actual writer UID and anchored directory metadata, rejects unanalysed ACLs through a fixed readonly Darwin inspector, and distinguishes actual owned-child settlement from a socket close, process census or available advisory lock. A native-private dirty process epoch blocks automatic recovery after uncertain settlement; it grants no import or refresh permission.
+
+External or shared owners remain mutation-unavailable. Distinct-principal kernel denial, a protected production executable/profile, initial exclusive-owner bootstrap, actual Codex behavior under no-descendant confinement, full import publication and operational activation remain separate acceptance. This source approval does not authorize account provisioning, real credential/home access, stopping unowned clients, provider calls or service changes.
+
+## Linux capability CI stays free and preserves the native contract - 2026-10-20
+
+The owner selected compatible Linux execution on existing free standard GitHub Actions ARM64 infrastructure only. Cloudflare Workers remains primary; Pi is optional and cannot gate delivery. A manually requested, separately named capability probe may boot an authenticated Ubuntu ARM64 QEMU/AAVMF guest under TCG, offline-install the pinned kernel/modules, reboot and query/create/close the exact Landlock ABI9 ruleset. The probe has no guest NIC, source/home mounts or user credentials and uploads no VM images or caches. It applies no process restrictions and cannot substitute for the unchanged positive Linux native tests, their 45-second deadlines, or required normal CI. Normal push/PR/merge selection is unchanged; probe-only dispatches use distinct check names and concurrency and cannot count as a successful required validation or deployment. Real guest success and exact-source native acceptance remain separate gates; no provider spend, paid runner, architecture substitution, production activation or security weakening is authorized.
+
+## Direct Mac native validation supersedes the Linux guest route - 2026-10-20
+
+The owner corrected this goal to run native validation directly on the Mac. Required Rust native CI uses the standard macOS 26 ARM64 runner with the existing Darwin verifier and pinned tools; Linux/Pi parity and a positive Linux native gate no longer block the primary Cloudflare Workers delivery. The manual Linux guest input/job and probe-only workflow metadata are retired, not replaced with a synthetic pass. Dormant guest source, historical failures and receipts remain preserved; the existing Knip script/test entries need no artificial use or new exception.
+
+Matching Mac confinement, exact-source native fixture predicates and required Worker/WASM artifact and candidate acceptance remain mandatory. Prior passed Mac runtime/storage/state/native evidence may be reused only where its actual input closure is unchanged; a platform switch alone does not establish new runtime acceptance. Product Linux enforcement remains fail-closed, and no credentials, native service, provider spend, production traffic cutover or automatic deployment is authorized. This entry supersedes the earlier compatible-Linux-runner direction for this goal only.
+
+## Darwin readonly inspector retains two exact reviewed utility identities - 2026-10-20
+
+The source-only compatibility correction retains the local macOS 26.6.1 `/bin/ls` identity `a1cb6fd856f9414ada4cc9682f137c343261d777b8374df1abac7a931fb66f7a` and adds only the official GitHub macOS 26.6.2 ARM64 identity `24752389e1d97c9555dd153b644902fadd460dfbe1a166251876c67bbacb0810`, observed in native preflight run `39516819139`, job `118951218851`, at source `3f1721142faf2cd1fd4ee4f54c3b813e352f8f9c`. The private inspector and existing CI preflight consume this same exact source-literal set. No OS version, caller value or environment value can authorize another digest; macOS 15 and unknown identities still fail closed. Fixed path, root ownership, NOFOLLOW/regular-file metadata and hash rechecks, ACL parsing, process, network and write constraints remain unchanged. Local matching and original native cases do not establish the new hosted utility's semantics; actual hosted native cases remain required before acceptance. No live credential, provider, service or deployment authority is added.
+
+## Isolated local operator bootstrap uses existing native custody and the common authority - 2026-10-21
+
+The owner approved a private one-shot setup composition for the isolated localhost 7998 testing gateway. A real consistent stopped Bun snapshot and independently configured current native owner registrations pass through the existing capture, custody, access-only sanitizer and complete-capture validators. Only the validated access projection reaches the same common Durable Object used by ordinary auth, catalog and admission. A non-HTTP host startup export requires its actual AUTHORITY capability, an empty quiescent target and the existing atomic adoption checks; it emits only the adoption receipt. It is not called by ordinary public fetch and is not a public import route or fixture bootstrap.
+
+This local testing decision grants no shared credential refresh, new native writer/ownership, paid fallback, production publication, existing gateway cutover or replay reset. Refresh-bearing documents remain native; source revisions, absolute expiry, selected account, quota and reset state stay truthful. The runtime owner keeps 7999 and the default Codex profile unchanged, holds public 7998 traffic until setup settles, and preserves rollback by stopping only 7998 and retaining its state directory. Missing or stale genuine custody fails closed; capture data and fixture hosts cannot mint it. Real operator execution and inference acceptance remain separate from source tests.
+
+## Native Worker HTTPS carrier is constructor-pinned and preserves the finite protocol - 2026-10-21
+
+The Rust Worker native transport supports its existing injected service binding and an explicitly constructed HTTPS origin. The HTTPS constructor accepts only a root origin on the default HTTPS port without userinfo, query or fragment; no request field, ambient environment lookup, binding-name scan, discovery, redirect or retry selects another destination. Both carriers retain the existing signed finite RPC, follow, control and live paths, limits, nonce and authority contracts, cancellation and unknown-effect handling. Live upgrades return the original raw platform response so status 101, status text and the WebSocket remain intact; follow responses retain streaming bodies.
+
+The exported shipping Worker reads only the exact `UOS_NATIVE_CARRIER` deployment binding. Its closed JSON object contains the root HTTPS origin and the transport identity (`key_id`, `owner_id`, `owner_epoch`, `key_base64url`, and explicit capabilities); an absent binding leaves the capability unavailable, while a malformed, partial, oversized or unknown configuration fails closed before routing. No request field, alternate binding name, discovery scan or fallback selects a destination. The binding does not install a native owner, grant renewal ownership, create a Tunnel or activate a service. The separately approved isolated candidate still requires its exact owner and access-only custody, fixed origin and listener, confinement, green source and actual runtime acceptance before operational pairing. Credential-bearing imports remain native-direct and outside the carrier's finite path set.
+
+## Rust candidate authentication binds its exact browser origin - 2026-10-21
+
+The isolated Rust Worker deployment explicitly enables the existing candidate passkey policy and trusts only `https://rust-candidate.ai.ubq.fi` as its additional relay origin. This trusted composition retains RP `ai.ubq.fi`, the generic source-settings translation and all existing exact-origin checks; no request header, environment switch or discovered hostname can expand it. Candidate login stays same-origin: the static remote-client relay classifier and canonical production popup remain unchanged. Actual Worker challenge, assertion, session and browser acceptance remain required before candidate authentication is accepted.
+
+## Private unpublished staged native adoption - 2026-10-21
+
+HISTORY-STAGEDv1 adds a private trusted-operator begin/append/seal path for complete captures larger than one32MiB frame. Native preparation retains the existing complete NativeCapturev2 audit, codec, index and configured native-custody checks before emitting canonical rows, inverse mappings and derived records. Append frames preserve raw tuple identities, revisions and absolute expiry, bind count/sequence/hash to the complete prepared inventory and commit each batch atomically. A partial target has no adoption manifest and cannot export as an accepted inverse. Final sealing is staged data readiness, not the old single atomic adoption receipt, live ownership or service activation; existing atomic adopt_empty is unchanged.
+
+The operator must exclusively hold a new empty common authority unpublished and quiescent throughout staging and final reconciliation; deserialized data grants no public capability. No public HTTP/admin import route, arbitrary SQL insertion, live refresh/reset/fallback or active7998/7999change is introduced. Complete preparation and latest inverse remain native-owned; the current inverse uses paginated QueryStore reads and writes directly to private file/sink, with separately held current Rust-control/nonce custody. Native memory is measured with the synthetic large capture before any private real907MBattempt; file output avoids a full WASM response, not a claim of constant native memory. Live target activation and current7998write reconciliation require a separate explicit decision.
+
+HISTORY-STAGEDv2 selects only the fixed synthetic history scenario for the assigned 360-second outer controller envelope; normal fixtures retain 120 seconds and all existing per-operation deadlines and assertions remain unchanged. Metadata-only stage markers attribute native process RSS. The measured 3.528 GiB native peak for a 40.056 MiB synthetic source forbids a real 907 MB attempt: staged transport proof does not establish bounded-memory native preparation or full-history scalability.
+
+## Workers Free core-state migration excludes historical telemetry - 2026-10-22
+
+The owner selected Cloudflare Workers Free with a hard limit below 100,000 Durable Object row writes per UTC day and stated that historical logs are not necessary for the Rust gateway migration. The bounded offline profile in `rust/crates/gateway-migration/CORE_STATE.md` selects 2,317 of the 140,220 rows in source `0be69ebcced135ff1d38966aa01691eddc74f1bb` / capture `af0fb90c917992346f44751ecc645289d170c88b168b0a387472a5b677159939`, excludes 137,903 rows, derives five rows, and requires 4,640 writes including the manifest. The count is `2 * selected_rows + derived_rows + 1`; it is proven by the selector and focused tests, not estimated from storage bytes.
+
+The profile excludes historical API request logs, paid-fallback history, provider-capacity history and rollups, Metered balance history, API-key audit changes, error logs, Sentinel replay/incident records, and prompt-cache analytics or telemetry gates. It retains auth users/credentials/handles, API keys, Codex auth/routing/capacity/whitelist/reset state, Codex models and catalog, Claude auth/workspace/quota/access/accounts, kernel defaults, Metered current state, current provider capacity/health, runtime configuration, provider selection, migration control, the active API window, and the current paid-fallback request/pending accounting rows. The previous API window is excluded.
+
+The snapshot has no paid-fallback window aggregate. Its current-window 1,877 request rows and 344 matching pending markers are retained because dropping them would lose current settled, reserved, and pending accounting; this is history retained for a current counter, not full-history convenience. Adoption derives one current paid window and the reconciliation gate from those retained rows, so the admin reader sees the current totals without a source reset or historical backfill. The source gate row is excluded because source gate versions use different document shapes.
+
+This decision authorizes only offline selection, preparation and focused local tests for the reduced profile. It does not authorize live adoption, a startup conversion, credential refresh or rotation, a quota reset, production deployment, or a full 140,220-row import. Raw managed Codex credentials still require current native custody and access-only sanitization before preparation; the captured generation does not match the current local auth files and was not refreshed or rotated.
+
+## Rust port code layout is non-negotiable - 2026-10-23
+
+The owner adopted four Rust rules for the port: no first-party crate above 1000 lines, no re-exports, no `#[path = "..."]`, and no `include!` (<https://x.com/dj_d_sol/status/2113543433516421153>). A crate is measured by its owned production `src/**/*.rs`; integration tests and vendored dependencies are separate crates, and the static `include_str!` and `include_bytes!` macros are not the prohibited `include!`.
+
+Reason: the current port is dominated by very large crates, broad `pub use` forwarding, and path-spliced modules, which hide dependency edges and make agent-generated changes hard to review. The rules are a migration requirement, not a claim that the current tree complies. Existing violations are recorded debt, no change may add or enlarge one, new or substantially rewritten crates must comply immediately, and full compliance remains required before port acceptance.
+
+Reversal risk: allowing crate growth or re-exports restores implicit API surfaces and ambiguous split boundaries; `#[path]` and `include!` bypass the conventional module graph and make ownership and compilation scope harder to audit.
+
+## Rust quality and compile performance are measured separately - 2026-10-23
+
+The owner adopted the first Rust lint and compile-performance program after the four structural rules. `scripts/rust-quality.ts` is the structural ratchet: no new oversized crate, visible re-export, `#[path]`, `include!`, missing `[lints] workspace = true`, or source suppression; existing debt may only shrink. Lints are selected individually, suppressions remain forbidden, and noisy lints are staged with `--force-warn` plus a diagnostic baseline rather than weakening `-D warnings`. Development and test builds use line tables only, while production release settings remain unchanged until a separate `release-candidate` profile is measured against the complete Worker build. The detailed policy, thresholds, measurement protocol, and migration order are in `docs/research/rust-quality-compile-performance-2026-10-23.md`.
+
+Reason: the 1000-line crate cap improves reviewability but does not prove compile-time improvement. Mixing structural enforcement with release-profile changes would make both unmeasurable and could trade deployment size or request CPU for a faster build. Suppression-free, individually selected lints keep the policy enforceable without a blanket warning backlog.
+
+Reversal risk: enabling broad lint groups or lowering a lint from deny to warn under `-D warnings` stages nothing; using `--cap-lints` or `continue-on-error` hides real failures. Changing `[profile.release]` before measuring the full Worker build can regress artifact size or runtime without a build-time benefit.
+
+Provenance: one owner-authorized GPT Pro submission, job `66ca9a42-20cf-4ff8-acd2-e01653d97ea3`, 2026-10-23.
+
+## Rust verification binds cache ownership and manifest profiles - 2026-10-24
+
+First-party Cargo artifacts belong to their resolved workspace source root. The verifier claims an empty target atomically and rejects a foreign, malformed, symlinked or unowned nonempty target before compiler execution. Actual manifest and target-directory overrides participate in that resolution; subcrate manifests in one workspace share the owner, and immutable source archives require no Git directory. Same-root edits may reuse their cache. This follows fresh evidence that shared first-party targets can replay warning spans from another worktree even when Cargo metadata names the current source. Previous shared-target diagnostic captures remain historical diagnosis, not acceptance.
+
+The verifier removes its Darwin `debug = 0` environment overrides and excludes ambient dev/test debug overrides. Committed `rust/Cargo.toml` dev/test profiles remain `line-tables-only`, as required by the 2026-10-23 decision; production release settings are unchanged. Earlier debug-disabled component captures retain development and behavior evidence, while final combined acceptance requires the exact corrected driver/source and inspection of actual compiler flags.
+
+Fresh [structural adoption reproduction](research/rust-quality-adoption-2026-10-24.md) retains the immutable base source inventory, target closures and all fourteen adopted target counts with [machine-readable provenance](research/rust-quality-adoption-2026-10-24/provenance.json). These artifacts prove fresh structural reproduction; they do not recover the original raw Clippy captures or authorize allowance growth. Historical diagnostic identities stay unchanged, and missing historical Clippy proof remains explicit.
+
+## DeepSeek waterfall fails over before a provider reset wait - 2026-10-24
+
+The `ubiquity/deepseek-flash` synthetic model gives its LithosAI hop the immediate-failover refusal policy. A 429 or 402 is returned to the waterfall at once, so the next configured provider is attempted without spending the vendor's reset window. Direct LithosAI model ids keep the existing buffered and streamed wait policies.
+
+Reason: live LithosAI headers reported a 600-request and 8,000,000-token/minute budget, while the gateway's parallel Codex agents sent large contexts that repeatedly emptied the token bucket. Three refusals also reported `402 insufficient_quota` and `the organization is out of credit`. A streamed hop could otherwise hold an open response for five waits and up to 300 seconds before the waterfall advanced, which surfaced as iOS steering timeouts. Immediate failover improves responsiveness and prevents a refused first hop from consuming the next provider's latency budget.
+
+Reversal risk: the waterfall reaches the Official DeepSeek, OpenRouter, Surplus and OpenLux hops sooner, which can change cost mix and exposes more provider churn. The order, paid pins, direct Lithos behavior and credentials are unchanged. If the provider recovers, it is eligible again on the next request.
+
+## Gateway restarts must finish inside the mobile steer retry window - 2026-10-24
+
+The VPS gateway stop timeout is 15 seconds, and HTTP shutdown closes lingering idle keep-alive sockets only after every active handler has settled. The previous 180-second stop timeout allowed a deploy to stop accepting requests for three minutes; the Codex app-server backed off through 5, 10, and 20-second retries, and the iOS client discarded pending steers after about 30 seconds.
+
+Reason: a live deploy at 23:11:17 UTC stopped the gateway listener and systemd killed the process at 23:14:17 UTC. Gateway requests during that interval failed at the transport boundary, and the mobile messages were deleted before the next successful model call. The app-server returns to service on its 20-second retry when the listener is restored within 19 seconds, so the stop and restart must complete before that retry. Active HTTP handlers still drain before lingering sockets are closed; no accounting or terminal write is bypassed by the idle-socket cleanup.
+
+Reversal risk: a longer stop timeout restores the three-minute blackout and will drop consecutive mobile steers again. Forcing all connections closed before active handlers settle would lose delivery or settlement evidence, so the close remains gated on an empty active set.
+
+## One exact Codex compaction summary is exempt from the generic payload cut - 2026-10-25
+
+`deepseek-forwarded-payload/v2` keeps the 65,536-byte per-message reducer for tool outputs, images, agent messages, tool arguments, reasoning, and ordinary messages, and adds one versioned `codex-compaction-summary/v1` exception. The accepted envelope is exactly one `user` message with exactly one nonempty `input_text` part whose text begins with the full 399-byte Codex `SUMMARY_PREFIX` and a newline; the prefix SHA-256 is `e9b088e794a6bb9082ac053fcc760bd818d7e720ee4bcdc72c6e480de7b7cb0e`. No header, turn metadata, content-kind metadata, role default, extra part, media part, tool part, or second summary envelope can claim the exception. A prefix-bearing message with the wrong role or shape, including a prefix-bearing top-level string or string input item, fails closed with HTTP 400 `context_length_exceeded` before projection, and an unprefixed oversized message still takes the generic reduction. The 65,536-byte bound applies to each forwarded payload field; aggregate admission is the bound over a complete message and prompt. Oversized tool-call arguments are replaced with a parseable JSON elision object rather than the plain-text marker, so replayed Chat history never contains invalid JSON.
+
+Reason: Codex 0.163.0 renders its adopted local-compaction summary as one readable user text part beginning with this prefix, while it strips `internal_chat_message_metadata_passthrough` for every provider whose name is not exactly `OpenAI`; the Ubiquity provider is not, so metadata cannot classify the summary. The prefix is client-controlled request text, not authority: it selects only the versioned exception, never a bypass of whole-prompt admission.
+
+`chat-prompt-admission/v1` runs after every Chat field is projected, including instructions, tools, tool arguments, reasoning, messages, images, and the continuation instruction. It serializes the complete body and estimates its tokens with the existing calibrated Jev estimator, which measured 2-18% above usage on real transcripts, then adds 256 request, 16 per-message, and 32 per-tool structural tokens. For Cerebras it measures the provider-projected body so reasoning that provider drops is not counted. It compares the total with each selected provider profile's own window minus an output reserve. The reserve is the larger of 16,384 tokens and the request's `max_tokens`. Current windows are DeepSeek 1,000,000, LithosAI 1,048,576, and Cerebras 131,072; Cerebras never inherits DeepSeek's larger window. Aggregate overflow returns HTTP 400 `context_length_exceeded` before dispatch, does not mutate or truncate the exempt summary, and dispatches no payload.
+
+Observability: one `[ai.ubq.fi] forwarding_exemption` JSON line records `policy`, `request_id`, `model`, `prompt_admission`, `path`, `kind: "compaction_summary"`, `summaryPolicy`, `prefixSha256`, `bytes`, `contentParts: 1`, `perMessageLimit`, and `prefixBytes` only after successful projection and aggregate admission. It is distinct from `forwarding_elision` because no bytes were removed. The model catalog continues to advertise only the v2 policy version, byte mode, and generic per-message limit.
+
+Reversal risk: removing the envelope restores silent loss of the client's replacement history; widening it to any prefix, multiple summaries, additional parts, prompt text, or metadata would let ordinary or mixed payloads escape the generic bound. Treating encrypted remote-v2 compaction items as readable summaries would forward ciphertext as history. Dropping aggregate admission would admit a whole prompt beyond the provider window even when each individual payload is bounded.
+
+## Darwin readonly inspector adds macOS 27 reviewed utility identities - 2026-10-25
+
+The source-only compatibility update adds exactly two reviewed utility identities from macOS 27.0.1 build 26A434, installed 2026-10-23. The `/bin/ls` SHA-256 is `13f44bfe1c4af602da4465c834dbe7b16a5441ccbd843178b36116ee23422bfb`, with Apple identifier `com.apple.ls` and full CDHash `45d1613a435c6cb05794cbb585587a5245989943ad1999f183d0f165a4750244`; the `/usr/bin/sandbox-exec` SHA-256 is `58839ef01b4eef8aac0d2aa8f9d1c074ae45aafe3533965b030672450064acc8`, with Apple identifier `com.apple.sandbox-exec` and full CDHash `1266e34f192210d9f1ac6dbc9cf297ecff93e5685ecb2284f29f8a9b9a8222d4`. Both signatures chain through macOS Software Signing, Apple Code Signing Certification Authority and Apple Root CA; `codesign --verify --strict` reports each as valid on disk and satisfying its Designated Requirement.
+
+The existing `/bin/ls` identities `a1cb6fd856f9414ada4cc9682f137c343261d777b8374df1abac7a931fb66f7a` and `24752389e1d97c9555dd153b644902fadd460dfbe1a166251876c67bbacb0810` remain accepted, as do the existing `/usr/bin/sandbox-exec` identities `e3d7a792c58a5d3783d2f7274c82d70062393830d8cb1ded713ca554a470bd2f` and `abc5bb136d6b5cce8fa85d789f78e3326c51ca60cae637b2064adfb67a1dcd9a`.
+
+No OS version, caller value or environment value authorizes another digest, and unknown identities still fail closed. The private inspector, owner-runtime fixture and fixed-role actor channel consume the same exact literals; the disabled Darwin CI preflight parses the three-entry inspector and fixture-sandbox sets without changing workflow triggers or activation. Fixed paths, root ownership, NOFOLLOW and regular-file metadata checks, exact hash rechecks, ACL parsing, process, network and write constraints, and every negative case remain unchanged. This compatibility correction adds no credential, provider, service, deployment or other operational authority.
+
+## Caddy holds new requests through a gateway restart - 2026-10-25
+
+The `ai.ubq.fi` Caddy site retries a refused gateway connection for 25 seconds at 250-millisecond intervals. This is below the roughly 30-second iOS steer discard window and above the observed 19.6-second stop-plus-start interval. Caddy retries only the failed connection attempt; it does not set `lb_retry_match`, so a POST body is never replayed after an upstream round trip has begun. The 15-second gateway stop bound, active-handler drain, and delivery and accounting settlement rules are unchanged.
+
+Reason: the live deploy at 06:39 UTC took 19.6 seconds. The gateway stopped accepting at 06:39:28, systemd killed it at 06:39:43, and the new listener did not become ready until 06:39:47. The previous 15-second bound only matched the app-server's final retry edge after release verification was added; it did not prevent the listener blackout. With Caddy retrying refused connections, a request issued during that blackout remains connected and reaches the restarted gateway instead of becoming a transport failure. A real Caddy 2.11.7 fixture held a POST for 2.23 seconds while its backend was absent and returned the backend's 200 response once it appeared.
+
+Reversal risk: removing the retry window or lowering it below the restart interval restores dropped mobile steers. Raising it beyond the client's discard window wastes the wait without preserving the request. Enabling `lb_retry_match` for POST routes could duplicate a non-idempotent inference request after an ambiguous round-trip failure and is not authorized by this decision.
+
+## An adopted compaction summary replaces older steer history - 2026-10-25
+
+`chat-prompt-admission/v2` first estimates the complete projected prompt. If it overflows and the request permits reduction, the gateway finds the one exact adopted Codex compaction summary already validated by `codex-compaction-summary/v1`, keeps the leading system instructions and the summary, and replaces every earlier message with one visible history-elision notice. It then re-estimates the complete body. The summary itself is never changed, and `truncation: "disabled"` still fails closed. If the reduced body remains over budget, the gateway still returns HTTP 400 `context_length_exceeded` before dispatch.
+
+Reason: a live iOS steer reached a `1,032,954`-token estimate against the LithosAI `1,032,192`-token budget, only 762 tokens over, and could not be sent. The request carried a 961,798-byte adopted compaction summary plus 2,730,984 serialized bytes of history. Messages before that summary are redundant after Codex has adopted it; retaining them made a long thread unusable on DeepSeek while the same client could continue with GPT. The reduction preserves the adopted summary, the current steer, the complete tool schema, and all post-summary messages.
+
+Reversal risk: removing this reduction restores the hard steer failure for long adopted summaries. Dropping post-summary messages, rewriting the summary, applying this to `truncation: "disabled"`, or admitting a still-over-budget projection would lose current work or dispatch an oversized request. The version bump distinguishes this aggregate behavior from v1 in logs and tests.
+
+## Preserve steer history and classify Codex context errors - 2026-10-25
+
+`chat-prompt-admission/v3` supersedes the v2 pre-summary reduction above. An adopted summary does not prove that every earlier user message is redundant. Aggregate admission now measures the complete existing projection without removing pre-summary messages; an oversized projection returns HTTP 400 `context_length_exceeded` before dispatch for every truncation mode. The existing per-field projection rules, exact summary exemption, provider windows, and output reserves are unchanged.
+
+For the Codex subscription stream only, a generic terminal `error` with exact code `context_length_exceeded` and an already tracked response identifier becomes one client-visible `response.failed` carrying the original error, response identity, template, and observed output. Provider capture, lifecycle callbacks, settlement, and fallback continue to observe the original upstream error. Ordinary errors and other providers retain their existing frames.
+
+Reason: an isolated installed Codex 0.164.0 fixture ignored both flat and nested generic context errors and reported a retryable disconnect; the same code in `response.failed.response.error` produced the explicit context-window failure. This classification correction preserves the failure rather than shrinking context or claiming automatic recovery. It does not establish behavior of a different installed client version or physical iOS acceptance.
+
+## Native Codex aggregate context recovery encoding - 2026-10-25
+
+The Chat-backed Responses adapters for DeepSeek, LithosAI and Cerebras distinguish a complete projected prompt that exceeds aggregate admission from every other projection refusal. For requests with `stream: true` and a parsed existing `x-codex-turn-metadata` object containing nonempty `session_id`, `thread_id` and `turn_id`, that local failure is encoded as `response.created` followed by one `response.failed` carrying the original `context_length_exceeded` code and message. This metadata selects response encoding only; it grants no authority, credential access, provider eligibility or validation bypass. Missing or malformed native identity, nonstream requests, ordinary OpenAI clients, per-message refusals and other validation failures retain HTTP 400.
+
+This is an explicit Codex-native compatibility contract, separate from the official HTTP context-error contract. The Responses failure event shape is documented, while the official default/disabled truncation contract specifies HTTP 400. Installed Codex 0.164.0 treats the standard HTTP 400 structured context code as an ordinary invalid request; its existing `response.failed.response.error.code` classifier marks the context full. A credential-free app-server fixture proved that the next input then triggers native compaction automatically, preserving both the failed latest input and the new follow-up. The gateway does not remove history, change provider windows or reserves, or invent usage to trigger recovery.
+
+The local failure remains an incomplete, nonsemantic result with missing usage and no upstream dispatch. Its internal response identity stops the synthetic DeepSeek waterfall before provider-failure retry gating, including paid hops; it is never quota exhaustion or capacity failure. Existing request-owned admission and quota cleanup settles the failure once. Native HTTP error-code classification remains the upstream corrective direction; adopting a patched native binary is separate work because the shared app-server cannot be restarted from one of its own sessions.
+
+## Native Codex steering receives admitted SSE headers before provider selection - 2026-10-26
+
+Native Codex streamed Responses requests with the existing valid session, thread and turn metadata may flush SSE headers after shared validation, provider-local projection and successful existing dispatch admission. While the original handler still awaits its final Response, one transport-owned timer sends only the standard empty SSE comment `:\n\n` every 50 milliseconds; it stops before any selected Response body is forwarded, and on abort, close, error or cleanup. Backpressured output skips the comment rather than queuing writes. The node:http transport registers this capability against the original physical Request; no other transport gains it implicitly. The complete handler and telemetry runner remain awaited, preserving the original body observer, outgoing-close abort, one quota admission, provider waterfall and semantic commitment, terminal settlement, real delivery receipt and shutdown drain. Keyless callers keep the existing no-API-key-quota dispatch seam after normal authentication and process/kernel admission. Cerebras buffered contracts, public clients, malformed metadata, nonstream requests and pre-dispatch failures retain their existing behavior.
+
+Reason: installed Codex 0.164.0 acknowledged a steer in under a millisecond but could not reissue while HTTP response headers were pending. A three-second preheader hold delayed adoption by 3015 milliseconds; headers without any body reduced adoption to 5.720 milliseconds. The synthetic DeepSeek waterfall legitimately buffers provider events until semantic selection, so returning an early Response or releasing those events would alter ownership or failover. A transport-only readiness callback sends no API event or usage and keeps those boundaries intact. Header delivery alone allowed prompt steering adoption but did not expose an abandoned quiet native connection. A credential-free installed-client test with a separate raw TCP provider proved that a delayed standard comment caused the original gateway request to abort and upstream TCP EOF 1.086 milliseconds later, before manual provider release; steering ACK was 0.610 milliseconds and adoption 5.203 milliseconds. Comments are transport liveness, not model output.
+
+Cadence update - 2026-10-27: a credential-free actual-gateway fixture using Codex 0.164.0 and a held raw TCP provider measured upstream EOF after an early steer at 188.914 milliseconds with the 200-millisecond cadence and 43.856 milliseconds with 50 milliseconds. Near a timer tick, the measurements were 6.463 and 19.468 milliseconds, so cancellation remains phase-dependent. The shorter cadence reduces abandoned original-request work; replacement adoption still follows admitted headers. It schedules 20 rather than 5 callbacks per second per pending connection, and provides no strict end-to-end latency guarantee.
+
+Once native HTTP 200 headers are committed, a selected late HTTP failure is encoded as standard response.created followed by response.failed with its original error code/message and no invented usage or wire status/retry fields. The selected HTTP error body is consumed directly with the existing 64 KiB/one-second bound. Original status, safe allowlisted headers, error details and capture completeness remain keyed to the original Request and reach the existing structured terminal log across Response/CORS clones; incomplete reads never claim full original error evidence. Existing SSE bytes pass through unchanged. This native compatibility contract changes HTTP error classification: installed Codex 0.164.0 stream-retries late 429/503/401 failures without an HTTP status identity; the HTTP 429 path instead reports responseTooManyFailedAttempts with 429, and late authentication errors become generic stream failures. A late context_length_exceeded remains contextWindowExceeded. These measured limits are explicit; this is not HTTP retry parity or physical iOS acceptance.
+
+Reversal risk: delaying readiness through the first provider byte or synthetic semantic gate restores the steer adoption delay. Readiness before validation/admission, changing Request identity, releasing a quota reservation early, altering provider commitment, or treating header delivery as semantic completion would weaken existing contracts. No provider identity may be promised before selection, no history is removed, and cancellation retains the existing transport compensation owner.
+
+## Steering health is a bounded CLI probe - 2026-10-26
+
+`bun --no-env-file run steering:health [endpoint]` measures the installed Codex app-server against the selected gateway, defaulting to localhost port 7999. It uses isolated temporary Codex state, preserves HOME, parses the canonical repository-root `.env` with the pinned Bun-compatible standard parser and selects the first nonempty comma/newline-separated key into memory without credential cycling, and reports the served release and current native catalog. The fixed observed case is `ubiquity/deepseek-flash` with `low` effort. An operator may supply an existing SSH-forward endpoint; the command never starts tunnels, deploys, refreshes credentials or touches shared threads.
+
+The probe permits two inference requests, 64 KiB each, 512 output tokens each, zero native retries and a 60-second deadline. JSON output distinguishes RPC acknowledgement, replacement-request adoption, header readiness, original-stream cancellation and changed-answer completion. Session identity must be nonempty and stable independently of the actual thread and turn IDs. Missing header observations mean an incomplete probe rather than an inferred latency. Missing, duplicated, reordered or wrong-turn input, authentication refusal, timeout and failed cleanup are failures, even after HTTP 200. After confirmed child exit, its task-owned native state is removed; private artifacts retain only the bounded receipt and redacted native diagnostics without the gateway key. These are measurements, not a latency guarantee.
+
+## Successful input EOF preserves event-driven transport cancellation - 2026-10-27
+
+Successful request-body EOF marks input consumed, closes its Web stream and removes body listeners without pausing the IncomingMessage. Cancellation, errors and backpressure retain their existing pauses. The admitted early-SSE capability flushes headers only; it has no heartbeat, periodic write or cancellation timer. Existing unfinished outgoing close/error events still abort the original physical Request and reject its real delivery receipt, preserving one admission, provider selection/fallback, terminal settlement and shutdown drain.
+
+Reason: the exact pinned Bun 1.4.0 input adapter consumed a 52 KiB POST, then paused the native handle during EOF before the IncomingMessage was destroyed. Full-close and half-close clients produced no outgoing/socket close during a quiet 700-millisecond held response. Skipping only that terminal pause restored outgoing close within 0.42 milliseconds without response bytes. Independent installed Codex 0.164.0 steer and explicit-interrupt fixtures confirmed prompt original-request abort and upstream TCP EOF without a comment write. No socket-end bridge, extra body reader, request clone, supersession registry or resume workaround is introduced.
+
+The existing 15-second protocol keepalive in responses-stream.ts remains a connection-preservation feature for selected Responses streams. It is separate from the removed 50-millisecond pending-selection heartbeat and is not needed to discover cancellation. A FIN remains directional; this change relies on the runtime's existing terminal response event rather than treating raw input EOF as abandonment.
+
+Reversal risk: pausing successful EOF again suppresses quiet disconnect observation and recreates periodic-write dependence. Omitting pauses for unfinished cancellation/error/backpressure paths would change input flow and early-refusal behavior. Header readiness remains gated on authentication, projection and admission; header delivery is never semantic completion or successful accounting settlement.
+
+## Gateway behavior defaults replace redundant environment overrides - 2026-10-27
+
+The owner authorized retiring eleven TypeScript behavior overrides in favor of the existing defaults and the verified local reset policy. Matching Rust environment reads are removed without changing persisted Rust account/KV policy. No replacement flags or aliases are introduced.
+
+| Retired environment override                                                                                                | Fixed behavior                                                                                                                                                                                                            |
+| --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JEV_COMPACTION_DISABLED`, `JEV_COMPACTION_HYBRID`                                                                          | Stock provider compaction with no request-handler Jev interception or hybrid residue pass.                                                                                                                                |
+| `CORS_ALLOW_ORIGIN`                                                                                                         | CORS fallback origin `*`, preserving trusted-origin and authentication behavior.                                                                                                                                          |
+| `IMAGE_BASE_MODEL`                                                                                                          | Existing selected/default gateway text model.                                                                                                                                                                             |
+| `CODEX_BASE_URL`                                                                                                            | Official Codex upstream `https://chatgpt.com/backend-api/codex`.                                                                                                                                                          |
+| `UOS_API_KEY_DEFAULT_USAGE_LIMIT`, `UOS_API_KEY_DEFAULT_EXPIRY_DAYS`                                                        | New-key defaults of `50` requests per week and `90` days; explicit per-key settings remain available.                                                                                                                     |
+| `CODEX_BANKED_RESET_ENABLED`, `CODEX_BANKED_RESET_MAX_PER_ACCOUNT_PER_DAY`, `CODEX_BANKED_RESET_MAX_PER_ACCOUNT_PER_WINDOW` | TypeScript automatic resets enabled subject to existing per-account consent, eligibility, durable claim fences and at-most-once submission, with one redemption per account per UTC day and one per account/quota window. |
+| `UOS_CAPACITY_OBSERVATION_HOST_ID`                                                                                          | Mac companion capacity identity `mac`.                                                                                                                                                                                    |
+
+This decision supersedes the earlier Jev interception and hybrid kill-switch decisions, the TypeScript banked-reset environment kill switch, and the earlier documented reset-cap parse default. The previous source default for an absent daily cap was `0`, disabling live submissions until an explicit `1` was configured; the verified local service already configured `1`. The new constant preserves that accepted local policy. Existing per-account controls, durable caps, claim fences, quota-window ledgers and consent checks remain authoritative. Rust's persisted reset modes, limits and consent are unchanged.
+
+Keep credentials and provider-key families, private account/workspace identifiers, access allowlists, public verification keys, native credential homes and production/security identity settings. In particular, retain the VPS `DENO_TIMELINE=production` boundary. The repository-root `.env` is a symlink chain into a shared credential store; no provider credential or metadata is removed merely because TypeScript does not read it. Existing explicit configuration/model/host test seams replace environment setup where required, and sparse test profiles no longer pass `IMAGE_BASE_MODEL`.
+
+Local activation must first deploy the accepted exact immutable release with the old shared environment intact, then verify the served release identity, authenticated ordinary inference and a bounded marked native-compaction request showing that custom Jev interception is absent. Only afterward may a private, hash-checked backup and narrow edit remove the retired behavior settings from the shared target while preserving all other bytes, symlinks, owner and permissions, followed by a graceful gateway reload. Never restart the shared Codex daemon. Before rolling back to interception-capable code, restore `JEV_COMPACTION_DISABLED=1`; keep the latest same-codec Bun KV rather than restoring an old database. VPS activation, reset redemption, credential rotation and account mutation are outside this local change.
+
+Reason: these overrides duplicate the accepted gateway behavior and create drift between source, shared credentials, runtime and test profiles. Fixed defaults remove that ambiguity while keeping credential, authorization and host boundaries explicit. Reversal risk: removing the old compaction bypass before compatible code is active can re-enable interception, restoring old code without that bypass can do the same, and deleting shared credentials or broad metadata can break unrelated consumers. Hardcoding must not bypass account consent, widen CORS trust or replace the gateway's selected image model with an arbitrary model id.
+
+## Private offline copies and finite prelaunch fixtures preserve migration authority - 2026-10-25
+
+The M64 operator uses a completed read-only SQLite online backup as a new closed private input to the existing typed capture and bounded CORE_STATE selector while the original Bun service may keep serving. The copy proves neither stopped-serving-source ownership, latest-write/deletion currentness nor native credential custody, and grants no activation or rollback authority. The October 21 custody/bootstrap and October 22 offline-only CORE_STATE boundaries remain unchanged.
+
+The core-state export keeps Input v1 and returns Receipt v2 naming the actual selected private capture path, byte count and hash. Full and selected capture bytes may contain credential-bearing state and remain private pending the existing current-custody and access-only sanitization checks. The serving source identity stays distinct from the helper source/tree and runtime/artifact provenance; one cannot stand in for another.
+
+Only the exact Darwin prelaunch fixture controller runs outside the ordinary test wrapper so each protected product child receives its first actual OS profile and its Python descendants inherit that boundary. Other tests retain their existing wrapper. The controller binds the observed system Python shim, canonical launcher and terminal interpreter to exact checked paths, root ownership, executable mode, Apple signing identities and recorded hashes. Real startup markers, denial results and matching positive controls remain required; no generic isolation bypass, environment escape or broader process grant is introduced.
+
+Reason: component copy, selector and child-confinement evidence does not establish the staged whole-producer read boundary, which remains unresolved. Neither component evidence nor these source interfaces accept a private copy for live adoption.
+
+Reversal risk: treating a consistent copy or selected-byte receipt as current authority can lose later writes or expose credentials; treating a controller startup failure as a successful denial can falsely claim confinement. Existing stopped-source/currentness, custody, exact-artifact, target-isolation and live-acceptance requirements remain in force.
+
+## Prepared private copy launch binds canonical Python and real OS scope - 2026-10-27
+
+The offline copy/capture operator uses the canonical Python role from the existing independently verified three-role tuple through a constructor-held binding in a hash-bound immutable launcher. The original v1 private data input cannot choose an executable, binding, environment or capability. The preparer preserves the external signature receipt and stage/source identities; the actual role hashes, root ownership, precise identities and link counts are rechecked before and after execution. The signed fixed system shim may be a hard-linked multiplexer; canonical and terminal interpreter roles remain single-link. Unbound direct entry refuses before effects, with no shim fallback.
+
+The strict profile grants root-directory data and data for only the validated private output-anchor directory, plus existing explicit immutable source/artifact, canonical role, source-file and new-output rules. Literal directory data reveals names only and never authorizes descendant file bytes. Bun SQLite/CoreFoundation also requires one exact root-owned readonly ICU data file. Its bytes, size and hash are bound through the existing immutable files inventory; the profile emits one literal file-read-data rule plus exact metadata, never a directory/subtree or general file-read grant. Current Mac receipt is icudt78l.dat, 36,103,568 bytes, SHA-256 09781b9fdd79428c724099159f85dc522b07ddbf51cb7c23d16606a254d758f1. All unrelated read/write/source-write/exec/outbound denials remain required, including a direct forbidden sibling-file test. Exploratory xcode-select/libxcrun permissions are not production policy.
+
+Existing per-launch SQLite temporary storage is bound internally to the already approved new private output root. This introduces no public setting or new environment name. Actual strict SQLite/ICU runtime qualification passed on the frozen seven-file candidate: five helper cases and five real Darwin boundary cases, evidence bef89a59-bc75-430f-bdb4-a13f4de84165. The executed immutable launcher hash and 0400 identity were checked before/after success and malformed-input runs. Fixture seals a*/b* remain synthetic and are never reported as application Git identities. Final selected static gates passed on commit4980be305a08a929c743a9bd82017d17779474aa/tree966175f1f015ee062893036b0b46f73222052b99; integration and candidate gates remain separate. These source/tooling decisions authorize no private capture read, credential change, service action, live adoption or production deployment.
