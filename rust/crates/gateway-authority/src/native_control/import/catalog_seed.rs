@@ -1,14 +1,13 @@
 //! One optional original-import cache adapter; never a new effect/start lifetime.
 use super::*;
-use gateway_auth::{
-    native_auth::AuthenticatedNativeOwner,
-    native_import::catalog_seed::{
-        ImportCatalogSeedReplyData as Reply, ImportCatalogSeedRequestData as Request,
-    },
+use gateway_auth::native_auth::AuthenticatedNativeOwner;
+use gateway_auth::native_import::{
+    catalog_seed::{ImportCatalogSeedReplyData as Reply, ImportCatalogSeedRequestData as Request},
+    publication::data::ImportCatalogDisposition,
 };
-use gateway_core::{
-    query::QueryStore,
-    state::{AtomicTransition, CommitOutcome, RecordKey, RevisionCheck, StoredRecord},
+use gateway_core::query::QueryStore;
+use gateway_core::state::{
+    AtomicTransition, CommitOutcome, RecordKey, RevisionCheck, StoredRecord,
 };
 use gateway_schema::{catalog_cache, catalog_store};
 use std::collections::BTreeMap;
@@ -111,45 +110,43 @@ impl<S: QueryStore, I: TokenSource, C: NativeRenewalCancellation>
         let generation = generation
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(unavailable)?;
-        let seeded = if let Ok(body_generation) = self.authority.tokens.next_token() {
-            if body_generation.trim().is_empty() {
-                false
-            } else {
-                let prepared = catalog_cache::prepare_catalog(
-                    version,
-                    &generation,
-                    &body_generation,
-                    &request.source_body,
-                    request.etag.as_deref(),
-                    request.content_type.as_deref(),
-                    self.time(row.created_at_ms)?,
-                    &BTreeMap::new(),
-                );
-                match prepared {
-                    Err(_) => false,
-                    Ok(prepared) => {
-                        let store = GuardedSeedStore {
-                            control: self,
-                            peer,
-                            body,
-                            checks,
-                            created_at_ms: row.created_at_ms,
-                            deadline_ms: row.deadline_ms,
-                        };
-                        let published = catalog_store::publish_catalog(&store, &prepared)
-                            .await
-                            .unwrap_or(false);
-                        if published {
-                            let _ = catalog_store::prune_stored_catalog_versions(
-                                &self.authority.store,
-                                version,
-                                self.time(row.created_at_ms)?,
-                            )
-                            .await;
-                        }
-                        published
-                    }
+        let seeded = if let Ok(body_generation) = self.authority.tokens.next_token()
+            && !body_generation.trim().is_empty()
+        {
+            if let Ok(prepared) = catalog_cache::prepare_catalog(
+                catalog_cache::CatalogIdentity {
+                    client_version: version,
+                    auth_generation: &generation,
+                    body_generation: &body_generation,
+                },
+                &request.source_body,
+                request.etag.as_deref(),
+                request.content_type.as_deref(),
+                self.time(row.created_at_ms)?,
+                &BTreeMap::new(),
+            ) {
+                let store = GuardedSeedStore {
+                    control: self,
+                    peer,
+                    body,
+                    checks,
+                    created_at_ms: row.created_at_ms,
+                    deadline_ms: row.deadline_ms,
+                };
+                let published = catalog_store::publish_catalog(&store, &prepared)
+                    .await
+                    .unwrap_or(false);
+                if published {
+                    let _ = catalog_store::prune_stored_catalog_versions(
+                        &self.authority.store,
+                        version,
+                        self.time(row.created_at_ms)?,
+                    )
+                    .await;
                 }
+                published
+            } else {
+                false
             }
         } else {
             false

@@ -1,7 +1,6 @@
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-
+use crate::types::LIVE_CALL_ACCOUNT_TTL_MS;
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     state::{
         AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,
         StoredRecord,
@@ -9,8 +8,7 @@ use gateway_core::{
     tuple_key::{ScalarKeyPart, TupleKey},
 };
 use serde_json::json;
-
-use crate::types::LIVE_CALL_ACCOUNT_TTL_MS;
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 pub(crate) struct State<S> {
     pub store: Rc<S>,

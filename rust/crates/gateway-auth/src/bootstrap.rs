@@ -2,7 +2,7 @@
 //! this module never discovers dotenv, reads a home, or guesses an account identity.
 use std::collections::BTreeMap;
 
-use crate::{AuthConfig, crypto::Secret};
+use crate::{crypto::Secret, types::AuthConfig};
 
 fn tokens(raw: Option<&str>) -> Vec<Secret> {
     let mut result = Vec::new();

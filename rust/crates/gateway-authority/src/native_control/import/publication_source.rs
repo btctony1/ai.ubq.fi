@@ -2,11 +2,12 @@
 use super::*;
 use crate::{
     keys,
-    routing::{PoolAccount, SubscriptionPool},
+    routing_types::{PoolAccount, SubscriptionPool},
     store::Transaction,
 };
 use gateway_auth::{
     crypto::Secret,
+    native_import::publication::command::{ImportCatalogData, ImportPublicationCommandData},
     provider_credentials::{
         CodexNativeOwner, CodexSourceAccount, MANAGED_NATIVE_SOURCE_VERSION, ManagedNativeSource,
         codex_source_pool_key, parse_codex_source_pool,

@@ -1,6 +1,6 @@
 //! Source buffered chunk rewrite with mechanical identifier ledger and verbatim tail.
 use crate::{
-    text::{self, Text, text},
+    text::{self, Text},
     types::{CompactionFailure, CompactionHost},
 };
 use futures_util::{StreamExt, stream};

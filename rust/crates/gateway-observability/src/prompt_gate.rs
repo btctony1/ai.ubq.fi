@@ -1,12 +1,12 @@
 //! Source cache/telemetry-gate.ts: release-bound Stage0 actual completion evidence.
-use crate::{ObservabilityRuntime, types::ObservabilityHost};
 use crate::{
-    counters,
+    ObservabilityRuntime, counters,
     prompt::{PROVIDERS, PromptEvent, ROUTES, known_release, model_hash, model_text},
     store,
+    types::ObservabilityHost,
 };
 use gateway_auth::crypto::sha256_hex;
-use gateway_core::{GatewayError, query::QueryStore, state::RecordKey};
+use gateway_core::{error::GatewayError, query::QueryStore, state::RecordKey};
 use serde_json::{Value, json};
 
 fn counter_key(

@@ -1,9 +1,8 @@
 //! One source extractUsageTokens engine for inference, telemetry and the fixed cache experiment.
 //! Missing usage is not an invalid object, and unreported counters never become zero.
+use crate::{error::GatewayError, source_json::SourceJson};
 use serde::Serialize;
 use serde_json::{Map, Value};
-
-use crate::{GatewayError, source_json::SourceJson};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -123,32 +122,33 @@ pub fn extract_source_usage_tokens(
     }
     let mut object = Map::new();
     for (name, value) in value.object_entries()? {
-        for field in [
+        let field = [
             "input_tokens",
             "output_tokens",
             "total_tokens",
             "buyer_cost_micro",
             "input_tokens_details",
-        ] {
-            if !name.as_units().iter().copied().eq(field.encode_utf16()) {
-                continue;
-            }
-            if field != "input_tokens_details" {
-                object.insert(field.into(), source_number(&value));
-            } else if value.as_str().trim_start().starts_with('{') {
-                let mut details = Map::new();
-                for (name, value) in value.object_entries()? {
-                    for field in ["cached_tokens", "cache_write_tokens"] {
-                        if name.as_units().iter().copied().eq(field.encode_utf16()) {
-                            details.insert(field.into(), source_number(&value));
-                        }
-                    }
+        ]
+        .into_iter()
+        .find(|field| name.as_units().iter().copied().eq(field.encode_utf16()));
+        let Some(field) = field else { continue };
+        if field != "input_tokens_details" {
+            object.insert(field.into(), source_number(&value));
+            continue;
+        }
+        if !value.as_str().trim_start().starts_with('{') {
+            object.insert(field.into(), Value::Null);
+            continue;
+        }
+        let mut details = Map::new();
+        for (name, value) in value.object_entries()? {
+            for field in ["cached_tokens", "cache_write_tokens"] {
+                if name.as_units().iter().copied().eq(field.encode_utf16()) {
+                    details.insert(field.into(), source_number(&value));
                 }
-                object.insert(field.into(), Value::Object(details));
-            } else {
-                object.insert(field.into(), Value::Null);
             }
         }
+        object.insert(field.into(), Value::Object(details));
     }
     Ok(extract_usage_tokens(Some(&Value::Object(object))))
 }
@@ -160,5 +160,4 @@ fn source_number(value: &SourceJson) -> Value {
         .map_or(Value::Null, Value::Number)
 }
 #[cfg(test)]
-#[path = "source_usage_tests.rs"]
 mod tests;

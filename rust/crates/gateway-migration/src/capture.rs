@@ -1,5 +1,5 @@
 use crate::*;
-use gateway_admin_data::profile::{SourceDateHost, normalize_source_import_line_with_host};
+use gateway_admin_data::profile::{SourceDateHost, source::normalize_source_import_line_with_host};
 use std::collections::BTreeSet;
 
 /// Private logical capture, distinct from ordinary NDJSON which omits KV expiry.
@@ -121,7 +121,7 @@ fn validate_complete_binary_views(input: &SourceJson) -> Result<(), GatewayError
                 .ok_or_else(|| invalid("Full capture binary view requires explicit byteLength"))?
                 .deserialize::<f64>()?;
             let gateway_core::value::PortableValue::Binary { bytes, .. } =
-                gateway_admin_data::profile::from_source_profile(input)?
+                gateway_admin_data::profile::source::from_source_profile(input)?
             else {
                 return Err(invalid("Capture binary value is malformed"));
             };

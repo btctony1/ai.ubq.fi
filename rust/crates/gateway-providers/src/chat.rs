@@ -1,6 +1,9 @@
 //! Responses -> Chat-only request translation, preserving provider-specific boundaries.
-use crate::types::{ChatProfile, Elision, ToolMap, invalid};
-use gateway_core::{GatewayError, js_string::JsString16};
+use crate::{
+    source_tools::ToolMap,
+    types::{ChatProfile, Elision, invalid},
+};
+use gateway_core::{error::GatewayError, js_string::JsString16};
 use serde_json::Value;
 pub const FORWARD_LIMIT: usize = 65_536;
 pub const FORWARD_VERSION: &str = "deepseek-forwarded-payload/v1";
@@ -32,7 +35,7 @@ pub(crate) fn oversized(
     path: &str,
     original_bytes: usize,
     call_id: Option<&JsString16>,
-) -> gateway_schema::source_request::SourceRequestError {
+) -> gateway_schema::source_request::error::SourceRequestError {
     let call_note = call_id
         .map(|id| {
             crate::source::concat(&[
@@ -49,7 +52,7 @@ pub(crate) fn oversized(
             " carries {original_bytes} bytes; this route forwards at most {FORWARD_LIMIT} bytes per message under {FORWARD_VERSION}, and the request set truncation 'disabled', so the gateway will not reduce it. Reduce the payload or send truncation 'auto' to allow the declared reduction."
         )),
     ]);
-    gateway_schema::source_request::SourceRequestError::new(
+    gateway_schema::source_request::error::SourceRequestError::new(
         400,
         message,
         "invalid_request_error",
@@ -196,5 +199,4 @@ pub fn validate_thinking_choice(body: &Value, field: &str) -> Result<(), Gateway
 }
 
 #[cfg(test)]
-#[path = "chat_unicode_tests.rs"]
 mod unicode_tests;

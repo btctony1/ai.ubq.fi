@@ -2,15 +2,16 @@
 //! One controller is shared across requests, principals and inference routes in an
 //! isolate. This is neither a quota ledger nor a durable/distributed scheduler.
 
-use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, VecDeque};
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll, Waker};
-use std::time::Duration;
-
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
+use std::{
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, VecDeque},
+    future::Future,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll, Waker},
+    time::Duration,
+};
 
 pub const LOCAL_INFERENCE_OVERLOAD_CODE: &str = "local_inference_overload";
 pub const RETRY_AFTER_SECONDS: u64 = 5;

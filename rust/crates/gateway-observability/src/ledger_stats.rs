@@ -1,7 +1,7 @@
 //! Source paid-fallback/ledger-stats.ts. Measurement cannot move a paid balance.
 use crate::{ObservabilityRuntime, store, types::ObservabilityHost};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::{QuerySelector, QueryStore},
 };
 use serde_json::{Value, json};

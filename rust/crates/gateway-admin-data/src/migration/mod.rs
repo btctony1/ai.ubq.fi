@@ -7,7 +7,7 @@ pub mod retention;
 
 use crate::error;
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     state::{AtomicTransition, RecordKey, RecordMutation, RevisionCheck, StoredRecord},
     tuple_key::TupleKey,
     value::PortableValue,

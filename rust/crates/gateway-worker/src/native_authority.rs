@@ -1,26 +1,5 @@
 //! Fixed reverse native protocols, authenticated against the common durable nonce authority.
-#[path = "native_import_dispatch.rs"]
-mod import_dispatch;
-use gateway_auth::{
-    GatewayError,
-    native::*,
-    native_auth::{NativeAuthHeaders, NativeAuthenticator, NativeCapability},
-    native_replay::StoreNonceAuthority,
-};
-use gateway_authority::{
-    Authority,
-    native_control::{
-        NativeRenewalAuthority, NativeRenewalCancellation, NativeRenewalControl,
-        wire::{
-            NativeRenewalAuthorityRequest as RenewalRequest,
-            NativeRenewalAuthorityResponse as RenewalResponse,
-        },
-    },
-};
-pub use import_dispatch::publication as import_publication;
-use serde::Serialize;
-use worker::{Env, Method, Request, Response};
-
+pub(crate) mod import_dispatch;
 use crate::{
     authority::RemoteAuthorityStore,
     host::{PlatformClock, PlatformTokens},
@@ -28,6 +7,29 @@ use crate::{
     storage::now_ms,
     transport::{HeaderLimits, body::request_bytes, bounded_headers, outbound::Cancellation},
 };
+use gateway_auth::{
+    native::{
+        NATIVE_CONTROL_PATH, NATIVE_KEY_HEADER, NATIVE_MAC_HEADER, NATIVE_NONCE_HEADER,
+        NATIVE_PUBLICATION_PATH, NATIVE_RENEWAL_AUTHORITY_PATH, NATIVE_RESPONSE_MAC_HEADER,
+        NATIVE_TIME_HEADER, NATIVE_VERSION_HEADER,
+    },
+    native_auth::{NativeAuthHeaders, NativeAuthenticator, NativeCapability},
+    native_replay::StoreNonceAuthority,
+};
+use gateway_authority::{
+    native_control::{
+        NativeRenewalCancellation, NativeRenewalControl,
+        receiver::NativeRenewalAuthority,
+        wire::{
+            NativeRenewalAuthorityRequest as RenewalRequest,
+            NativeRenewalAuthorityResponse as RenewalResponse,
+        },
+    },
+    store::Authority,
+};
+use gateway_core::error::GatewayError;
+use serde::Serialize;
+use worker::{Env, Method, Request, Response};
 
 pub fn is_path(path: &str) -> bool {
     path == NATIVE_RENEWAL_AUTHORITY_PATH
@@ -348,7 +350,7 @@ pub async fn managed_publication(
     bytes: &[u8],
 ) -> Result<Response, GatewayError> {
     if request.method() != Method::Post
-        || bytes.len() > gateway_publication::managed::MANAGED_PUBLICATION_MAX_BYTES
+        || bytes.len() > gateway_publication_transport::managed::MANAGED_PUBLICATION_MAX_BYTES
     {
         return Err(invalid());
     }
@@ -384,8 +386,8 @@ pub async fn managed_publication(
         &config,
         &incoming,
     );
-    use gateway_authority::native_control::NativeManagedPublicationDisposition as Disposition;
-    use gateway_publication::{managed::ManagedPublicationReceipt, wire::PublicationDisposition};
+    use gateway_authority::native_control::managed::NativeManagedPublicationDisposition as Disposition;
+    use gateway_publication::wire::PublicationDisposition;
     let applied = receiver
         .publish_managed(&proof, bytes)
         .await
@@ -394,7 +396,7 @@ pub async fn managed_publication(
                 Disposition::Applied => PublicationDisposition::Applied,
                 Disposition::AlreadyCurrent => PublicationDisposition::AlreadyCurrent,
             };
-            ManagedPublicationReceipt {
+            gateway_publication_transport::managed::ManagedPublicationReceipt {
                 v: 2,
                 operation: "managed_access_publish".into(),
                 disposition,

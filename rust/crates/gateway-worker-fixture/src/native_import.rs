@@ -1,7 +1,6 @@
 //! Synthetic constructors only. All HTTP protocol handlers stay in gateway-worker.
 use super::*;
 use gateway_auth::{
-    AuthConfig, AuthHost, AuthRequest,
     crypto::{Secret, sha256_hex},
     passkeys::{self, PasskeySession, PasskeyUser},
     provider_credentials::{
@@ -9,16 +8,20 @@ use gateway_auth::{
         codex_source_pool_key,
     },
     session_index,
+    types::{AuthConfig, AuthHost, AuthRequest},
     upstream::{AuthUpstreamRequest, AuthUpstreamResponse},
     webauthn::{CosePublicKey, SignatureInput, WebAuthnCrypto},
 };
 use gateway_authority::{
-    Authority, AuthorityClock, TokenSource, keys,
+    keys,
     native_control::{
-        NativeRenewalAuthority, NativeRenewalCancellation, RegisteredRenewalOwner,
-        RegisteredRenewalOwners, actor::authenticate_admin_actor,
+        NativeRenewalCancellation,
+        actor::authenticate_admin_actor,
+        owners::RegisteredRenewalOwners,
+        receiver::{NativeRenewalAuthority, RegisteredRenewalOwner},
     },
-    routing::{PoolAccount, SubscriptionPool},
+    routing_types::{PoolAccount, SubscriptionPool},
+    store::{Authority, AuthorityClock, TokenSource},
 };
 use gateway_core::{
     identity::{PoolVersionstamp, PrincipalId, RequestContext, RequestId},
@@ -312,7 +315,7 @@ pub(super) async fn fetch(
     request: Request,
     env: Env,
     context: Context,
-) -> worker::Result<gateway_worker::GatewayResponse> {
+) -> worker::Result<gateway_worker::response::GatewayResponse> {
     let id = identity()
         .map_err(|e| worker::Error::RustError(e.envelope.error.code.unwrap_or_default()))?;
     let inputs = inputs()
@@ -322,11 +325,11 @@ pub(super) async fn fetch(
     let metadata = initialize(&env, &receiver, &id, &inputs)
         .await
         .map_err(|e| worker::Error::RustError(e.envelope.error.code.unwrap_or_default()))?;
-    let bindings = gateway_worker::NativeBindings::configured(env.service("ASSETS")?, id)
-        .with_renewal_owners(
-            owners()
-                .map_err(|e| worker::Error::RustError(e.envelope.error.code.unwrap_or_default()))?,
-        );
+    let bindings =
+        gateway_worker::native_host::NativeBindings::configured(env.service("ASSETS")?, id)
+            .with_renewal_owners(owners().map_err(|e| {
+                worker::Error::RustError(e.envelope.error.code.unwrap_or_default())
+            })?);
     let mut response =
         gateway_worker::fetch_with_bindings(request, env, context, Some(&receiver), bindings)
             .await?;

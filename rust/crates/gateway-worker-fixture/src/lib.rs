@@ -2,14 +2,10 @@
 //! authority are gateway-worker; no request handler, ledger or upstream is copied.
 mod native_carrier;
 mod native_import;
-use gateway_auth::{
-    GatewayError,
-    native_auth::{NativeCapability, NativeTransportIdentity},
-};
-use gateway_publication::{
-    control_publication::ConfiguredPaidInputs, transport::PublicationReceiver,
-};
-pub use gateway_worker::GatewayAuthority;
+use gateway_auth::native_auth::{NativeCapability, NativeTransportIdentity};
+use gateway_core::error::GatewayError;
+use gateway_publication_policy::control_publication::ConfiguredPaidInputs;
+use gateway_publication_transport::transport::PublicationReceiver;
 use gateway_worker_fixture_setup::{initialize, invalid};
 use std::collections::BTreeSet;
 use worker::{Context, Env, Request};
@@ -47,7 +43,7 @@ pub async fn fetch(
     request: Request,
     env: Env,
     context: Context,
-) -> worker::Result<gateway_worker::GatewayResponse> {
+) -> worker::Result<gateway_worker::response::GatewayResponse> {
     if env
         .var("UOS_MATRIX_SCENARIO")
         .ok()
@@ -93,7 +89,7 @@ pub async fn fetch(
         env,
         context,
         Some(&receiver),
-        gateway_worker::NativeBindings::default(),
+        gateway_worker::native_host::NativeBindings::default(),
     )
     .await
 }

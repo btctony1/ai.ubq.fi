@@ -1,5 +1,6 @@
 //! Explicit versioned action DATA readers. No optional/default v3 publication field.
 use super::*;
+use gateway_auth::native_import::publication::data::ImportPublicationDataV1;
 use gateway_core::{source_json::SourceJson, source_serialization as source};
 
 #[derive(Clone)]

@@ -1,5 +1,5 @@
 use super::{Facts, SourceCreditCollation, SourceResetCredit, SourceResetInventory, declined};
-use gateway_core::{GatewayError, identity::MAX_SAFE_INTEGER, js_string::JsString16};
+use gateway_core::{error::GatewayError, identity::MAX_SAFE_INTEGER, js_string::JsString16};
 use std::{cmp::Ordering, collections::BTreeSet};
 
 pub(super) struct Selected {

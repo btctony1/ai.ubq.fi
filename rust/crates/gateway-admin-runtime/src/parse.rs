@@ -1,8 +1,8 @@
 use crate::capabilities::*;
-use gateway_admin::{AdminInput, source_input as source_body};
-use gateway_auth::invalid;
+use gateway_admin::{operations::AdminInput, source_input as source_body};
+use gateway_auth::types::invalid;
 use gateway_core::{
-    GatewayError, identity::MAX_SAFE_INTEGER, js_string::JsString16, source_json::SourceJson,
+    error::GatewayError, identity::MAX_SAFE_INTEGER, js_string::JsString16, source_json::SourceJson,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -371,10 +371,9 @@ pub fn claude_source(body: &SourceJson) -> Result<ClaudeSubmission, GatewayError
                         })
                 })
                 .ok_or_else(|| invalid("account_id is invalid"))?;
-            Some(
-                String::from_utf16(id.as_units())
-                    .expect("closed upload account ID ASCII predicate"),
-            )
+            id.try_utf8()
+                .map(Some)
+                .map_err(|_| invalid("account_id is invalid"))?
         }
     };
     for name in ["create_new", "activate"] {
@@ -393,8 +392,9 @@ pub fn claude_source(body: &SourceJson) -> Result<ClaudeSubmission, GatewayError
         return Err(invalid("create_new cannot target an existing account"));
     }
     Ok(ClaudeSubmission {
-        credential: credential
-            .map(|text| std::sync::Arc::new(crate::claude::ClaudeSourceSecret::from_source(text))),
+        credential: credential.map(|text| {
+            std::sync::Arc::new(crate::claude::source_secret::ClaudeSourceSecret::from_source(text))
+        }),
         label,
         workspace_id,
         account_id,

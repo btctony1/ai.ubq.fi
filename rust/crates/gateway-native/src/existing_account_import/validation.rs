@@ -23,14 +23,16 @@ pub(super) struct ValidatedNativeImport<'a> {
     pub(super) etag: Option<String>,
 }
 
-use super::{ExistingAccountImportStore, LiveImportCustody, import_documents as document};
-use crate::import_custody_protocol::unavailable;
+use super::{
+    ExistingAccountImportStore, import_documents as document, live_custody::LiveImportCustody,
+};
 use crate::{
+    import_custody_protocol::unavailable,
     native_import::NativeImportContext,
     private_https::{PrivateHttps, PrivateResponse},
 };
 use gateway_authority::native_control::import::AuthenticatedNativeImport;
-use gateway_core::{GatewayError, js_string::JsString16};
+use gateway_core::{error::GatewayError, js_string::JsString16};
 use std::{
     net::TcpStream,
     time::{Duration, Instant},
@@ -353,17 +355,18 @@ fn normalized_catalog(
     now: i64,
 ) -> Result<CatalogValidation, GatewayError> {
     // This is the actual shared source normalizer, not a second native interpretation.
-    let prepared = gateway_authority::native_control::import::prepare_import_catalog(
-        body, version, status, now,
-    )
-    .map_err(|error| {
-        if error.status == 503 {
-            invalid_catalog()
-        } else {
-            error
-        }
-    })?;
-    let gateway_authority::native_control::import::ImportCatalogData::Normalized {
+    let prepared =
+        gateway_authority::native_control::import::publication_wire::prepare_import_catalog(
+            body, version, status, now,
+        )
+        .map_err(|error| {
+            if error.status == 503 {
+                invalid_catalog()
+            } else {
+                error
+            }
+        })?;
+    let gateway_auth::native_import::publication::command::ImportCatalogData::Normalized {
         snapshot,
         client_version,
         upstream_status,

@@ -5,7 +5,7 @@ use crate::{
     routing_host,
 };
 use futures_util::task::AtomicWaker;
-use gateway_core::{GatewayError, lifecycle::TransportObservation};
+use gateway_core::{error::GatewayError, lifecycle::TransportObservation};
 use gateway_routing_runtime::local_work::completion::response::{
     LocalAccountingProgress, LocalObservationSink, LocalSelectedResponse,
 };
@@ -170,7 +170,9 @@ pub(crate) fn response_error(
             .map_err(|_| wrapper_error())?;
         wire
     } else {
-        crate::runtime::auth_response(gateway_auth::AuthResponse::error((*error.error).clone()))?
+        crate::runtime::auth_response(gateway_auth::types::AuthResponse::error(
+            (*error.error).clone(),
+        ))?
     };
     for (name, value) in &error.headers {
         response

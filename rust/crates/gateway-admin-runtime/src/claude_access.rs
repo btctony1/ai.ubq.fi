@@ -1,11 +1,11 @@
 //! Source Claude principal policy. Parsing data never mints a routing/cohort capability.
 use crate::store;
 use gateway_auth::{
-    AuthHost, conflict, invalid,
     store::{check, commit},
+    types::{AuthHost, conflict, invalid},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     source_control::{decode_source_control_record, encode_source_control_record},
     source_json::SourceJson,

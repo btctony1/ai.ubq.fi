@@ -1,5 +1,5 @@
 //! Observed prompt cache metadata is distinct from the official request control schema.
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 use serde_json::Value;
 pub const SCOPE_PROFILE: &str = "responses_implicit_input_text_keyed_cycle_isolated_v5";
 pub const CODEX_PROVIDER: &str = "codex_chatgpt";
@@ -10,17 +10,17 @@ pub fn normalize_breakpoint(
     let value = value
         .map(gateway_core::source_json::SourceJson::from_serializable)
         .transpose()?;
-    crate::source_request::normalize_breakpoint(value.as_ref(), param)
-        .map_err(crate::source_request::SourceRequestError::into_scalar)?
+    crate::source_request::normalized::normalize_breakpoint(value.as_ref(), param)
+        .map_err(crate::source_request::error::SourceRequestError::into_scalar)?
         .map(|value| value.deserialize())
         .transpose()
 }
 
 pub fn validate_prompt_cache_controls(body: &Value) -> Result<(), GatewayError> {
-    crate::source_request::validate_prompt_cache_controls(
+    crate::source_request::fields::validate_prompt_cache_controls(
         &gateway_core::source_json::SourceJson::from_serializable(body)?,
     )
-    .map_err(crate::source_request::SourceRequestError::into_scalar)
+    .map_err(crate::source_request::error::SourceRequestError::into_scalar)
 }
 
 fn scalar_source(value: &Value) -> Option<gateway_core::source_json::SourceJson> {
@@ -88,12 +88,12 @@ pub fn validate_known_unsupported(
         .and_then(|record| record.get("prompt_cache"))
         .map(gateway_core::source_json::SourceJson::from_serializable)
         .transpose()?;
-    crate::source_request::validate_known_unsupported_prompt_cache(
+    crate::source_request::cache_capability::validate_known_unsupported_prompt_cache(
         &gateway_core::js_string::JsString16::from_utf8(model),
         prompt_cache.as_ref(),
         &body,
         &input,
         input_key,
     )
-    .map_err(crate::source_request::SourceRequestError::into_scalar)
+    .map_err(crate::source_request::error::SourceRequestError::into_scalar)
 }

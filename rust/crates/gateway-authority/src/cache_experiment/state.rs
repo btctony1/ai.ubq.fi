@@ -3,11 +3,9 @@ use super::{
     model::*,
     target::{key, resolve},
 };
-use crate::{Authority, TokenSource, store::Transaction};
-use gateway_core::{
-    GatewayError,
-    state::{AuthorityStore, RecordKey},
-};
+use crate::store::{Authority, TokenSource, Transaction};
+use gateway_core::error::GatewayError;
+use gateway_core::state::{AuthorityStore, RecordKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

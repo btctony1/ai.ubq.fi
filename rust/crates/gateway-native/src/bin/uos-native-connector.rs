@@ -1,6 +1,6 @@
 #[cfg(unix)]
 fn main() {
-    gateway_native::run_native_connector();
+    gateway_native::connector_worker::run_native_connector();
 }
 #[cfg(not(unix))]
 fn main() {

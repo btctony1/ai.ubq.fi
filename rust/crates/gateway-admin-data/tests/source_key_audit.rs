@@ -1,5 +1,6 @@
 use gateway_admin_data::migration::{ObservedRow, audit};
 use gateway_core::{
+    error::GatewayError,
     source_control::{
         decode_source_control_record, encode_source_control_record, source_json_tree,
     },
@@ -98,11 +99,12 @@ fn named_key_pair_audit_preserves_complete_utf16_policy_and_finite_facts() {
 }
 
 #[test]
-fn source_key_audit_keeps_malformed_pair_counter_and_model_rejections() {
+fn source_key_audit_keeps_malformed_pair_counter_and_model_rejections() -> Result<(), GatewayError>
+{
     for models in [r#"[0]"#, r#"[null]"#, r#"[""]"#, r#"["\u00a0\t"]"#, "null"] {
         let (id, hash) = policies(models);
-        assert!(!audit::valid_source_key_policy(&id, true), "{models}");
-        let (pairs, findings) = inspect_key_pairs(&rows(&id, &hash)).unwrap();
+        assert!(!audit::keys::valid_source_key_policy(&id, true), "{models}");
+        let (pairs, findings) = inspect_key_pairs(&rows(&id, &hash))?;
         assert!(pairs.is_empty());
         assert!(findings.errors.iter().any(|error| {
             error
@@ -117,7 +119,7 @@ fn source_key_audit_keeps_malformed_pair_counter_and_model_rejections() {
         );
     }
     let (id, hash) = policies(r#"["scalar"]"#);
-    let mut fields = hash.object_entries().unwrap();
+    let mut fields = hash.object_entries()?;
     for (key, value) in &mut fields {
         if key
             .as_units()
@@ -125,11 +127,11 @@ fn source_key_audit_keeps_malformed_pair_counter_and_model_rejections() {
             .copied()
             .eq("usage_requests".encode_utf16())
         {
-            *value = SourceJson::parse("1").unwrap();
+            *value = SourceJson::parse("1")?;
         }
     }
-    let mismatch = source::object_keys(fields).unwrap();
-    let (pairs, findings) = inspect_key_pairs(&rows(&id, &mismatch)).unwrap();
+    let mismatch = source::object_keys(fields)?;
+    let (pairs, findings) = inspect_key_pairs(&rows(&id, &mismatch))?;
     assert!(pairs.is_empty());
     assert!(findings.errors.iter().any(|error| {
         error
@@ -138,13 +140,14 @@ fn source_key_audit_keeps_malformed_pair_counter_and_model_rejections() {
     }));
     let mut missing = rows(&id, &hash);
     missing.pop();
-    let (pairs, findings) = inspect_key_pairs(&missing).unwrap();
+    let (pairs, findings) = inspect_key_pairs(&missing)?;
     assert!(pairs.is_empty());
     assert!(findings.errors.iter().any(|error| {
         error
             .try_utf8()
             .is_ok_and(|text| text.contains("count mismatch"))
     }));
+    Ok(())
 }
 
 #[test]
@@ -162,33 +165,28 @@ fn named_key_audit_refuses_non_json_tree_encodings_without_global_reinterpretati
 }
 
 #[test]
-fn scalar_key_policy_stays_json_and_legacy_wrapper_matches_source_validation() {
+fn scalar_key_policy_stays_json_and_legacy_wrapper_matches_source_validation()
+-> Result<(), GatewayError> {
     let (id, hash) = policies(r#"["scalar"]"#);
-    let fields = id
-        .object_entries()
-        .unwrap()
-        .into_iter()
-        .map(|(key, value)| {
-            let value = if key
-                .as_units()
-                .iter()
-                .copied()
-                .eq("paid_fallback_max_exposure_microcredits".encode_utf16())
-            {
-                SourceJson::parse("{}").unwrap()
-            } else {
-                value
-            };
-            (key, value)
-        })
-        .collect();
-    let scalar = source::object_keys(fields).unwrap();
+    let mut fields = id.object_entries()?;
+    for (key, value) in &mut fields {
+        if key
+            .as_units()
+            .iter()
+            .copied()
+            .eq("paid_fallback_max_exposure_microcredits".encode_utf16())
+        {
+            *value = SourceJson::parse("{}")?;
+        }
+    }
+    let scalar = source::object_keys(fields)?;
     let rows = rows(&scalar, &hash);
     assert_eq!(rows[0].record.value_encoding, ValueEncoding::Json);
-    assert_eq!(rows[0].record.value, scalar.deserialize::<Value>().unwrap());
-    assert!(audit::valid_key_policy(&rows[0].record.value, true));
-    assert!(audit::valid_source_key_policy(&scalar, true));
-    assert!(inspect_key_pairs(&rows).unwrap().1.errors.is_empty());
+    assert_eq!(rows[0].record.value, scalar.deserialize::<Value>()?);
+    assert!(audit::keys::valid_key_policy(&rows[0].record.value, true));
+    assert!(audit::keys::valid_source_key_policy(&scalar, true));
+    assert!(inspect_key_pairs(&rows)?.1.errors.is_empty());
+    Ok(())
 }
 
 // Independent decoded row lifetimes model the replayable native spool contract.
@@ -196,8 +194,8 @@ struct Replay<'a>(&'a [ObservedRow]);
 impl audit::AuditInventory for Replay<'_> {
     fn visit(
         &self,
-        callback: &mut dyn FnMut(&ObservedRow) -> Result<(), gateway_core::GatewayError>,
-    ) -> Result<(), gateway_core::GatewayError> {
+        callback: &mut dyn FnMut(&ObservedRow) -> Result<(), GatewayError>,
+    ) -> Result<(), GatewayError> {
         for row in self.0 {
             let decoded = row.clone();
             callback(&decoded)?;
@@ -207,8 +205,8 @@ impl audit::AuditInventory for Replay<'_> {
 }
 fn inspect_key_pairs(
     rows: &[ObservedRow],
-) -> Result<(Vec<audit::AuditedKeyPair>, audit::Audit), gateway_core::GatewayError> {
-    let result = audit::inspect_key_pairs(rows);
+) -> Result<(Vec<audit::keys::AuditedKeyPair>, audit::Audit), GatewayError> {
+    let result = audit::keys::inspect_key_pairs(rows);
     let replay = audit::inspect_inventory(&Replay(rows), 1000);
     match (&result, replay) {
         (Ok((_, expected)), Ok(actual)) => {

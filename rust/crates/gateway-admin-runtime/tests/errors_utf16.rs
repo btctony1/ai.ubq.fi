@@ -1,11 +1,18 @@
-use gateway_admin::{AdminHost, AdminInput, AdminOperation};
+use gateway_admin::{
+    operations::{AdminHost, AdminInput},
+    routes::AdminOperation,
+};
 use gateway_admin_runtime::{
     AdminRuntime, RuntimeConfig,
     capabilities::{Context, ErrorDiagnostics, RuntimeCapabilities},
 };
-use gateway_auth::{AuthHost, AuthMethod, AuthPrincipal, upstream::*, webauthn::*};
+use gateway_auth::{
+    types::{AuthHost, AuthMethod, AuthPrincipal},
+    upstream::*,
+    webauthn::*,
+};
 use gateway_core::{
-    GatewayError, js_string::JsString16, query::*, source_json::SourceJson, state::*,
+    error::GatewayError, js_string::JsString16, query::*, source_json::SourceJson, state::*,
     tuple_key::TupleKey, value::PortableValue,
 };
 use serde_json::{Value, json};

@@ -1,24 +1,27 @@
 //! Fixed live operations over the original actor and the common account authority.
-use std::collections::BTreeMap;
-
-use gateway_auth::provider_credentials::{codex_access_expiry_ms, read_codex_source_pool};
-use gateway_authority::{
-    Authority,
-    routing::{LiveAccountSelection, LiveRouteSelection},
+use super::{
+    WorkerLiveHost,
+    account::{self, CurrentLiveAccount},
+    body::{self, Body},
+    health,
 };
-use gateway_core::{GatewayError, js_string::JsString16};
-use gateway_live_runtime::{
-    runtime::PreparedSideband,
-    types::{LiveAccount, LiveCreateRequest, LiveDispatchFailure, LiveHost, LiveResponse},
-};
-
-use super::{Body, CurrentLiveAccount, WorkerLiveHost, account, body, health};
 use crate::{
     authority::RemoteAuthorityStore,
     host::{PlatformClock, PlatformTokens},
     storage::now_ms,
     transport::outbound::Cancellation,
 };
+use gateway_auth::provider_credentials::{codex_access_expiry_ms, read_codex_source_pool};
+use gateway_authority::{
+    routing::{LiveAccountSelection, LiveRouteSelection},
+    store::Authority,
+};
+use gateway_core::{error::GatewayError, js_string::JsString16};
+use gateway_live_runtime::{
+    runtime::PreparedSideband,
+    types::{LiveAccount, LiveCreateRequest, LiveDispatchFailure, LiveHost, LiveResponse},
+};
+use std::collections::BTreeMap;
 
 impl WorkerLiveHost {
     fn authority(&self) -> Authority<RemoteAuthorityStore, PlatformTokens> {
@@ -118,7 +121,7 @@ impl WorkerLiveHost {
     pub async fn upgrade(
         &self,
         prepared: PreparedSideband<RemoteAuthorityStore, CurrentLiveAccount>,
-    ) -> Result<crate::GatewayResponse, GatewayError> {
+    ) -> Result<crate::response::GatewayResponse, GatewayError> {
         let parts = prepared.into_parts();
         parts.account.ensure_current().await?;
         let transport = self.platform.native.transport()?;
@@ -328,23 +331,22 @@ fn model_unavailable(
 #[cfg(test)]
 mod source_detail_tests {
     #[test]
-    fn unavailable_model_and_detail_keep_source_units() {
+    fn unavailable_model_and_detail_keep_source_units() -> Result<(), Box<dyn std::error::Error>> {
         let model = gateway_core::js_string::JsString16::from_units(vec![109, 0xd800]);
         let detail = gateway_core::js_string::JsString16::from_units(vec![100, 0xdc00]);
-        let response = super::model_unavailable(Some(&model), Some(&detail)).unwrap();
-        let super::Body::Bytes(bytes) = response.body else {
+        let response = super::model_unavailable(Some(&model), Some(&detail))?;
+        let crate::live_host::body::Body::Bytes(bytes) = response.body else {
             panic!("model refusal is bytes");
         };
-        let value =
-            gateway_core::source_json::SourceJson::parse(std::str::from_utf8(&bytes).unwrap())
-                .unwrap();
+        let value = gateway_core::source_json::SourceJson::parse(std::str::from_utf8(&bytes)?)?;
         let message = gateway_core::source_serialization::member(&value, "error")
             .and_then(|value| gateway_core::source_serialization::member(&value, "message"))
             .as_ref()
             .and_then(gateway_core::source_serialization::string)
-            .unwrap();
+            .ok_or("source refusal message is missing")?;
         assert!(message.as_units().contains(&0xd800));
         assert!(message.as_units().contains(&0xdc00));
         assert_eq!(response.status, 404);
+        Ok(())
     }
 }

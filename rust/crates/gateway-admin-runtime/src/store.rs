@@ -1,6 +1,6 @@
-use gateway_auth::{AuthHost, crypto::uuid_from_random};
+use gateway_auth::{crypto::uuid_from_random, types::AuthHost};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::{QueryEntry, QueryRequest, QuerySelector, QueryStore},
     state::{AuthorityStore, RecordKey, StoredRecord},
 };

@@ -1,21 +1,20 @@
 //! Post-acceptance source Claude history/rollups. Never a quota writer.
-use crate::{ObservabilityRuntime, types::ObservabilityHost};
 use crate::{
+    ObservabilityRuntime,
     capacity_shapes::{BUCKET_MS, HOUR_MS, RETENTION_MS, STALE_MS},
     host_types::{ClaudeAcceptedObservation, ClaudeObservationState, CredentialKind},
     replay_values::SourceObject,
     store,
+    types::ObservabilityHost,
 };
 use gateway_auth::crypto::sha256_hex;
-use gateway_core::{
-    GatewayError,
-    js_string::JsString16,
-    query::{QuerySelector, QueryStore},
-    source_control::{decode_source_control_record, encode_source_control_record},
-    source_json::SourceJson,
-    source_serialization as source,
-    state::{RecordKey, RecordMutation, StoredRecord},
-};
+use gateway_core::error::GatewayError;
+use gateway_core::js_string::JsString16;
+use gateway_core::query::{QuerySelector, QueryStore};
+use gateway_core::source_control::{decode_source_control_record, encode_source_control_record};
+use gateway_core::source_json::SourceJson;
+use gateway_core::source_serialization as source;
+use gateway_core::state::{RecordKey, RecordMutation, StoredRecord};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};

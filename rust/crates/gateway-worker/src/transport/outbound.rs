@@ -1,15 +1,10 @@
-use std::collections::BTreeMap;
-use std::rc::Rc;
-use std::task::Waker;
-
 use futures_util::task::AtomicWaker;
-
-use gateway_core::GatewayError;
-use worker::js_sys::{Reflect, Uint8Array};
-use worker::wasm_bindgen::closure::Closure;
-use worker::wasm_bindgen::{JsCast, JsValue};
+use gateway_core::error::GatewayError;
+use std::{collections::BTreeMap, rc::Rc, task::Waker};
 use worker::{
     AbortSignal, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response, Url,
+    js_sys::{Reflect, Uint8Array},
+    wasm_bindgen::{JsCast, JsValue, closure::Closure},
 };
 
 /// Constructed by trusted provider/native-host configuration, not request JSON.

@@ -15,7 +15,7 @@ pub fn serialize<S: Serializer, T: Serialize>(
                 SourceJson::from_serializable(value)?,
             ))
         })
-        .collect::<Result<Vec<_>, gateway_core::GatewayError>>()
+        .collect::<Result<Vec<_>, gateway_core::error::GatewayError>>()
         .map_err(serde::ser::Error::custom)?;
     let raw = source::object_keys(fields).map_err(serde::ser::Error::custom)?;
     let fields = source::entries(&raw)

@@ -4,8 +4,8 @@ use gateway_authority::initial_control_owner::{
     INITIAL_AUTHORITY_BINDING, INITIAL_AUTHORITY_OBJECT, InitialControlOwnerDeployment,
     PreparedInitialControlOwner,
 };
-use gateway_core::GatewayError;
-use gateway_migration::{NativeCapture, PreparedAdoption};
+use gateway_core::error::GatewayError;
+use gateway_migration::{engine::PreparedAdoption, native_capture::NativeCapture};
 use serde::Deserialize;
 use worker::{
     Env, js_sys,
@@ -66,7 +66,7 @@ impl RustInitialControlInstaller {
             .map_err(|_| rejected())?;
             let store =
                 crate::authority::RemoteAuthorityStore::from_env(&env).map_err(|_| rejected())?;
-            let receipt = gateway_migration::adopt_empty_with_initial_control_owner(
+            let receipt = gateway_migration::engine::adopt_empty_with_initial_control_owner(
                 &store,
                 &prepared.adoption,
                 &prepared.owner,
@@ -129,7 +129,8 @@ pub(crate) fn prepare(
     let capture = decode_capture(exact_input)?;
     // Migration independently derives capture/source/native/pool/projection
     // facts and compares them through the opaque owner's finite facts method.
-    let adoption = gateway_migration::prepare_native(&capture).map_err(|_| refused())?;
+    let adoption =
+        gateway_migration::native_capture::prepare_native(&capture).map_err(|_| refused())?;
     Ok(PreparedPrivateInstallation { adoption, owner })
 }
 

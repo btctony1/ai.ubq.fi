@@ -1,13 +1,14 @@
 //! One finite native sideband connection. The trusted connector is fixed to the
 //! approved destination; no URL or credential is accepted from the upgrade.
-mod authority;
+pub mod authority;
 mod queue;
-mod socket;
-pub use authority::{LiveAuthorization, NativeLiveAuthority, NativeLiveAuthorityHttp};
-use gateway_auth::{GatewayError, crypto::base64url, native_live::AuthenticatedNativeLive};
-use gateway_authority::native_live::NativeLiveRetirement;
+pub mod socket;
+use authority::NativeLiveAuthority;
+use gateway_auth::{crypto::base64url, native_live::AuthenticatedNativeLive};
+use gateway_authority::native_live::wire::NativeLiveRetirement;
+use gateway_core::error::GatewayError;
 use queue::{PendingSocket, PreopenQueue, blocked, websocket_config};
-pub use socket::{LiveDialContext, NativeLiveConnector};
+use socket::{LiveDialContext, NativeLiveConnector};
 use std::{
     io::Write,
     net::TcpStream,

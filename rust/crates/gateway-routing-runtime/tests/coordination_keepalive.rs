@@ -1,10 +1,13 @@
-use gateway_auth::AuthMethod;
+use gateway_auth::types::AuthMethod;
 use gateway_authority::{
-    Authority, AuthorityClock, REQUEST_LEASE_MS, TokenSource, keys,
-    quota::{ApiReservation, KernelPolicy},
+    REQUEST_LEASE_MS,
+    kernel::KernelPolicy,
+    keys,
+    quota::ApiReservation,
+    store::{Authority, AuthorityClock, TokenSource},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::{QueryPage, QueryRequest, QueryStore},
     state::{
         AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, StoredRecord,

@@ -2,7 +2,15 @@
 //! anthropic-responses/replay, lithos-tier-windows, images and embeddings fixtures.
 use gateway_core::provider::{PaidProvider, UpstreamProvider};
 use gateway_core::source_json::SourceJson;
-use gateway_providers::{chat, extras, policy, replay, request, usage, *};
+use gateway_providers::{
+    chat, extras, policy, replay,
+    request::{self, prepare_request},
+    response::decode_response,
+    source_tools::ToolMap,
+    sse::StreamDecoder,
+    types::*,
+    usage,
+};
 use serde_json::{Value, json};
 fn options() -> PrepareOptions {
     PrepareOptions {

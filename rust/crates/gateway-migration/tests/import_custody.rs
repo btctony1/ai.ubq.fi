@@ -1,6 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
-mod support;
-use gateway_admin_data::profile::{CanonicalDates, to_source_profile};
+use gateway_admin_data::profile::{CanonicalDates, source::to_source_profile};
 use gateway_core::{
     source_control::decode_source_control_record,
     source_json::SourceJson,
@@ -8,9 +7,16 @@ use gateway_core::{
     tuple_key::TupleKey,
     value::PortableValue,
 };
-use gateway_migration::*;
+use gateway_migration::{
+    capture::{PrivateCapture, SourceEntry},
+    engine::{adopt_empty, prepare},
+    inverse::{ArtifactContext, export_rollback_bundle},
+    native_capture::{NativeCapture, NativeEntry, NativeValue, prepare_native},
+    native_inverse::{export_native_latest, export_native_rollback_bundle},
+};
+use gateway_migration_test_support::fixture::{Directory, run};
+use gateway_migration_test_support::sqlite_store::SqliteStore;
 use serde_json::{Value, json};
-use support::{fixture::*, sqlite_store::*};
 
 fn key(kind: &str, reference: &str) -> RecordKey {
     gateway_auth::store::key(json!([
@@ -374,9 +380,10 @@ fn unfinished_v3_does_not_require_missing_rows_or_reject_unrelated_generation_hi
 }
 
 #[test]
-fn valid_legacy_renewal_utf16_models_are_untouched_by_v3_terminal_dispatch() {
+fn valid_legacy_renewal_utf16_models_are_untouched_by_v3_terminal_dispatch()
+-> Result<(), Box<dyn std::error::Error>> {
     use gateway_authority::native_control::{
-        NativeRenewalContext, NativeRenewalFence, validate_native_control_custody,
+        NativeRenewalContext, NativeRenewalFence, custody::validate_native_control_custody,
     };
     use gateway_core::{
         js_string::JsString16, model::ModelId, source_control::encode_source_control_record,
@@ -431,15 +438,12 @@ fn valid_legacy_renewal_utf16_models_are_untouched_by_v3_terminal_dispatch() {
                 slot: 0,
             },
         };
-        let reference = gateway_auth::crypto::sha256_hex(
-            &serde_json::to_vec(&(
-                "uos-native-renewal-action-v2",
-                &fence.original_request_id,
-                &fence.context,
-                &fence.source_native_generation,
-            ))
-            .unwrap(),
-        );
+        let reference = gateway_auth::crypto::sha256_hex(&serde_json::to_vec(&(
+            "uos-native-renewal-action-v2",
+            &fence.original_request_id,
+            &fence.context,
+            &fence.source_native_generation,
+        ))?);
         let document = SourceJson::from_serializable(&LegacyRenewalData {
             v: 2,
             action_ref: reference.clone(),
@@ -451,43 +455,34 @@ fn valid_legacy_renewal_utf16_models_are_untouched_by_v3_terminal_dispatch() {
             control_checks_digest: "2".repeat(64),
             account_digests: vec!["3".repeat(64)],
             operation_id: None,
-        })
-        .unwrap();
+        })?;
         let control_key = key("action", &reference);
-        let record =
-            encode_source_control_record("legacy-model-revision", &document, None).unwrap();
-        validate_native_control_custody(&control_key, &record)
-            .expect("actual existing renewal schema must accept the source model before export");
+        let record = encode_source_control_record("legacy-model-revision", &document, None)?;
+        validate_native_control_custody(&control_key, &record)?;
         println!("VALID_EXISTING_RENEWAL_SCHEMA_BEFORE_REAL_EXPORT");
         let directory = Directory::new();
         let path = directory.file("legacy-model.sqlite3");
         let store = SqliteStore::open(&path);
         let input: PrivateCapture =
-            serde_json::from_str(include_str!("fixtures/offline-source.json")).unwrap();
-        run(adopt_empty(
-            &store,
-            &prepare(&input, &CanonicalDates).unwrap(),
-        ))
-        .unwrap();
+            serde_json::from_str(include_str!("fixtures/offline-source.json"))?;
+        run(adopt_empty(&store, &prepare(&input, &CanonicalDates)?))?;
         store.put(control_key.clone(), record.clone());
         drop(store);
         let store = SqliteStore::open(&path);
-        let bundle = run(export_rollback_bundle(&store, 2400, context())).expect(
-            "real exporter must preserve valid legacy source models without scalar projection",
-        );
+        let bundle = run(export_rollback_bundle(&store, 2400, context()))?;
         let retained = bundle
             .rust_controls
             .iter()
             .find(|row| row.key == control_key.0)
-            .unwrap();
+            .ok_or("Expected legacy renewal control")?;
         assert_eq!(retained.record, record);
-        let reopened = decode_source_control_record(&retained.record).unwrap();
-        let fence = source::member(&reopened, "fence").unwrap();
-        let context = source::member(&fence, "context").unwrap();
+        let reopened = decode_source_control_record(&retained.record)?;
+        let fence = source::member(&reopened, "fence").ok_or("Expected source fixture member")?;
+        let context = source::member(&fence, "context").ok_or("Expected source fixture member")?;
         let model: ModelId = source::member(&context, "model")
-            .unwrap()
-            .deserialize()
-            .unwrap();
+            .ok_or("Expected source fixture member")?
+            .deserialize()?;
         assert_eq!(model.as_js_string().as_units(), units);
     }
+    Ok(())
 }

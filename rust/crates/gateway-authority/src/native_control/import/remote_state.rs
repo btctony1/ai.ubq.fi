@@ -1,5 +1,6 @@
 //! Private local/actual-remote state. DATA and a matching client are both required;
 //! no fake local action or deserialized body/start capability exists.
+use super::effects::NativeImportBinding;
 use super::*;
 use gateway_auth::native_import::authority::ImportAuthorityStateData;
 #[cfg(unix)]

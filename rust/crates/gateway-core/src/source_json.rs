@@ -1,5 +1,5 @@
 //! Validated JSON bytes; raw string leaves never pass through serde_json::Value.
-use crate::{GatewayError, js_string::JsString16, value::PortableValue};
+use crate::{error::GatewayError, js_string::JsString16, value::PortableValue};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{DeserializeOwned, Error},

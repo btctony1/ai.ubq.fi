@@ -1,6 +1,8 @@
 use gateway_core::provider::UpstreamProvider;
 use gateway_providers::{
-    AuthMaterial, ChatProfile, ClientSurface, PrepareOptions, chat, prepare_request,
+    chat,
+    request::prepare_request,
+    types::{AuthMaterial, ChatProfile, ClientSurface, PrepareOptions},
 };
 use serde_json::{Value, json};
 

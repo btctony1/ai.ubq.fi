@@ -3,8 +3,8 @@ use gateway_admin_data::migration::{
     audit::{self, Audit},
 };
 use gateway_core::{
-    js_string::JsString16, source_control::encode_source_control_record, source_json::SourceJson,
-    source_serialization as source,
+    error::GatewayError, js_string::JsString16, source_control::encode_source_control_record,
+    source_json::SourceJson, source_serialization as source,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -101,8 +101,8 @@ struct Replay<'a>(&'a [ObservedRow]);
 impl audit::AuditInventory for Replay<'_> {
     fn visit(
         &self,
-        callback: &mut dyn FnMut(&ObservedRow) -> Result<(), gateway_core::GatewayError>,
-    ) -> Result<(), gateway_core::GatewayError> {
+        callback: &mut dyn FnMut(&ObservedRow) -> Result<(), GatewayError>,
+    ) -> Result<(), GatewayError> {
         for row in self.0 {
             let decoded = row.clone();
             callback(&decoded)?;
@@ -110,11 +110,9 @@ impl audit::AuditInventory for Replay<'_> {
         Ok(())
     }
 }
-fn inspect_model_snapshot(
-    rows: &[ObservedRow],
-) -> Result<Vec<JsString16>, gateway_core::GatewayError> {
-    let result = audit::inspect_model_snapshot(rows);
-    let replay = audit::inspect_model_inventory(&Replay(rows));
+fn inspect_model_snapshot(rows: &[ObservedRow]) -> Result<Vec<JsString16>, GatewayError> {
+    let result = audit::source_model::inspect_model_snapshot(rows);
+    let replay = audit::source_model::inspect_model_inventory(&Replay(rows));
     assert_eq!(format!("{result:?}"), format!("{replay:?}"));
     result
 }

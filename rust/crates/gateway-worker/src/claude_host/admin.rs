@@ -11,10 +11,10 @@ use gateway_admin_runtime::{
     capabilities::{ClaudeRequest, ClaudeSubmission, Context},
     claude::{self, AccountBinding, AccountUpdate, Credential, Workspace},
 };
-use gateway_auth::{AuthHost, AuthResponse, AuthResponseBody};
+use gateway_auth::types::{AuthHost, AuthResponse, AuthResponseBody};
 use gateway_core::{
-    GatewayError, js_string::JsString16, source_json::SourceJson, source_serialization as source,
-    state::AuthorityStore,
+    error::GatewayError, js_string::JsString16, source_json::SourceJson,
+    source_serialization as source, state::AuthorityStore,
 };
 use gateway_observability::{ObservabilityRuntime, types::ObservabilityHost};
 use serde::Serialize;
@@ -101,7 +101,7 @@ pub async fn admin<H: ObservabilityHost>(
                 store: store.clone(),
                 platform: platform.clone(),
             };
-            if gateway_claude_runtime::clear_guards(store, &host, &account)
+            if gateway_claude_runtime::persistence::clear_guards(store, &host, &account)
                 .await?
                 .is_none()
             {
@@ -122,7 +122,7 @@ fn check_target_cohort(
 ) -> Result<(), GatewayError> {
     let cohort = original_leaf.and_then(source::string);
     if targeted && cohort.is_none() {
-        return Err(gateway_auth::invalid(
+        return Err(gateway_auth::types::invalid(
             "account_cohort_id is required for a targeted clear",
         ));
     }
@@ -196,10 +196,10 @@ async fn submit<H: ObservabilityHost>(
     } else {
         target(store, platform, source_account_id.as_ref())
             .await
-            .map_err(|error| gateway_auth::invalid(&error.envelope.error.message))?
+            .map_err(|error| gateway_auth::types::invalid(&error.envelope.error.message))?
     };
     if input.account_id.is_some() && old.is_none() {
-        return Err(gateway_auth::invalid("Claude account was not found"));
+        return Err(gateway_auth::types::invalid("Claude account was not found"));
     }
     let secret = input
         .credential
@@ -217,7 +217,7 @@ async fn submit<H: ObservabilityHost>(
         input.label.clone(),
         platform.now_ms(),
     )
-    .ok_or_else(|| gateway_auth::invalid("credential is invalid"))?;
+    .ok_or_else(|| gateway_auth::types::invalid("credential is invalid"))?;
     let workspace_id = match &input.workspace_id {
         Some(id) => id.as_ref(),
         None => old
@@ -343,7 +343,7 @@ async fn validate(
             Err(_) => return Ok(Validation::unavailable(Some(status))),
         };
         let (page, next) = match gateway_catalog_runtime::providers::parse_page(
-            gateway_catalog_runtime::CatalogProvider::ClaudeCode,
+            gateway_catalog_runtime::host::CatalogProvider::ClaudeCode,
             &parsed,
         ) {
             Ok(page) => page,
@@ -561,15 +561,16 @@ mod tests {
     }
 
     #[test]
-    fn only_missing_selector_uses_active_account_not_explicit_empty_or_lone_unit() {
+    fn only_missing_selector_uses_active_account_not_explicit_empty_or_lone_unit()
+    -> Result<(), Box<dyn std::error::Error>> {
         let credential = claude::submitted_credential(
-            std::sync::Arc::new(claude::ClaudeSourceSecret::from_source(
+            std::sync::Arc::new(claude::source_secret::ClaudeSourceSecret::from_source(
                 JsString16::from_utf8("sk-ant-api03-synthetic"),
             )),
             None,
             10,
         )
-        .unwrap();
+        .ok_or("fixture credential is missing")?;
         let account = AccountBinding {
             account_id: "00000000-0000-0000-0000-000000000001".into(),
             account_cohort_id: "00000000-0000-0000-0000-000000000002".into(),
@@ -588,6 +589,7 @@ mod tests {
         assert!(matching_target(&roster, None).is_some());
         assert!(matching_target(&roster, Some(&JsString16::from_utf8(""))).is_none());
         assert!(matching_target(&roster, Some(&JsString16::from_units(vec![0xd800]))).is_none());
+        Ok(())
     }
 
     #[test]

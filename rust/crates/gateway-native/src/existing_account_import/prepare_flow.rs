@@ -1,21 +1,23 @@
 //! Genuine original Start, actual live custody and native durable receipt only.
 use super::{
-    DurableNativeImport, ExistingAccountImportStore, LiveImportCustody,
+    ExistingAccountImportStore,
     actor_channel::InheritedCustodyChannel,
-    durability,
+    durability::{self, DurableNativeImport},
     import_publication::{
         AuthenticatedImportPublicationReply, ImportPublicationHttp, PreparedImportPublication,
     },
+    live_custody::LiveImportCustody,
     validation::{CatalogValidation, ImportValidation, ValidatedNativeImport, ValidationOutcome},
 };
 use crate::{import_custody_protocol::unavailable, native_import::NativeImportContext};
 use gateway_authority::native_control::{
     NativeRenewalCancellation,
     import::{
-        AuthenticatedImportTerminal, NativeImportClaim, NativeImportMode, RemoteImportAuthority,
+        effects::{NativeImportClaim, NativeImportMode},
+        remote::{AuthenticatedImportTerminal, RemoteImportAuthority},
     },
 };
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 
 /// No caller-created document, Started DATA or receipt marker can construct it.
 /// This is still not final publication/completion authority.
@@ -45,9 +47,9 @@ impl VerifiedImportPublication<'_> {
     }
     pub(super) fn disposition(
         &self,
-    ) -> gateway_authority::native_control::import::NativeImportPublicationDisposition {
+    ) -> gateway_auth::native_import::publication::NativeImportPublicationDisposition {
         self.reply.as_ref().map(|reply| reply.publication().disposition)
-            .unwrap_or(gateway_authority::native_control::import::NativeImportPublicationDisposition::AlreadyCurrent)
+            .unwrap_or(gateway_auth::native_import::publication::NativeImportPublicationDisposition::AlreadyCurrent)
     }
 }
 impl<'a> PreparedExistingImport<'a> {

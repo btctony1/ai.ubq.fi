@@ -1,30 +1,31 @@
 //! One authenticated/current opaque plan and one fixed import publication CAS.
 //! Config DATA is supplied only by the trusted publication receiver, never wire.
-use super::super::rows::{GenerationEffect, OperationRow, Phase, TerminalPublication};
-use super::*;
+use super::super::actor::{self, NativeActorScope};
+use super::super::receiver::NativeRenewalAuthority;
+use super::super::rows::{self, GenerationEffect, OperationRow, Phase, TerminalPublication};
+use super::super::{NativeRenewalCancellation, OWNER_RENEWAL_MAX_MS};
+use super::{action::ImportActionRow, effects, unavailable};
+use crate::store::{TokenSource, Transaction};
 use crate::{
     keys,
     paid_control::{PAID_CONTROL_CONFIG_VERSION, PaidControlConfig, PaidControlOwner},
-    store::Transaction,
 };
-use gateway_auth::{
-    crypto::Secret,
-    crypto::sha256_hex,
-    native::NATIVE_PUBLICATION_PATH,
-    native_auth::{AuthenticatedNativeOwner, NativeCapability},
-    provider_credentials::codex_credential_identity,
-};
-use gateway_core::{
-    provider::PaidProvider,
-    source_control::encode_source_control_record,
-    source_json::SourceJson,
-    state::{AtomicTransition, CommitOutcome, RecordMutation, StoredRecord},
-};
-use gateway_schema::catalog_store;
-
-pub use gateway_auth::native_import::publication::{
+use gateway_auth::crypto::{Secret, sha256_hex};
+use gateway_auth::native::NATIVE_PUBLICATION_PATH;
+use gateway_auth::native_auth::{AuthenticatedNativeOwner, NativeCapability};
+use gateway_auth::native_import::NativeImportKind;
+use gateway_auth::native_import::publication::{
     NativeImportPublication, NativeImportPublicationDisposition,
+    command::{ImportPublicationCommandData, import_publication_max_bytes},
+    data::{ImportCatalogDisposition, ImportPublicationDataV1},
 };
+use gateway_auth::provider_credentials::codex_credential_identity;
+use gateway_core::provider::PaidProvider;
+use gateway_core::source_control::encode_source_control_record;
+use gateway_core::source_json::SourceJson;
+use gateway_core::state::{AtomicTransition, CommitOutcome, RecordMutation, StoredRecord};
+use gateway_core::{error::GatewayError, state::AuthorityStore};
+use gateway_schema::catalog_store;
 pub struct PreparedNativeImportPublication<'c, 'a, S, I, C> {
     control: &'c NativeRenewalAuthority<'a, S, I, C>,
     peer: &'c AuthenticatedNativeOwner,

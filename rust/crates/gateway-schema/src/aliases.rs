@@ -1,5 +1,7 @@
 //! Latest Flash aliases resolve only from injected cached catalog observations.
-use gateway_core::{GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson};
+use gateway_core::{
+    error::GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson,
+};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 /// Constructor-owned synchronous source locale ordering; no model or authority normalization.

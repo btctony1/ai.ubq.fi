@@ -166,7 +166,6 @@ const loadingTitle = mustGet("admin-loading-title");
 const loadingSummary = mustGet("admin-loading-summary");
 const loadingGrid = mustGet("admin-loading-grid");
 const authGate = mustGet("admin-auth-gate");
-const authGateOpen = mustGet("admin-auth-gate-open");
 const loadingAuthStatus = mustGet("loading-auth-status");
 const loadingKeysStatus = mustGet("loading-keys-status");
 const loadingUsersStatus = mustGet("loading-users-status");
@@ -293,6 +292,8 @@ let currentKeyView = "active";
 let currentAdminView = "loading";
 let pendingAdminView = null;
 let adminAccessState = { checked: false, isAdmin: false, isSuperAdmin: false };
+let passportSessionActive = false;
+let adminAuthRetryTimer = 0;
 let relaySessionActive = false;
 let localDevelopmentAutoAuth = false;
 let adminPrefetchRunId = 0;
@@ -477,7 +478,8 @@ const updateLoadingAuthStatus = () => {
 
 const syncLoadingGate = () => {
   const preparing = adminAccessState.isAdmin || (!adminAccessState.checked && hasAdminCredential());
-  authGate.hidden = preparing;
+  const authWidgetExpanded = document.body.dataset.authWidget === "expanded";
+  authGate.hidden = preparing || authWidgetExpanded;
   loadingGrid.hidden = !preparing;
   loadingTitle.textContent = preparing ? "Preparing admin console" : "Sign in to manage the gateway";
 };
@@ -501,6 +503,7 @@ const setAuthWidgetOpen = (open, options = {}) => {
   authWidgetToggle.setAttribute("aria-label", expanded ? "Collapse authentication" : "Open authentication");
   authWidgetToggle.dataset.tooltip = expanded ? "Collapse authentication" : "Open authentication";
   authWidgetToggleLabel.textContent = expanded ? "Close" : "Session";
+  syncLoadingGate();
   if (expanded && options.focus) {
     globalThis.requestAnimationFrame(() => authWidgetPanel.focus({ preventScroll: true }));
   }
@@ -1053,7 +1056,7 @@ const capacityProgressTone = (remainingPercent) => {
   return "healthy";
 };
 
-const renderCapacityWindow = (container, label, window) => {
+const renderCapacityWindow = (container, label, window, observedAtMs) => {
   const card = document.createElement("section");
   card.dataset.capacityWindow = "";
   const title = document.createElement("h4");
@@ -1094,6 +1097,7 @@ const renderCapacityWindow = (container, label, window) => {
       : "Not reported"
   );
   appendProviderFact(facts, "Reset", formatCapacityTimestamp(window?.reset_at_ms));
+  if (observedAtMs !== undefined) appendProviderFact(facts, "Observed", formatCapacityTimestamp(observedAtMs));
   card.append(title, usage, facts);
   container.appendChild(card);
 };
@@ -1307,6 +1311,7 @@ const appendCapacitySourceMeta = (row, source, provider = null) => {
     appendProviderFact(facts, "Last event", health?.last_event ?? "Not observed");
     appendProviderFact(facts, "Blocked until", formatCapacityTimestamp(source.blocked_until_ms, "Not blocked"));
     appendProviderFact(facts, "Cooldown until", formatCapacityTimestamp(source.cooldown_until_ms, "No cooldown"));
+    appendProviderFact(facts, "Quota source", "Claude response headers");
     appendProviderFact(
       facts,
       "Last upstream error",
@@ -1531,8 +1536,8 @@ const claudeCapacityWindowForDisplay = (window) => {
 };
 
 /**
- * The Claude subscription row mirrors the Codex rows: a live/stale/unavailable
- * badge, the observed subscription windows as remaining capacity, and the
+ * The Claude subscription row keeps the Codex layout with a last-observed
+ * badge, the response-header windows as remaining capacity, and the
  * diagnostics the tier itself recorded (credential direction, workspace,
  * guards, last upstream outcome, and Console API-key limits when present).
  */
@@ -1564,14 +1569,33 @@ const renderClaudeCapacitySource = (source) => {
     title.textContent += ` · ${account?.label || source.account_id.slice(0, 8)}${account?.active ? " · Active" : ""}`;
   const badge = document.createElement("span");
   badge.dataset.badge = "";
-  setBadge(badge, capacityBadgeState(source.state), capacityStateLabel(source.state));
+  const observed = typeof source.source_observed_at_ms === "number" && Number.isFinite(source.source_observed_at_ms);
+  const label =
+    source.state === "unavailable"
+      ? capacityStateLabel(source.state)
+      : !observed
+        ? "Awaiting response headers"
+        : source.state === "stale"
+          ? "Last observed · stale"
+          : "Last observed";
+  setBadge(badge, observed || source.state === "unavailable" ? capacityBadgeState(source.state) : "unknown", label);
   header.append(title, badge);
   row.append(header);
 
   const windows = document.createElement("div");
   windows.dataset.capacityWindows = "";
-  renderCapacityWindow(windows, "5-hour window", claudeCapacityWindowForDisplay(source.windows?.five_hour));
-  renderCapacityWindow(windows, "Weekly window", claudeCapacityWindowForDisplay(source.windows?.seven_day));
+  renderCapacityWindow(
+    windows,
+    "5-hour window",
+    claudeCapacityWindowForDisplay(source.windows?.five_hour),
+    source.windows?.five_hour?.observed_at_ms ?? null
+  );
+  renderCapacityWindow(
+    windows,
+    "Weekly window",
+    claudeCapacityWindowForDisplay(source.windows?.seven_day),
+    source.windows?.seven_day?.observed_at_ms ?? null
+  );
   row.append(windows);
 
   appendCapacitySourceMeta(row, source, provider);
@@ -1656,12 +1680,25 @@ const CLAUDE_CAPACITY_CHART_SERIES = [
   { key: "claude-five-hour", label: "Claude 5-hour", window: "five_hour" },
   { key: "claude-seven-day", label: "Claude weekly", window: "seven_day" },
 ];
-let selectedClaudeHistoryAccountId = null;
-
+const isClaudeHeaderCapacityPoint = (point) =>
+  point !== null &&
+  typeof point === "object" &&
+  (point.source === "response_headers" || (point.source === undefined && !point.usage_snapshot));
+const claudeCapacityChartSeries = (snapshot, accountId) => {
+  const series = new Map();
+  const add = (point) => {
+    if (point?.account_id !== accountId) return;
+    for (const entry of CLAUDE_CAPACITY_CHART_SERIES)
+      if (point.windows?.[entry.window]) series.set(entry.window, entry);
+  };
+  for (const point of snapshot?.claude_history?.points ?? []) if (isClaudeHeaderCapacityPoint(point)) add(point);
+  for (const row of snapshot?.claude_accounts ?? [snapshot?.claude]) add(row);
+  return Array.from(series.values());
+};
 /** Raw observed points only: never reuse a live value at browser-now. */
 const claudeCapacityChartPoints = (view, accountId, windowId, interval) => {
   const samples = (Array.isArray(view?.points) ? view.points : [])
-    .filter((point) => point?.account_id === accountId)
+    .filter((point) => point?.account_id === accountId && isClaudeHeaderCapacityPoint(point))
     .sort(
       (left, right) =>
         (left.source_observed_at_ms ?? left.sampled_at_ms) - (right.source_observed_at_ms ?? right.sampled_at_ms)
@@ -1708,62 +1745,40 @@ const claudeCapacityChartPoints = (view, accountId, windowId, interval) => {
   return points;
 };
 
-const renderClaudeHistorySelector = (header, snapshot) => {
-  const view = snapshot?.claude_history;
-  const accounts = new Map(
-    (latestClaudeSubscription?.accounts ?? []).map((account) => [
-      account.account_id,
-      account.label || account.account_id,
-    ])
-  );
-  for (const point of Array.isArray(view?.points) ? view.points : [])
-    if (typeof point?.account_id === "string" && !accounts.has(point.account_id))
-      accounts.set(point.account_id, `Retained account ${point.account_id}`);
-  if (selectedClaudeHistoryAccountId === null || (selectedClaudeHistoryAccountId === "" && accounts.size))
-    selectedClaudeHistoryAccountId = latestClaudeSubscription?.active_account_id ?? accounts.keys().next().value ?? "";
-  if (selectedClaudeHistoryAccountId && !accounts.has(selectedClaudeHistoryAccountId))
-    accounts.set(selectedClaudeHistoryAccountId, `Retained account ${selectedClaudeHistoryAccountId}`);
-  const label = document.createElement("label");
-  label.dataset.capacityClaudeFilter = "";
-  const text = document.createElement("span");
-  text.textContent = "Claude history account";
-  const select = document.createElement("select");
-  select.setAttribute("aria-label", "Claude history account (view only)");
-  if (!accounts.size) {
-    const empty = document.createElement("option");
-    empty.value = "";
-    empty.textContent = "Waiting for account observations";
-    select.appendChild(empty);
+const claudeHistoryAccountId = (snapshot) => {
+  // The capacity snapshot's compatibility row is the exact current active account.
+  const active = snapshot?.claude;
+  if (active !== undefined) {
+    if (typeof active?.account_id !== "string" || !active.account_id) return "";
+    return !Array.isArray(snapshot.claude_accounts) ||
+      snapshot.claude_accounts.some(
+        (account) => account.account_id === active.account_id && account.account_cohort_id === active.account_cohort_id
+      )
+      ? active.account_id
+      : "";
   }
-  for (const [id, name] of accounts) {
-    const option = document.createElement("option");
-    option.value = id;
-    option.textContent = name;
-    select.appendChild(option);
-  }
-  select.value = selectedClaudeHistoryAccountId;
-  select.addEventListener("change", () => {
-    selectedClaudeHistoryAccountId = select.value;
-    const state = latestProviderCapacityChartState;
-    if (state) renderProviderCapacityChart(state.snapshot, state.sources, state.fiveXxBuckets);
-  });
-  label.append(text, select);
-  header.appendChild(label);
+  const activeId = latestClaudeSubscription?.active_account_id;
+  if (typeof activeId !== "string" || !activeId) return "";
+  const account = latestClaudeSubscription.accounts?.find((entry) => entry.account_id === activeId);
+  if (!account) return "";
+  return !Array.isArray(snapshot?.claude_accounts) ||
+    snapshot.claude_accounts.some(
+      (entry) => entry.account_id === activeId && entry.account_cohort_id === account.account_cohort_id
+    )
+    ? activeId
+    : "";
 };
 
 const renderClaudeHistoryPaths = (svg, snapshot, interval, plot) => {
-  for (const series of CLAUDE_CAPACITY_CHART_SERIES) {
-    const points = claudeCapacityChartPoints(
-      snapshot?.claude_history,
-      selectedClaudeHistoryAccountId,
-      series.window,
-      interval
-    );
+  const accountId = claudeHistoryAccountId(snapshot);
+  for (const series of claudeCapacityChartSeries(snapshot, accountId)) {
+    const points = claudeCapacityChartPoints(snapshot?.claude_history, accountId, series.window, interval);
     const path = capacityChartSvgElement("path", {
       d: capacityChartPath(points, plot, { anchorStart: false, anchorEnd: false }),
       fill: "none",
       role: "img",
       "aria-label": `${series.label}, observed remaining capacity, gaps are unknown`,
+      stroke: "currentColor",
     });
     path.dataset.capacitySeries = series.key;
     svg.appendChild(path);
@@ -1773,9 +1788,10 @@ const renderClaudeHistoryPaths = (svg, snapshot, interval, plot) => {
         cy: plot.top + ((100 - point.remainingPercent) / 100) * plot.height,
         r: 2,
       });
+      circle.setAttribute("fill", "currentColor");
       circle.dataset.capacityClaudePoint = series.key;
       const title = capacityChartSvgElement("title");
-      title.textContent = `${series.label} · ${quotaPercentFormatter.format(point.remainingPercent)}% remaining · ${point.sample.account_id} · cohort ${point.sample.account_cohort_id} · headers observed ${formatCapacityTimestamp(point.observedAt)} · sampled ${formatCapacityTimestamp(point.sample.sampled_at_ms)} · ${point.sample.state} · reset ${formatCapacityTimestamp(point.window.reset_at_ms)}`;
+      title.textContent = `${series.label} · ${quotaPercentFormatter.format(point.remainingPercent)}% remaining · ${point.sample.account_id} · cohort ${point.sample.account_cohort_id} · ${point.sample.usage_snapshot ? "usage" : "headers"} observed ${formatCapacityTimestamp(point.observedAt)} · sampled ${formatCapacityTimestamp(point.sample.sampled_at_ms)} · ${point.sample.state} · reset ${formatCapacityTimestamp(point.window.reset_at_ms)}`;
       circle.appendChild(title);
       svg.appendChild(circle);
     }
@@ -1785,8 +1801,9 @@ const renderClaudeHistoryPaths = (svg, snapshot, interval, plot) => {
 const claudeHistorySummary = (snapshot, nowMs) => {
   const view = snapshot?.claude_history;
   if (!view || view.scan !== "ok") return "Claude history unavailable; no capacity inferred.";
+  const accountId = claudeHistoryAccountId(snapshot);
   const points = (Array.isArray(view.points) ? view.points : []).filter(
-    (point) => point.account_id === selectedClaudeHistoryAccountId
+    (point) => point.account_id === accountId && isClaudeHeaderCapacityPoint(point)
   );
   if (!points.length)
     return `Claude history: waiting for actual upstream quota observations; no backfill.${view.truncated ? " INCOMPLETE: scan truncated." : ""}`;
@@ -1794,7 +1811,7 @@ const claudeHistorySummary = (snapshot, nowMs) => {
     .map((point) => point.source_observed_at_ms)
     .filter((time) => typeof time === "number" && Number.isFinite(time));
   const last = times.length ? Math.max(...times) : null;
-  return `Claude: ${points.length} retained observations · headers last observed ${formatCapacityTimestamp(last)}${last === null ? " · observation time unknown" : nowMs - last > view.stale_after_ms ? " · stale" : ""}${view.truncated ? " · INCOMPLETE: scan truncated" : ""} · downsampled to at most 6 events per 15-minute account/cohort bucket; latest 200 markers per window. Observed is gateway header receipt, not the provider clock. Gaps and reset/cohort changes are not interpolated.`;
+  return `Claude: ${points.length} retained header observations · last observed ${formatCapacityTimestamp(last)}${last === null ? " · observation time unknown" : nowMs - last > view.stale_after_ms ? " · stale" : ""}${view.truncated ? " · INCOMPLETE: scan truncated" : ""} · downsampled to at most 6 events per 15-minute account/cohort bucket; latest 200 markers per window. Observed is gateway response-header receipt, not the provider clock. Gaps and reset/cohort changes are not interpolated.`;
 };
 
 const capacityChartFailureIsDowntime = (source) =>
@@ -2726,7 +2743,6 @@ const renderProviderCapacityChart = (snapshot, sources, fiveXxBuckets = []) => {
   range.dataset.capacityChartRange = "";
   range.textContent = "7 days";
   chartHeader.append(title, range);
-  renderClaudeHistorySelector(chartHeader, snapshot);
   figure.appendChild(chartHeader);
 
   const legend = document.createElement("div");
@@ -2735,7 +2751,7 @@ const renderProviderCapacityChart = (snapshot, sources, fiveXxBuckets = []) => {
   for (const series of [
     { key: "cached-input", label: "Cached input share" },
     ...CAPACITY_CHART_SERIES,
-    ...CLAUDE_CAPACITY_CHART_SERIES,
+    ...claudeCapacityChartSeries(snapshot, claudeHistoryAccountId(snapshot)),
     { key: "rate-limit-reset", label: "Reset" },
     { key: "openai-downtime", label: "Downtime" },
     { key: "inference-error", label: "Errors (5xx)" },
@@ -2747,6 +2763,7 @@ const renderProviderCapacityChart = (snapshot, sources, fiveXxBuckets = []) => {
     const swatch = document.createElement("span");
     swatch.dataset.capacityLegendSwatch = "";
     swatch.setAttribute("aria-hidden", "true");
+    if (series.key.startsWith("claude-meter-")) swatch.style.backgroundColor = "currentColor";
     const label = document.createElement("span");
     label.textContent = series.label;
     item.append(swatch, label);
@@ -4128,11 +4145,11 @@ const refreshAccessOverview = async () => {
   updateAccessPubkeysSummary();
 };
 
-const getKernelListMissingTokenMessage = () => "Paste an admin token to load GitHub access analytics and rate limits.";
+const getKernelListMissingTokenMessage = () => "Sign in with Passport to load GitHub access analytics and rate limits.";
 
 const getKernelListTargetChangedMessage = () => "Target changed. Loading GitHub access analytics and rate limits...";
 
-const getKernelQueueMissingTokenMessage = () => "Paste an admin token to load the rate limit queue.";
+const getKernelQueueMissingTokenMessage = () => "Sign in with Passport to load the rate limit queue.";
 
 const getKernelQueueTargetChangedMessage = () => "Target changed. Loading the rate limit queue...";
 
@@ -5684,7 +5701,7 @@ const refreshKernelPubKeys = async () => {
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
     setKernelPubKeysBadge("bad", "Missing token");
-    setKernelPubKeysMessage("Paste an admin token to load kernel attestation keys.");
+    setKernelPubKeysMessage("Sign in with Passport to load kernel attestation keys.");
     updateAccessPubkeysSummary();
     return;
   }
@@ -5734,7 +5751,7 @@ const ensureKernelPubKeysLoaded = async () => {
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
     setKernelPubKeysBadge("bad", "Missing token");
-    setKernelPubKeysMessage("Paste an admin token to load kernel attestation keys.");
+    setKernelPubKeysMessage("Sign in with Passport to load kernel attestation keys.");
     updateAccessPubkeysSummary();
     return;
   }
@@ -7610,7 +7627,7 @@ const refreshPasskeyUsers = async () => {
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
     setPasskeyUsersBadge("bad", "Missing token");
-    setPasskeyUsersMessage("Paste a fallback admin token to manage passkey users.");
+    setPasskeyUsersMessage("Sign in with Passport to manage passkey users.");
     return;
   }
 
@@ -7632,7 +7649,7 @@ const refreshPasskeyUsers = async () => {
       setPasskeyUsersBadge("bad", data?.error?.message ?? "Error");
       setPasskeyUsersMessage(
         res.status === 403
-          ? "Admin token required. Paste a Deno/admin token in the fallback token field."
+          ? "Administrator access required. Sign in with Passport again."
           : "Failed to load passkey users."
       );
       return;
@@ -8276,7 +8293,7 @@ const switchKeysView = (view) => {
   if (allKeys.length) {
     renderKeys(allKeys, view);
   } else {
-    setKeyListMessage("Paste an admin token to load API keys.");
+    setKeyListMessage("Sign in with Passport to load API keys.");
     setKeysBadge("unknown", "Not loaded");
   }
 };
@@ -8301,7 +8318,20 @@ const computeExpiresAtMs = (preset) => {
   }
 };
 
+const markAdminAuthUnavailable = () => {
+  setAuthBadge("unknown", "Connection unavailable. Retrying...");
+  if (!adminAccessState.checked) setPasskeyStatus("unknown", "Checking saved sign-in. Retrying...");
+  if (!document.hidden && !adminAuthRetryTimer) {
+    adminAuthRetryTimer = globalThis.setTimeout(() => {
+      adminAuthRetryTimer = 0;
+      void testAdminToken();
+    }, 5000);
+  }
+};
+
 const testAdminToken = async ({ allowBearerFallback = true } = {}) => {
+  globalThis.clearTimeout(adminAuthRetryTimer);
+  adminAuthRetryTimer = 0;
   const token = getAdminToken();
   setAuthBadge("unknown", "Checking...");
   try {
@@ -8327,13 +8357,23 @@ const testAdminToken = async ({ allowBearerFallback = true } = {}) => {
     }
     const { res, data } = authResult;
     if (!res.ok) {
+      if (res.status !== 401 && res.status !== 403) {
+        markAdminAuthUnavailable();
+        return false;
+      }
+      passportSessionActive = false;
       clearAdminSnapshotScope();
       setAuthBadge("bad", data?.error?.message ?? "Unauthorized");
       setAdminAccessState({ checked: true, isAdmin: false, isSuperAdmin: false });
       setSignedInState(false);
       return false;
     }
-    if (!data?.auth?.is_admin) {
+    if (typeof data?.auth?.is_admin !== "boolean") {
+      markAdminAuthUnavailable();
+      return false;
+    }
+    if (!data.auth.is_admin) {
+      passportSessionActive = false;
       clearAdminSnapshotScope();
       setAuthBadge("bad", "Not admin");
       setAdminAccessState({ checked: true, isAdmin: false, isSuperAdmin: false });
@@ -8341,6 +8381,7 @@ const testAdminToken = async ({ allowBearerFallback = true } = {}) => {
       return false;
     }
     const kind = data?.auth?.method?.kind;
+    passportSessionActive = kind === "passport_session";
     const isSuperAdmin = data?.auth?.is_super_admin === true;
     setAuthBadge("ok", kind ? `OK (${formatAuthMethodLabel(kind)})` : "OK");
     setAdminSnapshotScopeFromAuth(data.auth);
@@ -8353,10 +8394,7 @@ const testAdminToken = async ({ allowBearerFallback = true } = {}) => {
     });
     return true;
   } catch {
-    clearAdminSnapshotScope();
-    setAuthBadge("bad", "Offline");
-    setAdminAccessState({ checked: true, isAdmin: false, isSuperAdmin: false });
-    setSignedInState(false);
+    markAdminAuthUnavailable();
     return false;
   }
 };
@@ -8492,7 +8530,7 @@ const refreshKeys = async () => {
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
     setKeysBadge("bad", "Missing token");
-    setKeyListMessage("Paste an admin token to load API keys.");
+    setKeyListMessage("Sign in with Passport to load API keys.");
     updateAccessApiKeysSummary();
     return;
   }
@@ -8546,7 +8584,7 @@ const ensureKeysLoaded = async () => {
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
     setKeysBadge("bad", "Missing token");
-    setKeyListMessage("Paste an admin token to load API keys.");
+    setKeyListMessage("Sign in with Passport to load API keys.");
     return;
   }
   if (keysLoadedAt && Date.now() - keysLoadedAt < 10_000) {
@@ -9345,6 +9383,8 @@ const buildModelOption = (entry) => {
   if (providers.childElementCount) body.append(providers);
 
   const facts = [];
+  const endpoints = new Set((entry.providers ?? []).flatMap((provider) => provider.supported_endpoints ?? []));
+  if (endpoints.has("/v1/decisions")) facts.push("Decisions");
   const contextWindow = modelsPositiveTokenCount(entry.context_window_tokens);
   if (contextWindow) facts.push(`Context ${MODEL_TOKEN_FORMAT.format(contextWindow)}`);
   const reasoning = modelsReasoningFor(entry);
@@ -10132,7 +10172,6 @@ const invalidateProviderSelection = (message) => {
   providerSelectionSaveError = "";
   latestClaudeSubscription = null;
   selectedClaudeAccountId = null;
-  selectedClaudeHistoryAccountId = null;
   claudeAccountDrafts.clear();
   claudeAccessDirty = false;
   claudeAccessInput.value = "";
@@ -10912,11 +10951,11 @@ setKernelNewBadge("unknown", "Idle");
 setKernelQueueBadge("unknown", "Not loaded");
 setKernelPubKeysBadge("unknown", "Not loaded");
 setKernelPubKeyCreateBadge("unknown", "Idle");
-setKeyListMessage("Paste an admin token to load API keys.");
-setPasskeyUsersMessage("Paste a fallback admin token to manage passkey users.");
+setKeyListMessage("Sign in with Passport to load API keys.");
+setPasskeyUsersMessage("Sign in with Passport to manage passkey users.");
 setKernelListMessage(getKernelListMissingTokenMessage());
 setKernelQueueMessage(getKernelQueueMissingTokenMessage());
-setKernelPubKeysMessage("Paste an admin token to load kernel attestation keys.");
+setKernelPubKeysMessage("Sign in with Passport to load kernel attestation keys.");
 kernelFilterInput.value = "";
 kernelShowSelect.value = "all";
 switchKeysView("active");
@@ -10939,6 +10978,7 @@ const refreshAnalyticsView = () => {
 };
 
 bindForegroundRefresh(() => {
+  if (!getAdminToken()) void testAdminToken();
   if (!adminAccessState.isAdmin || !hasAdminCredential()) return;
   if (currentAdminView === "analytics") {
     // Resume refreshes the quota panels immediately instead of waiting for
@@ -10951,10 +10991,6 @@ bindForegroundRefresh(() => {
 
 authWidgetToggle.addEventListener("click", () => {
   setAuthWidgetOpen(authWidgetPanel.hidden, { focus: authWidgetPanel.hidden });
-});
-
-authGateOpen.addEventListener("click", () => {
-  setAuthWidgetOpen(true, { focus: true });
 });
 
 authWidgetClose.addEventListener("click", () => {
@@ -10999,15 +11035,15 @@ tokenInput.addEventListener("input", () => {
     setAdminAccessState({ checked: true, isAdmin: false, isSuperAdmin: false });
     setSignedInState(false);
     setKeysBadge("unknown", "Not loaded");
-    setKeyListMessage("Paste an admin token to load API keys.");
+    setKeyListMessage("Sign in with Passport to load API keys.");
     setPasskeyUsersBadge("unknown", "Not loaded");
-    setPasskeyUsersMessage("Paste a fallback admin token to manage passkey users.");
+    setPasskeyUsersMessage("Sign in with Passport to manage passkey users.");
     setKernelListBadge("unknown", "Not loaded");
     setKernelListMessage(getKernelListMissingTokenMessage());
     setKernelQueueBadge("unknown", "Not loaded");
     setKernelQueueMessage(getKernelQueueMissingTokenMessage());
     setKernelPubKeysBadge("unknown", "Not loaded");
-    setKernelPubKeysMessage("Paste an admin token to load kernel attestation keys.");
+    setKernelPubKeysMessage("Sign in with Passport to load kernel attestation keys.");
     allKeys = [];
     scheduleKeyExpiryRefresh();
     passkeyUsers = [];
@@ -11102,14 +11138,18 @@ signOutBtn.addEventListener("click", async () => {
       token: isRemoteRelayOrigin() && relaySessionActive ? "" : token,
       baseUrl: resolveBaseUrl(),
       corsOrigin: isRemoteRelayOrigin() ? globalThis.location.origin : "",
+      passportSession: passportSessionActive,
     });
-  } finally {
+    passportSessionActive = false;
     relaySessionActive = false;
     tokenInput.value = "";
     rememberTokenInput.checked = false;
     setAuthBadge("bad", "Missing token");
     setSignedInState(false);
     tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
+  } catch (error) {
+    setAuthBadge("bad", error?.message ?? "Sign-out is unavailable. Try again.");
+  } finally {
     signOutBtn.disabled = false;
   }
 });

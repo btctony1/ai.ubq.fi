@@ -4,9 +4,14 @@ use gateway_core::{
 };
 use gateway_schema::{
     prompt_cache,
-    source_request::{self, SourceRequestError},
+    source_request::{
+        cache_capability::validate_known_unsupported_prompt_cache,
+        error::SourceRequestError,
+        normalized::{normalize_chat_messages, normalize_responses_input},
+    },
 };
 use serde_json::{Value, json};
+type TestResult = Result<(), Box<dyn std::error::Error>>;
 fn raw(value: &str) -> SourceJson {
     SourceJson::parse(value).unwrap()
 }
@@ -32,22 +37,28 @@ fn check(
     input: &[SourceJson],
     key: &str,
 ) -> Result<(), SourceRequestError> {
-    let cap = cap.map(|value| SourceJson::from_serializable(value).unwrap());
-    source_request::validate_known_unsupported_prompt_cache(model, cap.as_ref(), body, input, key)
+    let cap = cap
+        .map(SourceJson::from_serializable)
+        .transpose()
+        .map_err(SourceRequestError::from_gateway)?;
+    validate_known_unsupported_prompt_cache(model, cap.as_ref(), body, input, key)
 }
 #[test]
-fn false_capability_preserves_lone_model_and_original_payload() {
+fn false_capability_preserves_lone_model_and_original_payload() -> TestResult {
     let model = JsString16::from_units(vec![0xd800]);
     let body = raw(r#"{"input":"\udfff","prompt_cache_key":"cache\ud800"}"#);
     let before = body.clone();
-    let input =
-        source_request::normalize_responses_input(Some(&body.object_entries().unwrap()[0].1))
-            .unwrap();
-    let error = check(&model, Some(&Value::Bool(false)), &body, &input, "input").unwrap_err();
+    let input = normalize_responses_input(Some(&body.object_entries()?[0].1))
+        .map_err(|error| error.diagnostic().clone())?;
+    let error = check(&model, Some(&Value::Bool(false)), &body, &input, "input")
+        .err()
+        .ok_or("expected fixture error")?;
     assert_eq!(param(&error), "prompt_cache_key");
     assert_eq!(body, before);
-    let actual = source::member(error.body(), "error").unwrap();
-    let message = source::string(&source::member(&actual, "message").unwrap()).unwrap();
+    let actual = source::member(error.body(), "error").ok_or("missing fixture value")?;
+    let message =
+        source::string(&source::member(&actual, "message").ok_or("missing fixture value")?)
+            .ok_or("missing fixture value")?;
     let mut expected = "Prompt caching is not supported for model '"
         .encode_utf16()
         .collect::<Vec<_>>();
@@ -55,6 +66,7 @@ fn false_capability_preserves_lone_model_and_original_payload() {
     expected.extend("'.".encode_utf16());
     assert_eq!(message.as_units(), expected);
     assert_eq!(error.status, 400);
+    Ok(())
 }
 #[test]
 fn missing_other_provider_and_omitted_controls_remain_unknown() {
@@ -102,33 +114,42 @@ fn selected_control_refusals_follow_source_precedence() {
     }
 }
 #[test]
-fn normalized_breakpoint_detection_keeps_original_response_and_chat_paths() {
+fn normalized_breakpoint_detection_keeps_original_response_and_chat_paths() -> TestResult {
     let model = JsString16::from_utf8("model");
     let cap = capabilities(json!({"explicit_breakpoints":false}));
     let body = raw(
         r#"{"input":["prefix",{"type":"input_text","text":"\ud800","prompt_cache_breakpoint":{"mode":"explicit"}}]}"#,
     );
-    let input =
-        source_request::normalize_responses_input(source::member(&body, "input").as_ref()).unwrap();
+    let input = normalize_responses_input(source::member(&body, "input").as_ref())
+        .map_err(|error| error.diagnostic().clone())?;
     assert_eq!(
-        param(&check(&model, Some(&cap), &body, &input, "input").unwrap_err()),
+        param(
+            &check(&model, Some(&cap), &body, &input, "input")
+                .err()
+                .ok_or("expected fixture error")?
+        ),
         "input[1].prompt_cache_breakpoint"
     );
     // A raw marker is ignored unless the actual normalized input retains it.
-    check(&model, Some(&cap), &body, &[], "input").unwrap();
+    check(&model, Some(&cap), &body, &[], "input").map_err(|error| error.diagnostic().clone())?;
     let body = raw(
         r#"{"messages":[{"role":"developer","content":[{"type":"text","text":"\udfff","prompt_cache_breakpoint":{"mode":"explicit"}}]}]}"#,
     );
     let input =
-        source_request::normalize_chat_messages(&source::member(&body, "messages").unwrap())
-            .unwrap();
+        normalize_chat_messages(&source::member(&body, "messages").ok_or("missing fixture value")?)
+            .map_err(|error| error.diagnostic().clone())?;
     assert_eq!(
-        param(&check(&model, Some(&cap), &body, &input.input, "messages").unwrap_err()),
+        param(
+            &check(&model, Some(&cap), &body, &input.input, "messages")
+                .err()
+                .ok_or("expected fixture error")?
+        ),
         "messages[0].content[0].prompt_cache_breakpoint"
     );
+    Ok(())
 }
 #[test]
-fn block_type_and_function_output_paths_use_the_same_source_policy() {
+fn block_type_and_function_output_paths_use_the_same_source_policy() -> TestResult {
     let model = JsString16::from_utf8("model");
     let cap = capabilities(
         json!({"explicit_breakpoints":true,"breakpoint_block_types":{"responses":["input_image"]}}),
@@ -136,12 +157,17 @@ fn block_type_and_function_output_paths_use_the_same_source_policy() {
     let body = raw(
         r#"{"input":[{"type":"function_call_output","call_id":"\ud800","output":[{"type":"input_text","text":"\udfff","prompt_cache_breakpoint":{"mode":"explicit"}}]}]}"#,
     );
-    let input =
-        source_request::normalize_responses_input(source::member(&body, "input").as_ref()).unwrap();
+    let input = normalize_responses_input(source::member(&body, "input").as_ref())
+        .map_err(|error| error.diagnostic().clone())?;
     assert_eq!(
-        param(&check(&model, Some(&cap), &body, &input, "input").unwrap_err()),
+        param(
+            &check(&model, Some(&cap), &body, &input, "input")
+                .err()
+                .ok_or("expected fixture error")?
+        ),
         "input[0].output[0].prompt_cache_breakpoint"
     );
+    Ok(())
 }
 #[test]
 fn legacy_scalar_wrapper_delegates_without_error_envelope_change() {
@@ -165,25 +191,30 @@ fn legacy_scalar_wrapper_delegates_without_error_envelope_change() {
 }
 
 #[test]
-fn opaque_other_provider_does_not_hide_current_provider_capabilities() {
+fn opaque_other_provider_does_not_hide_current_provider_capabilities() -> TestResult {
     let cap = raw(
         r#"{"version":1,"providers":[{"id":"\ud800","controls":{"source":"catalog","verified_at_ms":1,"key":true}},{"id":"codex_chatgpt","controls":{"source":"catalog","verified_at_ms":1,"key":false}}]}"#,
     );
-    let normalized = prompt_cache::normalize_capabilities_source(Some(&cap)).unwrap();
-    let providers = source::array(&source::member(&normalized, "providers").unwrap()).unwrap();
+    let normalized =
+        prompt_cache::normalize_capabilities_source(Some(&cap)).ok_or("missing fixture value")?;
+    let providers =
+        source::array(&source::member(&normalized, "providers").ok_or("missing fixture value")?)
+            .ok_or("missing fixture value")?;
     assert_eq!(
-        source::string(&source::member(&providers[0], "id").unwrap())
-            .unwrap()
+        source::string(&source::member(&providers[0], "id").ok_or("missing fixture value")?)
+            .ok_or("missing fixture value")?
             .as_units(),
         &[0xd800]
     );
-    let error = source_request::validate_known_unsupported_prompt_cache(
+    let error = validate_known_unsupported_prompt_cache(
         &JsString16::from_utf8("model"),
         Some(&cap),
         &raw(r#"{"prompt_cache_key":"key"}"#),
         &[],
         "input",
     )
-    .unwrap_err();
+    .err()
+    .ok_or("expected fixture error")?;
     assert_eq!(param(&error), "prompt_cache_key");
+    Ok(())
 }

@@ -1,7 +1,10 @@
 //! Source key families encoded by the single shared tuple codec; no JSON identity fallback.
+use gateway_core::error::GatewayError;
 use gateway_core::state::RecordKey;
-use gateway_core::tuple_key::ScalarKeyPart::{Number, String as Text};
-use gateway_core::tuple_key::{ScalarKeyPart, TupleKey};
+use gateway_core::tuple_key::{
+    ScalarKeyPart::{self, Number, String as Text},
+    TupleKey,
+};
 
 fn key(parts: &[ScalarKeyPart<'_>]) -> RecordKey {
     TupleKey::from_scalar_parts(parts).to_record_key()
@@ -121,7 +124,7 @@ pub fn kernel_policy(owner: &str, repo: Option<&str>) -> RecordKey {
 pub fn kernel_policy_source(
     owner: &gateway_core::js_string::JsString16,
     repo: Option<&gateway_core::js_string::JsString16>,
-) -> Result<RecordKey, gateway_core::GatewayError> {
+) -> Result<RecordKey, GatewayError> {
     kernel_source_key(
         if repo.is_some() {
             "repo_policy"
@@ -137,7 +140,7 @@ fn kernel_source_key(
     family: &str,
     owner: &gateway_core::js_string::JsString16,
     repo: Option<&gateway_core::js_string::JsString16>,
-) -> Result<RecordKey, gateway_core::GatewayError> {
+) -> Result<RecordKey, GatewayError> {
     use gateway_core::tuple_key::KeyPart;
     let mut parts = vec![
         KeyPart::String("uos_ai".into()),
@@ -191,7 +194,7 @@ pub fn kernel_window(owner: &str, repo: Option<&str>) -> RecordKey {
 pub fn kernel_window_source(
     owner: &gateway_core::js_string::JsString16,
     repo: Option<&gateway_core::js_string::JsString16>,
-) -> Result<RecordKey, gateway_core::GatewayError> {
+) -> Result<RecordKey, GatewayError> {
     kernel_source_key(
         if repo.is_some() {
             "repo_window"
@@ -354,7 +357,7 @@ pub fn paid_rollup_source(
     model: &gateway_core::model::ModelId,
     provider: &gateway_core::js_string::JsString16,
     shard: f64,
-) -> Result<RecordKey, gateway_core::GatewayError> {
+) -> Result<RecordKey, GatewayError> {
     use gateway_core::tuple_key::KeyPart;
     Ok(TupleKey::from_parts(&[
         KeyPart::String("uos_ai".into()),

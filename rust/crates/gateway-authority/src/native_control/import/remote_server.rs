@@ -1,8 +1,15 @@
 //! Finite original-import phases. Authentication and coherent authority reads,
 //! never request DATA, select the actual one-use operation/start permission.
-use super::super::rows::{GenerationEffect, Phase};
-use super::*;
-use gateway_auth::native_import::authority::{ImportCompletionData, ImportCompletionModelsData};
+use super::super::receiver::NativeRenewalAuthority;
+use super::super::rows::{self, GenerationEffect, Phase};
+use super::super::{NativeRenewalCancellation, actor};
+use super::action::ImportActionRow;
+use super::custody_session::ImportCustodyStartedRequest;
+use super::effects::{self, NativeImportMode};
+use super::remote_state::{self, ImportActionState};
+use super::{publication, publication_current, unavailable};
+use crate::store::TokenSource;
+use gateway_auth::native_import::{NativeImportKind, NativeImportMetadata};
 use gateway_auth::{
     native::NATIVE_RENEWAL_AUTHORITY_PATH,
     native_auth::{
@@ -10,11 +17,13 @@ use gateway_auth::{
     },
     native_import::authority::{
         IMPORT_STARTED_OPERATION, ImportAuthorityClaimMode, ImportAuthorityCommand as Command,
-        ImportAuthorityReplyData as Reply, ImportAuthorityRequestData as Request,
-        ImportAuthorityResult as ResultData, ImportAuthorityStateData as State,
+        ImportAuthorityRequestData as Request, ImportAuthorityStateData as State,
         ImportAuthorityTerminalData, ImportCustodyStartedReplyData, ImportCustodyStartedWire,
+        completion::{ImportCompletionData, ImportCompletionModelsData},
+        result::{ImportAuthorityReplyData as Reply, ImportAuthorityResult as ResultData},
     },
 };
+use gateway_core::{error::GatewayError, state::AuthorityStore};
 use gateway_schema::{catalog_store, snapshot::ModelSnapshot};
 #[derive(Clone, Copy)]
 enum TerminalProjection {

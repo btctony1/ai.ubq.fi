@@ -1,11 +1,10 @@
 //! Trusted platform collation only; alias policy remains in the shared Rust resolver.
+use gateway_core::{error::GatewayError, js_string::JsString16};
+use gateway_schema::aliases::SourceStringCollator;
 use std::{
     cmp::Ordering,
     sync::{Arc, OnceLock},
 };
-
-use gateway_core::{GatewayError, js_string::JsString16};
-use gateway_schema::aliases::SourceStringCollator;
 #[cfg(target_arch = "wasm32")]
 use worker::{
     js_sys::{Array, Intl, JsString, Object},

@@ -1,6 +1,9 @@
 use super::*;
-use crate::{NativeRevision, NativeValue, SourceJson};
-use gateway_core::tuple_key::{BigIntKey, KeyPart};
+use crate::native_capture::{NativeRevision, NativeValue};
+use gateway_core::{
+    source_json::SourceJson,
+    tuple_key::{BigIntKey, KeyPart},
+};
 use std::path::{Path, PathBuf};
 
 struct Scratch(PathBuf);

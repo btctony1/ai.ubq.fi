@@ -1,9 +1,9 @@
 use super::*;
+use crate::store::Transaction;
 use crate::{
     keys,
     paid_control::{PAID_CONTROL_CONFIG_VERSION, PaidControlConfig, PaidControlOwner},
-    routing::SubscriptionPool,
-    store::Transaction,
+    routing_types::SubscriptionPool,
 };
 use gateway_auth::{
     native_import::NativeImportTarget,

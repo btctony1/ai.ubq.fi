@@ -1,14 +1,19 @@
+use crate::{
+    audit,
+    operations::{AdminHost, PaidKeyFields},
+    routes::AdminOperation,
+    source_input as input,
+};
 use gateway_auth::{
-    AuthHost, AuthPrincipal, AuthResponse,
     api_keys::{self, ApiKeyHashRecord, WEEK_MS},
-    conflict,
     crypto::{Secret, sha256_base64url, uuid_from_random},
-    invalid, store,
+    store,
+    types::{AuthHost, AuthPrincipal, AuthResponse, conflict, invalid},
 };
 use gateway_authority::quota::{ApiKeyPolicy as AuthorityKeyPolicy, ApiUsageWindow};
-use gateway_core::identity::ApiKeyId;
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
+    identity::ApiKeyId,
     js_string::JsString16,
     model::ModelId,
     source_control::{decode_source_control_record, encode_source_control_record},
@@ -17,8 +22,6 @@ use gateway_core::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-
-use crate::{AdminHost, AdminOperation, PaidKeyFields, audit, source_input as input};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ApiKeyRecord {
@@ -30,7 +33,7 @@ pub struct ApiKeyRecord {
     pub created_at_ms: i64,
     pub paid_fallback_model_ids: Vec<ModelId>,
     pub paid_fallback_quota_per_credit: i64,
-    #[serde(default, with = "gateway_authority::source_model_map")]
+    #[serde(default, with = "gateway_authority::paid_types::model_map")]
     pub paid_fallback_max_exposure_microcredits: std::collections::BTreeMap<ModelId, i64>,
     pub paid_fallback_pricing_checked_at_ms: Option<i64>,
 }
@@ -83,7 +86,7 @@ fn usage_window(id: &str, window: i64, now: i64) -> ApiUsageWindow {
 /// Complete named DTO decode; callers retain their original key/expiry/currentness guards.
 pub fn decode_record(record: &StoredRecord) -> Result<ApiKeyRecord, GatewayError> {
     let source = decode_source_control_record(record)?;
-    if !gateway_admin_data::migration::audit::valid_source_key_policy(&source, true) {
+    if !gateway_admin_data::migration::audit::keys::valid_source_key_policy(&source, true) {
         return Err(GatewayError::unavailable(
             "API key state is corrupt",
             "api_key_policy_invalid",

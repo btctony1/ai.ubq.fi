@@ -1,6 +1,9 @@
 //! Envelope and finite controls are separate source phases, never transcript scalarization.
-use super::value::{Value, keyed_error, unknown_key};
-use super::{SourceRequestError, member};
+use super::{
+    error::SourceRequestError,
+    member,
+    value::{Value, keyed_error, unknown_key},
+};
 use crate::{
     allowlists::*,
     request::{RequestExtensions, RequestSurface},

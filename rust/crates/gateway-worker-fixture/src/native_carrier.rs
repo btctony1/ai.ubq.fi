@@ -1,20 +1,17 @@
 //! Fixed controlled HTTPS composition of the shipping native transport. The
 //! runner maps this origin to a local TLS endpoint with the synthetic native CA.
-use std::collections::BTreeSet;
-
-use gateway_auth::{
-    GatewayError,
-    native_auth::{NativeCapability, NativeTransportIdentity},
-};
-use gateway_publication::transport::PublicationReceiver;
+use gateway_auth::native_auth::{NativeCapability, NativeTransportIdentity};
+use gateway_core::error::GatewayError;
+use gateway_publication_transport::transport::PublicationReceiver;
 use gateway_worker_fixture_setup::initialize;
+use std::collections::BTreeSet;
 use worker::{Context, Env, Request};
 
 pub(super) async fn fetch(
     request: Request,
     env: Env,
     context: Context,
-) -> worker::Result<gateway_worker::GatewayResponse> {
+) -> worker::Result<gateway_worker::response::GatewayResponse> {
     let result = async {
         let identity = NativeTransportIdentity::new(
             "fixture-matrix-key".into(),
@@ -36,8 +33,10 @@ pub(super) async fn fetch(
         )?;
         let store = gateway_worker::authority::RemoteAuthorityStore::from_env(&env)?;
         initialize(&store, &identity, &inputs, &receiver, "codex").await?;
-        let bindings =
-            gateway_worker::NativeBindings::configured_https("https://localhost", identity)?;
+        let bindings = gateway_worker::native_host::NativeBindings::configured_https(
+            "https://localhost",
+            identity,
+        )?;
         Ok((receiver, bindings))
     }
     .await;

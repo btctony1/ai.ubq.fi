@@ -1,6 +1,6 @@
 //! Data-only local-origin custody. No row or imported nonce mints a live handle.
 use crate::{
-    GatewayError,
+    error::GatewayError,
     lifecycle::{BodyOutcome, DeliveryOutcome, ReaderTermination},
 };
 use crate::{source_json::SourceJson, source_serialization as source};

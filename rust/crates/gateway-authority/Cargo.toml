@@ -15,6 +15,9 @@ serde_json.workspace = true
 # Reuse the exact SHA-256 implementation already pinned in tools/native-kv/Cargo.lock.
 sha2 = "=0.11.0"
 
+[dev-dependencies]
+gateway-routing-runtime-test-support.workspace = true
+
 [target.'cfg(unix)'.dependencies]
 getrandom = "=0.4.3"
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }

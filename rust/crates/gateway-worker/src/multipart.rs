@@ -1,11 +1,14 @@
 //! Source image-edit parsing using bounded original bytes and real FormData.
 use gateway_core::{
-    GatewayError, js_string::JsString16, source_json::SourceJson, source_serialization as source,
+    error::GatewayError, js_string::JsString16, source_json::SourceJson,
+    source_serialization as source,
 };
 use gateway_providers::extras::MultipartFile;
-use worker::js_sys::{Array, Reflect, Uint8Array, try_iter};
-use worker::wasm_bindgen::{JsCast, JsValue};
-use worker::{FormData, Method, Request, RequestInit};
+use worker::{
+    FormData, Method, Request, RequestInit,
+    js_sys::{Array, Reflect, Uint8Array, try_iter},
+    wasm_bindgen::{JsCast, JsValue},
+};
 
 pub const IMAGE_JSON_BYTES: usize = (50_usize * 1024 * 1024).div_ceil(3) * 4 + 1024 * 1024;
 pub const MULTIPART_BYTES: usize = 64 * 1024 * 1024;

@@ -1,11 +1,11 @@
 //! Explicit managed-owner projection. No refresh bytes can be obtained from
 //! this type, and external access-only credentials never become managed.
 use crate::{
-    GatewayError,
     crypto::Secret,
     native_credentials::{NativeGeneration, native_refresh_time_ns},
     provider_credentials::{codex_credential_identity, valid_native_generation},
 };
+use gateway_core::error::GatewayError;
 
 /// No Debug, Serialize or Deserialize: only the fixed private managed publisher
 /// may encode its access field. A projection itself is never write authority.

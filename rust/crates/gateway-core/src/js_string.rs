@@ -1,5 +1,5 @@
 //! A JavaScript string is a sequence of UTF16 code units, not necessarily scalar text.
-use crate::{GatewayError, source_json::SourceJson};
+use crate::{error::GatewayError, source_json::SourceJson};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use serde_json::value::RawValue;
 

@@ -1,6 +1,9 @@
 //! Source JSON composition only. Grammar/stringification policy belongs to core.
-use gateway_core::{js_string::JsString16, source_json::SourceJson, source_serialization as json};
-use gateway_schema::source_request::SourceRequestError;
+use gateway_core::{
+    error::GatewayError, js_string::JsString16, source_json::SourceJson,
+    source_serialization as json,
+};
+use gateway_schema::source_request::error::SourceRequestError;
 use serde::Serialize;
 
 pub(crate) type Result<T> = std::result::Result<T, SourceRequestError>;
@@ -116,15 +119,14 @@ pub(crate) fn join(parts: &[JsString16], separator: &str) -> JsString16 {
     JsString16::from_units(units)
 }
 /// Only legacy callers that supplied an actual scalar Value receive a scalar error.
-pub(crate) fn scalar_error(error: SourceRequestError) -> gateway_core::GatewayError {
+pub(crate) fn scalar_error(error: SourceRequestError) -> GatewayError {
     let body = get(error.body(), "error");
     let Some(message) = control(&get(&body, "message")) else {
         return error.diagnostic().clone();
     };
     let kind = control(&get(&body, "type")).unwrap_or_else(|| "invalid_request_error".into());
     let code = control(&get(&body, "code"));
-    let mut scalar =
-        gateway_core::GatewayError::new(error.status, message, code.as_deref()).with_type(&kind);
+    let mut scalar = GatewayError::new(error.status, message, code.as_deref()).with_type(&kind);
     if let Some(param) = present(&body, "param") {
         scalar = scalar.with_param(control(&param).as_deref());
     }

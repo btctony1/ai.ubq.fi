@@ -24,6 +24,7 @@ gateway-native = { path = "../gateway-native" }
 sha2 = "=0.10.9"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+gateway-migration-test-support.workspace = true
 gateway-native = { path = "../gateway-native" }
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
 

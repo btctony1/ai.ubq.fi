@@ -1,7 +1,7 @@
 //! Native-private credential parsing/merge. Unrelated UTF16 data never passes through Value.
 use super::super::import_custody_protocol::unavailable;
 use gateway_auth::native_credentials::{NativeCredentials, parse_native_document};
-use gateway_core::{GatewayError, js_string::JsString16, source_json::SourceJson};
+use gateway_core::{error::GatewayError, js_string::JsString16, source_json::SourceJson};
 
 pub(super) fn member(
     document: &SourceJson,

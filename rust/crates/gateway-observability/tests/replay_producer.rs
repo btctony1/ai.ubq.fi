@@ -4,7 +4,7 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     query::{QueryPage, QueryRequest, QueryStore},
     source_json::SourceJson,

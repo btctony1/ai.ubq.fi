@@ -1,7 +1,7 @@
 //! Explicit source records: only these declared text fields may use ProfileV2 strings.
 use crate::{ledger::ErrorObservation, store, types::ObservabilityHost};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     source_control::{
         decode_source_control_record, encode_source_control_record, source_json_tree,

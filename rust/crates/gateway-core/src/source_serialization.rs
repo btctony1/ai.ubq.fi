@@ -1,6 +1,6 @@
 //! Shared JS JSON.stringify semantics lifted from frozen M31 text.rs.
 //! Grammar and UTF16 serialization remain SourceJson/JsString16; no I/O or storage codec is added.
-use crate::{GatewayError, js_string::JsString16, source_json::SourceJson};
+use crate::{error::GatewayError, js_string::JsString16, source_json::SourceJson};
 use std::collections::BTreeMap;
 fn fail() -> GatewayError {
     GatewayError::unavailable(
@@ -93,49 +93,51 @@ pub fn canonical(value: &SourceJson) -> Result<SourceJson, GatewayError> {
     let mut stack = vec![Write::Value(value.clone())];
     let mut out = String::new();
     while let Some(task) = stack.pop() {
-        match task {
-            Write::Bytes(s) => out.push_str(&s),
-            Write::Value(value) => {
-                let s = value.as_str();
-                match s.as_bytes().first() {
-                    Some(b'{') => {
-                        let fields = entries(&value).ok_or_else(fail)?;
-                        stack.push(Write::Bytes("}".into()));
-                        for (i, (k, v)) in fields.into_iter().enumerate().rev() {
-                            stack.push(Write::Value(v));
-                            stack.push(Write::Bytes(":".into()));
-                            stack.push(Write::Bytes(
-                                k.to_source_json().map_err(|_| fail())?.as_str().into(),
-                            ));
-                            if i > 0 {
-                                stack.push(Write::Bytes(",".into()));
-                            }
-                        }
-                        out.push('{');
+        let value = match task {
+            Write::Bytes(s) => {
+                out.push_str(&s);
+                continue;
+            }
+            Write::Value(value) => value,
+        };
+        let s = value.as_str();
+        match s.as_bytes().first() {
+            Some(b'{') => {
+                let fields = entries(&value).ok_or_else(fail)?;
+                stack.push(Write::Bytes("}".into()));
+                for (i, (k, v)) in fields.into_iter().enumerate().rev() {
+                    stack.push(Write::Value(v));
+                    stack.push(Write::Bytes(":".into()));
+                    stack.push(Write::Bytes(
+                        k.to_source_json().map_err(|_| fail())?.as_str().into(),
+                    ));
+                    if i > 0 {
+                        stack.push(Write::Bytes(",".into()));
                     }
-                    Some(b'[') => {
-                        let values = array(&value).ok_or_else(fail)?;
-                        stack.push(Write::Bytes("]".into()));
-                        for (i, v) in values.into_iter().enumerate().rev() {
-                            stack.push(Write::Value(v));
-                            if i > 0 {
-                                stack.push(Write::Bytes(",".into()));
-                            }
-                        }
-                        out.push('[');
+                }
+                out.push('{');
+            }
+            Some(b'[') => {
+                let values = array(&value).ok_or_else(fail)?;
+                stack.push(Write::Bytes("]".into()));
+                for (i, v) in values.into_iter().enumerate().rev() {
+                    stack.push(Write::Value(v));
+                    if i > 0 {
+                        stack.push(Write::Bytes(",".into()));
                     }
-                    Some(b'"') => out.push_str(quoted(&string(&value).ok_or_else(fail)?)?.as_str()),
-                    _ if matches!(s, "null" | "true" | "false") => out.push_str(s),
-                    _ => {
-                        let n = number(&value).ok_or_else(fail)?;
-                        if !n.is_finite() {
-                            out.push_str("null");
-                        } else if n == 0.0 {
-                            out.push('0');
-                        } else {
-                            out.push_str(ryu_js::Buffer::new().format(n));
-                        }
-                    }
+                }
+                out.push('[');
+            }
+            Some(b'"') => out.push_str(quoted(&string(&value).ok_or_else(fail)?)?.as_str()),
+            _ if matches!(s, "null" | "true" | "false") => out.push_str(s),
+            _ => {
+                let n = number(&value).ok_or_else(fail)?;
+                if !n.is_finite() {
+                    out.push_str("null");
+                } else if n == 0.0 {
+                    out.push('0');
+                } else {
+                    out.push_str(ryu_js::Buffer::new().format(n));
                 }
             }
         }

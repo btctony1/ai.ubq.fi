@@ -1,9 +1,11 @@
 //! Private source-session revision metadata, never a bearer or authorization proof.
-use gateway_core::state::{AuthorityStore, RecordKey, StoredRecord};
+use crate::{crypto::sha256_hex, passkeys::PasskeySession, store};
+use gateway_core::{
+    error::GatewayError,
+    state::{AuthorityStore, RecordKey, StoredRecord},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-
-use crate::{GatewayError, crypto::sha256_hex, passkeys::PasskeySession, store};
 
 pub const SESSION_DIGEST_DOMAIN: &[u8] = b"uos_ai:auth:session_revision_index:v1\0";
 

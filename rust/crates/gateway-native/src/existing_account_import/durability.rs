@@ -25,7 +25,7 @@ struct ReceiptWire {
 /// Native-only private proof of one actual durable file write and matching reread.
 /// No Debug/Clone/Serialize/Deserialize or public constructor.
 /// ```compile_fail
-/// use gateway_native::existing_account_import::DurableNativeImport;
+/// use gateway_native::existing_account_import::durability::DurableNativeImport;
 /// let forged: DurableNativeImport = serde_json::from_str("{}").unwrap();
 /// ```
 pub struct DurableNativeImport {
@@ -228,7 +228,7 @@ pub(super) fn recheck(
 #[cfg(test)]
 pub(super) fn issue_fixture(
     store: &ExistingAccountImportStore,
-    start: gateway_authority::native_control::import::NativeImportStart<'_>,
+    start: gateway_authority::native_control::import::effects::NativeImportStart<'_>,
     proof: &AuthenticatedNativeImport,
     original_body: &[u8],
     context: &crate::native_import::NativeImportContext<'_>,
@@ -349,7 +349,7 @@ pub(super) fn issue_fixture(
 /// It never accepts a stopped wire response, old disk marker or caller Boolean as permission.
 pub(super) fn persist_live(
     store: &ExistingAccountImportStore,
-    custody: &mut super::LiveImportCustody<'_>,
+    custody: &mut super::live_custody::LiveImportCustody<'_>,
     proof: &AuthenticatedNativeImport,
     original_body: &[u8],
     context: &crate::native_import::NativeImportContext<'_>,
@@ -416,7 +416,7 @@ pub(super) fn persist_live(
     };
     // Every check rereads the physical source as well as the live authenticated issuer.
     // Temporary and backup effects never require weakening the one-link auth invariant.
-    let checkpoint = |custody: &mut super::LiveImportCustody<'_>, expected: &[u8]| {
+    let checkpoint = |custody: &mut super::live_custody::LiveImportCustody<'_>, expected: &[u8]| {
         custody.check_live(store, proof, original_body, context)?;
         if read_fixed(&store.directory, "auth.json", AUTH_LIMIT)? != expected {
             return Err(unavailable());
@@ -477,7 +477,7 @@ pub(super) fn persist_live(
 /// This journal issues no receipt, publication, fresh start or retry permission.
 pub(super) fn retain_rotated(
     store: &ExistingAccountImportStore,
-    custody: &mut super::LiveImportCustody<'_>,
+    custody: &mut super::live_custody::LiveImportCustody<'_>,
     proof: &AuthenticatedNativeImport,
     original_body: &[u8],
     context: &crate::native_import::NativeImportContext<'_>,

@@ -1,26 +1,19 @@
 //! Routing credentials use the owner-derived current source and routing fences.
-use gateway_auth::{
-    AuthPrincipal,
-    crypto::Secret,
-    provider_credentials::{codex_source_pool_key, read_codex_source_pool},
-};
-use gateway_authority::{
-    paid::{PaidReservation, PaidUsage},
-    routing::CohortProof,
-};
-use gateway_core::{
-    GatewayError,
-    provider::{PaidProvider, UpstreamProvider},
-    state::{AuthorityStore, RecordKey},
-};
-use gateway_providers::{AuthMaterial, PrepareOptions};
+use crate::{authority::RemoteAuthorityStore, host::PlatformHost, storage::now_ms};
+use gateway_auth::crypto::Secret;
+use gateway_auth::provider_credentials::{codex_source_pool_key, read_codex_source_pool};
+use gateway_auth::types::AuthPrincipal;
+use gateway_authority::paid_types::{PaidReservation, PaidUsage};
+use gateway_authority::routing_types::CohortProof;
+use gateway_core::error::GatewayError;
+use gateway_core::provider::{PaidProvider, UpstreamProvider};
+use gateway_core::state::{AuthorityStore, RecordKey};
+use gateway_providers::types::{AuthMaterial, PrepareOptions};
 use gateway_routing_runtime::types::{
     ClaudeSelection, CodexRecovery, CredentialFence, CredentialRequest, PublishedCredential,
     RefreshOutcome, RoutingHost, direct_credential,
 };
 use worker::Env;
-
-use crate::{authority::RemoteAuthorityStore, host::PlatformHost, storage::now_ms};
 
 #[derive(Clone)]
 pub struct Host {
@@ -267,7 +260,7 @@ impl RoutingHost for Host {
             if self.cancelled() {
                 return Err(self.cancellation_error());
             }
-            crate::codex_admin_host::check_client(
+            crate::codex_admin_host::automatic::check_client(
                 &self.store,
                 &self.platform,
                 &self.platform.original,
@@ -276,7 +269,7 @@ impl RoutingHost for Host {
             )
             .await
         };
-        let authority = gateway_authority::Authority::with_clock(
+        let authority = gateway_authority::store::Authority::with_clock(
             self.store.clone(),
             crate::host::PlatformTokens,
             crate::host::PlatformClock,
@@ -288,7 +281,7 @@ impl RoutingHost for Host {
             &self.platform,
             self.context.clone(),
         );
-        let selection = crate::codex_capacity_recovery::observe(
+        let selection = gateway_capacity_recovery::observe(
             &self.store,
             &authority,
             observations.host(),
@@ -298,11 +291,13 @@ impl RoutingHost for Host {
         )
         .await?;
         let current_proof = match selection {
-            Some(gateway_authority::routing::RouteSelection::QuotaBlocked { proof, .. }) => proof,
+            Some(gateway_authority::routing_types::RouteSelection::QuotaBlocked {
+                proof, ..
+            }) => proof,
             Some(_) => return Ok(CodexRecovery::Reselect),
             None => proof.clone(),
         };
-        crate::codex_admin_host::recover_full_pool(
+        crate::codex_admin_host::automatic::recover_full_pool(
             &self.store,
             &self.platform,
             &self.platform.original,
@@ -423,7 +418,7 @@ impl Host {
         let configuration: gateway_authority::paid_control::PaidControlConfig =
             serde_json::from_value(configuration.json_value()?.clone())
                 .map_err(|_| unavailable("The paid control configuration is invalid."))?;
-        let binding = gateway_publication::control_publication::configured_paid_binding(
+        let binding = gateway_publication_policy::control_publication::configured_paid_binding(
             paid,
             &Secret::new(secret.clone()),
         );
@@ -481,7 +476,7 @@ fn unavailable(message: &str) -> GatewayError {
 // Never call this from paid_credential: receipt/currentness rechecks are read-only.
 async fn prepare_credential_catalog<
     S: gateway_core::query::QueryStore,
-    H: gateway_catalog_runtime::CatalogHost,
+    H: gateway_catalog_runtime::host::CatalogHost,
 >(
     provider: UpstreamProvider,
     store: &S,
@@ -499,5 +494,4 @@ async fn prepare_credential_catalog<
 }
 
 #[cfg(test)]
-#[path = "routing_paid_catalog_tests.rs"]
 mod paid_catalog_tests;

@@ -1,10 +1,8 @@
 //! Finite native/provider capabilities. No URL, process, path, SQL, or Bun relay interface.
-use gateway_auth::AuthResponse;
-use gateway_core::{GatewayError, model::ModelId, source_json::SourceJson};
+use gateway_auth::{native::NativeReadRequest, types::AuthResponse};
+use gateway_core::{error::GatewayError, model::ModelId, source_json::SourceJson};
 use serde_json::Value;
 use std::{collections::BTreeMap, future::Future};
-
-pub use gateway_auth::native::NativeReadRequest as NativeRequest;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SupervisorBriefTarget {
@@ -69,7 +67,7 @@ pub enum ProviderRequest {
 }
 
 pub struct ClaudeSubmission {
-    pub credential: Option<std::sync::Arc<crate::claude::ClaudeSourceSecret>>,
+    pub credential: Option<std::sync::Arc<crate::claude::source_secret::ClaudeSourceSecret>>,
     pub label: Option<gateway_core::js_string::JsString16>,
     /// None means unchanged; Some(None) explicitly removes the workspace pin.
     pub workspace_id: Option<Option<gateway_core::js_string::JsString16>>,
@@ -208,7 +206,7 @@ pub trait RuntimeCapabilities {
     }
     fn native(
         &self,
-        _: NativeRequest,
+        _: NativeReadRequest,
         _: Context,
     ) -> impl Future<Output = Result<AuthResponse, GatewayError>> {
         async { Err(unavailable("native_supervisor")) }

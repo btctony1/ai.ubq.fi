@@ -1,7 +1,7 @@
 //! Closed native-only DATA. A decoded frame never grants stop, mutation or completion.
 use crate::native_import::NativeImportContext;
-use gateway_authority::native_control::import::ImportCustodyStartedRequest;
-use gateway_core::GatewayError;
+use gateway_authority::native_control::import::custody_session::ImportCustodyStartedRequest;
+use gateway_core::error::GatewayError;
 use serde::{Deserialize, Serialize};
 use std::{
     io::{Read, Write},

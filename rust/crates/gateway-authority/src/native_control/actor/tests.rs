@@ -1,15 +1,12 @@
 use super::*;
+type TestResult = Result<(), Box<dyn std::error::Error>>;
 mod live_manual;
 mod native_import;
 mod renewal_v2;
-use gateway_auth::{
-    crypto::{Secret, sha256_base64url},
-    upstream::{AuthUpstreamRequest, AuthUpstreamResponse},
-};
-use gateway_core::{
-    identity::{ApiKeyId, PrincipalId, RequestId},
-    state::{AtomicTransition, CommitOutcome, RecordMutation, StoredRecord},
-};
+use gateway_auth::crypto::{Secret, sha256_base64url};
+use gateway_auth::upstream::{AuthUpstreamRequest, AuthUpstreamResponse};
+use gateway_core::identity::{ApiKeyId, PrincipalId, RequestId};
+use gateway_core::state::{AtomicTransition, CommitOutcome, RecordMutation, StoredRecord};
 use std::{
     collections::BTreeMap,
     future::Future,
@@ -19,7 +16,6 @@ use std::{
     },
     task::{Context, Poll, Waker},
 };
-
 fn run<F: Future>(future: F) -> F::Output {
     let mut context = Context::from_waker(Waker::noop());
     let mut future = std::pin::pin!(future);
@@ -59,7 +55,7 @@ impl Store {
         *self.race.lock().unwrap() = Some((key, value));
     }
 }
-impl crate::AuthorityClock for Store {
+impl crate::store::AuthorityClock for Store {
     fn now_ms(&self) -> Result<i64, GatewayError> {
         Ok(self.now.load(Ordering::SeqCst))
     }

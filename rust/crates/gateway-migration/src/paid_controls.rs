@@ -1,6 +1,10 @@
 //! Only the actual paid source/runtime families opt into this finite codec.
 //! Complete runtime DTO/key validation remains owned by gateway-authority.
-use crate::*;
+use crate::{Row, Transform, capture::SourceEntry, invalid, starts};
+use gateway_core::error::GatewayError;
+use gateway_core::source_json::SourceJson;
+use gateway_core::state::RecordKey;
+use gateway_core::state::StoredRecord;
 use gateway_core::{
     js_string::JsString16,
     source_control::{
@@ -9,6 +13,7 @@ use gateway_core::{
     source_serialization as source,
     value::PortableValue,
 };
+use serde_json::Value;
 
 fn required(value: &SourceJson, field: &str) -> Result<SourceJson, GatewayError> {
     source::member(value, field)
@@ -81,7 +86,7 @@ pub(crate) fn forward(row: &mut Row) -> Result<bool, GatewayError> {
         &source::object_keys(fields)?,
         row.record.expires_at_ms,
     )?;
-    gateway_authority::paid::decode_paid_attempt_record(&row.key, &record)?;
+    gateway_authority::paid::source_records::decode_paid_attempt_record(&row.key, &record)?;
     row.record = record;
     row.mapping.transform = Transform::PaidRequest;
     Ok(true)
@@ -92,11 +97,11 @@ pub(crate) fn inverse(
     record: &StoredRecord,
     original: Option<&SourceEntry>,
 ) -> Result<PortableValue, GatewayError> {
-    gateway_authority::paid::decode_paid_attempt_record(key, record)?;
+    gateway_authority::paid::source_records::decode_paid_attempt_record(key, record)?;
     let current = decode_source_control_record(record)?;
     let mut fields = match original {
         Some(original) => {
-            let tree = gateway_admin_data::profile::from_source_profile(&original.value)?;
+            let tree = gateway_admin_data::profile::source::from_source_profile(&original.value)?;
             source::entries(&tree.to_source_json()?)
                 .ok_or_else(|| invalid("Paid source sidecar is not an object"))?
         }

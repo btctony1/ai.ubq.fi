@@ -1,7 +1,11 @@
 //! Finite, already-authorized administrator catalog operations; no HTTP or credential ownership.
-use crate::{CatalogRuntime, CatalogState, host::*, state};
+use crate::{
+    CatalogRuntime,
+    host::{CatalogHost, CatalogProvider},
+    state,
+};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::QueryStore,
     source_control::encode_source_control_record,
     source_json::SourceJson,
@@ -9,16 +13,15 @@ use gateway_core::{
     state::{AtomicTransition, CommitOutcome, RecordMutation},
 };
 use gateway_schema::{
-    catalog::{
-        ProviderCatalog, build_catalog_snapshot, public_catalog as public_catalog_projection,
-    },
+    catalog::ProviderCatalog,
     catalog_store,
+    catalog_views::{build_catalog_snapshot, public_catalog as public_catalog_projection},
     runtime_config::{
         build_runtime_config, default_model, default_reasoning_effort, normalize_runtime_config,
     },
     selection::{ModelWhitelist, normalize_whitelist_ids},
     snapshot::{SnapshotOverrides, normalize_snapshot},
-    source_request::SourceRequestError,
+    source_request::error::SourceRequestError,
     util,
 };
 use serde::Serialize;
@@ -28,17 +31,14 @@ use std::{
     future::{Future, poll_fn},
     task::Poll,
 };
-
 const SAFE_KV_BYTES: usize = 60_000;
 const MAX_KV_BYTES: usize = 65_536;
-
 /// Source String.localeCompare is supplied by the existing host, never byte-order emulated.
 pub trait AdminCatalogHost: CatalogHost {
     /// Schedule the fixed optional OpenRouter refresh on the current request's lifetime.
     /// This must return immediately; the existing discovery deadline remains in force.
     fn warm_openrouter(&self);
 }
-
 pub enum AdminCatalogOperation {
     CodexModelsGet,
     CodexModelsSet { document: SourceJson },
@@ -47,7 +47,6 @@ pub enum AdminCatalogOperation {
     Catalog,
     Refresh,
 }
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdminCatalogResponse {
     pub status: u16,
@@ -133,7 +132,6 @@ fn whitelist(document: Option<&SourceJson>) -> SourceJson {
 fn provider_summary(snapshot: Option<&ProviderCatalog>) -> Value {
     json!({"models":snapshot.map(|s|s.models.len()).unwrap_or(0),"updated_at_ms":snapshot.and_then(|s|s.updated_at_ms)})
 }
-
 impl CatalogRuntime {
     /// Public catalog projection only; administrator operations retain separate authorization.
     pub async fn public_catalog<S: QueryStore, H: AdminCatalogHost>(
@@ -146,12 +144,11 @@ impl CatalogRuntime {
         let catalog = public_catalog_projection(&loaded.input, collator.as_ref()).map_err(lift)?;
         Ok(AdminCatalogResponse::json(catalog, true))
     }
-
     async fn admin_catalog_view<S: QueryStore, H: AdminCatalogHost>(
         &self,
         store: &S,
         host: &H,
-    ) -> Result<CatalogState, GatewayError> {
+    ) -> Result<state::CatalogState, GatewayError> {
         host.warm_openrouter();
         self.admin_discover(
             store,
@@ -168,7 +165,6 @@ impl CatalogRuntime {
         self.load_public_state(store, &publication, host.now_ms())
             .await
     }
-
     /// Call only after the application's existing administrator authorization succeeds.
     pub async fn admin_catalog<S: QueryStore, H: AdminCatalogHost>(
         &self,
@@ -243,7 +239,6 @@ impl CatalogRuntime {
             AdminCatalogOperation::Refresh => self.admin_refresh(store, host).await.map_err(lift),
         }
     }
-
     async fn admin_save_models<S: QueryStore, H: CatalogHost>(
         &self,
         store: &S,
@@ -395,7 +390,6 @@ impl CatalogRuntime {
             "Deno KV is not available; cannot persist model whitelist",
         )))
     }
-
     async fn admin_refresh<S: QueryStore, H: CatalogHost>(
         &self,
         store: &S,
@@ -440,7 +434,6 @@ impl CatalogRuntime {
             true,
         ))
     }
-
     async fn admin_discover<S: QueryStore, H: CatalogHost, const N: usize>(
         &self,
         store: &S,
@@ -486,7 +479,6 @@ impl CatalogRuntime {
         .await
     }
 }
-
 #[cfg(test)]
 mod source_error_tests {
     use super::*;

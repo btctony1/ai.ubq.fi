@@ -1,12 +1,14 @@
 //! Trusted offline/native preparation only; the common candidate never receives refresh material.
-use crate::*;
-use gateway_auth::{
-    managed_access::ManagedAccessProjection,
-    native_credentials::{NativeGeneration, OwnerFence, verify_fence},
-    provider_credentials::{
-        CodexNativeOwner, CodexSourcePool, ManagedNativeSource, parse_codex_source_pool,
-    },
+use crate::inverse::{ArtifactContext, CustodyRecord};
+use crate::native_capture::{NativeCapture, NativeEntry, NativeValue, prepare_native};
+use crate::{engine::PreparedAdoption, error::MigrationError, invalid, parts, starts, unavailable};
+use gateway_auth::managed_access::ManagedAccessProjection;
+use gateway_auth::native_credentials::{NativeGeneration, OwnerFence, verify_fence};
+use gateway_auth::provider_credentials::{
+    CodexNativeOwner, CodexSourcePool, ManagedNativeSource, parse_codex_source_pool,
 };
+use gateway_core::error::GatewayError;
+use gateway_core::tuple_key::TupleKey;
 use gateway_core::{query::QueryStore, value::PortableValue};
 use std::future::Future;
 
@@ -168,7 +170,7 @@ pub async fn export_native_with_custody<S: QueryStore, H: NativeCustody>(
     now_ms: i64,
     host: &H,
 ) -> Result<LocalNativeCapture, MigrationError> {
-    let source = crate::export_native_latest(store, now_ms).await?;
+    let source = crate::native_inverse::export_native_latest(store, now_ms).await?;
     reconstruct_native(store, source, host).await
 }
 

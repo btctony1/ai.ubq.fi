@@ -304,6 +304,53 @@ fn value_starts(s: &[u16], key: Key) -> Vec<usize> {
 fn token_character(c: u16) -> bool {
     ascii(c) || [46, 126, 43, 47, 61, 45].contains(&c)
 }
+fn private_key_end(s: &[u16], at: usize) -> Option<usize> {
+    let mut head = at + 11;
+    while head < s.len() && ((65..=90).contains(&s[head]) || s[head] == 32) {
+        head += 1;
+    }
+    // The greedy label includes PRIVATE KEY; validate the complete header.
+    if head < 11
+        || s.get(head..head + 5) != Some(&[45, 45, 45, 45, 45])
+        || !String::from_utf16_lossy(&s[at + 11..head]).ends_with("PRIVATE KEY")
+    {
+        return None;
+    }
+    for close in head + 5..s.len() {
+        if starts(s, close, "-----END ") {
+            let mut label = close + 9;
+            while label < s.len() && ((65..=90).contains(&s[label]) || s[label] == 32) {
+                label += 1;
+            }
+            if starts(s, label, "-----")
+                && String::from_utf16_lossy(&s[close + 9..label]).ends_with("PRIVATE KEY")
+            {
+                return Some(label + 5);
+            }
+        }
+    }
+    None
+}
+fn prefixed_token_end(
+    s: &[u16],
+    at: usize,
+    prefixes: &[&str],
+    character: fn(u16) -> bool,
+) -> Option<usize> {
+    for prefix in prefixes {
+        if !starts(s, at, prefix) {
+            continue;
+        }
+        let mut end = at + prefix.len();
+        while end < s.len() && character(s[end]) {
+            end += 1;
+        }
+        if end - at - prefix.len() >= 12 {
+            return Some(end);
+        }
+    }
+    None
+}
 fn token_spans(s: &[u16], rule: usize) -> Vec<Span> {
     let mut spans = Vec::new();
     let mut at = 0;
@@ -312,35 +359,7 @@ fn token_spans(s: &[u16], rule: usize) -> Vec<Span> {
         let mut end = None;
         match rule {
             0 if starts(s, at, "-----BEGIN ") => {
-                let mut head = at + 11;
-                while head < s.len() && ((65..=90).contains(&s[head]) || s[head] == 32) {
-                    head += 1;
-                }
-                // The greedy label includes PRIVATE KEY; validate the complete header.
-                if head >= 11
-                    && s.get(head..head + 5) == Some(&[45, 45, 45, 45, 45])
-                    && String::from_utf16_lossy(&s[at + 11..head]).ends_with("PRIVATE KEY")
-                {
-                    let mut close = head + 5;
-                    while close < s.len() {
-                        if starts(s, close, "-----END ") {
-                            let mut label = close + 9;
-                            while label < s.len()
-                                && ((65..=90).contains(&s[label]) || s[label] == 32)
-                            {
-                                label += 1;
-                            }
-                            if starts(s, label, "-----")
-                                && String::from_utf16_lossy(&s[close + 9..label])
-                                    .ends_with("PRIVATE KEY")
-                            {
-                                end = Some(label + 5);
-                                break;
-                            }
-                        }
-                        close += 1;
-                    }
-                }
+                end = private_key_end(s, at);
             }
             1 if boundary && (starts(s, at, "Bearer") || starts(s, at, "bearer")) => {
                 let token = skip(s, at + 6);
@@ -355,32 +374,17 @@ fn token_spans(s: &[u16], rule: usize) -> Vec<Span> {
                 }
             }
             2 if boundary => {
-                for prefix in ["sk-", "ghp-", "gho-", "ghu-", "ghs-", "dsk-"] {
-                    if starts(s, at, prefix) {
-                        let mut e = at + prefix.len();
-                        while e < s.len() && (ascii(s[e]) || s[e] == 45) {
-                            e += 1;
-                        }
-                        if e - at - prefix.len() >= 12 {
-                            end = Some(e);
-                            break;
-                        }
-                    }
-                }
+                end = prefixed_token_end(
+                    s,
+                    at,
+                    &["sk-", "ghp-", "gho-", "ghu-", "ghs-", "dsk-"],
+                    |c| ascii(c) || c == 45,
+                );
             }
             3 => {
-                for prefix in ["ghp_", "gho_", "ghu_", "ghs_"] {
-                    if starts(s, at, prefix) {
-                        let mut e = at + prefix.len();
-                        while e < s.len() && s[e] <= 127 && (s[e] as u8).is_ascii_alphanumeric() {
-                            e += 1;
-                        }
-                        if e - at - prefix.len() >= 12 {
-                            end = Some(e);
-                            break;
-                        }
-                    }
-                }
+                end = prefixed_token_end(s, at, &["ghp_", "gho_", "ghu_", "ghs_"], |c| {
+                    c <= 127 && (c as u8).is_ascii_alphanumeric()
+                });
             }
             4 if starts(s, at, "github_pat_") => {
                 let mut e = at + 11;
@@ -434,16 +438,15 @@ fn scalar_spans(s: &[u16], keys: &[Key], closed: bool) -> Vec<Span> {
     let mut quoted_run = (0, 0);
     for key in keys {
         for at in value_starts(s, *key) {
-            if s.get(at) == Some(&39) {
-                for yaml in [true, false] {
-                    if let Some(end) = quoted_end(s, at, closed, yaml, true)
-                        && end > at
-                    {
-                        spans.push(Span {
-                            start: key.start,
-                            end,
-                        });
-                    }
+            for yaml in [true, false] {
+                if s.get(at) == Some(&39)
+                    && let Some(end) = quoted_end(s, at, closed, yaml, true)
+                    && end > at
+                {
+                    spans.push(Span {
+                        start: key.start,
+                        end,
+                    });
                 }
             }
             if closed || at == s.len() {
@@ -549,14 +552,12 @@ fn bracketed(s: &[u16], openings: &[(usize, usize)], r: Reading, closed: bool) -
             }
             let mut ends = vec![None; s.len() + 2];
             for i in (0..s.len()).rev() {
-                ends[i] = if s[i] == 92 && !(quote == 39 && r.yaml) {
+                ends[i] = if (s[i] == 92 && !(quote == 39 && r.yaml))
+                    || (s[i] == quote && quote == 39 && s.get(i + 1) == Some(&39))
+                {
                     ends[i + 2]
                 } else if s[i] == quote {
-                    if quote == 39 && s.get(i + 1) == Some(&39) {
-                        ends[i + 2]
-                    } else {
-                        Some(i + 1)
-                    }
+                    Some(i + 1)
                 } else {
                     ends[i + 1]
                 };

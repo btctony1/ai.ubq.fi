@@ -1,7 +1,6 @@
 //! Real platform primitives for request-owned observational reads and writes.
 use gateway_admin_runtime::capabilities::Context;
-use gateway_core::GatewayError;
-use gateway_core::identity::RequestId;
+use gateway_core::{error::GatewayError, identity::RequestId};
 use gateway_observability::{
     ObservabilityRuntime, ObservabilityState, host_types::BuildIdentity, replay_crypto::ReplayBody,
     types::ObservabilityHost,
@@ -10,13 +9,9 @@ use std::{
     cell::{Cell, RefCell},
     rc::Rc,
 };
-#[path = "observability_admin.rs"]
 mod admin;
-#[path = "observability_diagnostics.rs"]
 mod diagnostics;
-#[path = "observability_inventory.rs"]
 mod inventory;
-#[path = "observability_probe.rs"]
 mod probe;
 
 thread_local! {static STATE:ObservabilityState=ObservabilityState::default();}
@@ -144,9 +139,9 @@ fn bind_request(
     ObservabilityRuntime::with_state(store, host, shared_state())
 }
 /// Source /health is release liveness and does no provider or authority I/O.
-pub fn health_response() -> Result<gateway_auth::AuthResponse, GatewayError> {
+pub fn health_response() -> Result<gateway_auth::types::AuthResponse, GatewayError> {
     let identity = Host.build_identity()?;
-    let mut response = gateway_auth::AuthResponse::json(
+    let mut response = gateway_auth::types::AuthResponse::json(
         200,
         serde_json::json!({"status":"available","release":{"git_sha":identity.git_sha,"deployment_id":identity.deployment_id}}),
     );
@@ -348,7 +343,7 @@ impl ObservabilityHost for RequestHost {
         &self,
         accounts: &[gateway_observability::host_types::CapacityAccountRef],
     ) -> Result<gateway_authority::capacity::CodexCapacityObservationFence, GatewayError> {
-        let authority = gateway_authority::Authority::with_clock(
+        let authority = gateway_authority::store::Authority::with_clock(
             self.store.clone(),
             crate::host::PlatformTokens,
             crate::host::PlatformClock,
@@ -378,7 +373,7 @@ impl ObservabilityHost for RequestHost {
         fence: &gateway_authority::capacity::CodexCapacityObservationFence,
         observations: &[gateway_authority::capacity::CodexCapacitySample],
     ) -> Result<gateway_authority::capacity::AcceptedCodexCapacityObservations, GatewayError> {
-        gateway_authority::Authority::with_clock(
+        gateway_authority::store::Authority::with_clock(
             self.store.clone(),
             crate::host::PlatformTokens,
             crate::host::PlatformClock,

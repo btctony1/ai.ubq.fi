@@ -1,21 +1,34 @@
 //! Actual fixed TLS import client. No generic response/carrier/reader input can
 //! mint body, claim, Started, currentness or terminal proofs through this type.
-use super::remote_state::RemoteImportState;
-use super::remote_tls::{ImportAuthorityTls, Roots};
-use super::*;
+use super::super::{NativeRenewalCancellation, OWNER_RENEWAL_MAX_MS};
+use super::{
+    AuthenticatedNativeImport,
+    custody_session::{ImportCustodyStartedRequest, VerifiedCurrentImportStarted},
+    effects::{self, NativeImportBinding, NativeImportClaim, NativeImportMode, NativeImportStart},
+    remote_state::{self, ImportActionState, RemoteImportState},
+    remote_tls::{ImportAuthorityTls, Roots},
+    unavailable,
+};
 use gateway_auth::{
     crypto::base64url,
-    native::*,
+    native::{
+        NATIVE_KEY_HEADER, NATIVE_MAC_HEADER, NATIVE_NONCE_HEADER, NATIVE_RENEWAL_AUTHORITY_PATH,
+        NATIVE_RESPONSE_MAC_HEADER, NATIVE_TIME_HEADER, NATIVE_VERSION_HEADER,
+    },
     native_auth::NativeTransportIdentity,
-    native_import::authority::{
-        ImportAuthorityClaimMode, ImportAuthorityCommand as Command,
-        ImportAuthorityReplyData as Reply, ImportAuthorityRequestData as Request,
-        ImportAuthorityResult as ResultData, ImportAuthorityStateData as State,
-        ImportAuthorityTerminalData, ImportCompletionData, ImportCustodyStartedReplyData,
-        ImportCustodyStartedWire, import_authority_reply_max_bytes_for,
-        import_custody_reply_max_bytes,
+    native_import::{
+        NativeImportAdmission, NativeImportKind, NativeImportTarget,
+        authority::{
+            ImportAuthorityClaimMode, ImportAuthorityCommand as Command,
+            ImportAuthorityRequestData as Request, ImportAuthorityStateData as State,
+            ImportAuthorityTerminalData, ImportCustodyStartedReplyData, ImportCustodyStartedWire,
+            completion::ImportCompletionData,
+            import_authority_reply_max_bytes_for, import_custody_reply_max_bytes,
+            result::{ImportAuthorityReplyData as Reply, ImportAuthorityResult as ResultData},
+        },
     },
 };
+use gateway_core::error::GatewayError;
 use std::{
     cell::Cell,
     net::TcpStream,
@@ -33,7 +46,7 @@ pub struct RemoteImportAuthority<'a, C> {
 }
 /// Genuine header/current-action admission, before native body consumption.
 /// ```compile_fail
-/// use gateway_authority::native_control::import::RemoteAdmittedImport;
+/// use gateway_authority::native_control::import::remote::RemoteAdmittedImport;
 /// let forged:RemoteAdmittedImport=serde_json::from_str("{}").unwrap();
 /// ```
 pub struct RemoteAdmittedImport {
@@ -63,7 +76,7 @@ impl AuthenticatedImportCatalogObservation {
 }
 /// A current authenticated matching terminal; NOT native physical durability.
 /// ```compile_fail
-/// use gateway_authority::native_control::import::AuthenticatedImportTerminal;
+/// use gateway_authority::native_control::import::remote::AuthenticatedImportTerminal;
 /// let forged:AuthenticatedImportTerminal=serde_json::from_str("{}").unwrap();
 /// ```
 pub struct AuthenticatedImportTerminal {
@@ -75,7 +88,7 @@ pub struct AuthenticatedImportTerminal {
 /// A current matching terminal for request-correlated original B1 DATA.
 /// Never proves historical Started, physical custody, or permission to stop/write.
 /// ```compile_fail
-/// use gateway_authority::native_control::import::VerifiedCurrentImportTerminal;
+/// use gateway_authority::native_control::import::remote::VerifiedCurrentImportTerminal;
 /// let forged:VerifiedCurrentImportTerminal=serde_json::from_str("{}").unwrap();
 /// ```
 pub struct VerifiedCurrentImportTerminal {

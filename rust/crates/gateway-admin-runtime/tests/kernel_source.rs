@@ -1,14 +1,18 @@
 //! Real Rust administrative operations over a deterministic atomic test store;
 //! these records are not live-runtime, signed-issuer or backend acceptance.
-use gateway_admin::{AdminHost, AdminInput, AdminOperation, source_input as body};
+use gateway_admin::{
+    operations::{AdminHost, AdminInput},
+    routes::AdminOperation,
+    source_input as body,
+};
 use gateway_admin_runtime::{AdminRuntime, RuntimeConfig, capabilities::UnboundCapabilities};
 use gateway_auth::{
-    AuthHost, AuthMethod, AuthPrincipal, AuthResponse,
+    types::{AuthHost, AuthMethod, AuthPrincipal, AuthResponse},
     upstream::{AuthUpstreamRequest, AuthUpstreamResponse},
     webauthn::{CosePublicKey, SignatureInput, WebAuthnCrypto},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     query::*,
     source_control::{decode_source_control_record, encode_source_control_record},
@@ -92,12 +96,12 @@ impl QueryStore for Store {
     }
 }
 struct Clock;
-impl gateway_authority::AuthorityClock for Clock {
+impl gateway_authority::store::AuthorityClock for Clock {
     fn now_ms(&self) -> Result<i64, GatewayError> {
         Ok(NOW)
     }
 }
-impl gateway_authority::TokenSource for Store {
+impl gateway_authority::store::TokenSource for Store {
     fn next_token(&self) -> Result<String, GatewayError> {
         let n = self.serial.get() + 1;
         self.serial.set(n);
@@ -340,7 +344,8 @@ fn actual_source_kernel_admin_twelve_families_preserve_writer_records_envelopes_
 }
 
 #[test]
-fn nonreset_admin_preserves_actual_index_and_cas_while_live_retention_remains_original() {
+fn nonreset_admin_preserves_actual_index_and_cas_while_live_retention_remains_original()
+-> Result<(), Box<dyn std::error::Error>> {
     let store = Store::default();
     let host = Host::default();
     let config = RuntimeConfig::default();
@@ -357,17 +362,16 @@ fn nonreset_admin_preserves_actual_index_and_cas_while_live_retention_remains_or
     run(runtime.execute(
         AdminOperation::KernelUsageSet,
         input(selector(&label, "repo", true)),
-    ))
-    .unwrap();
-    let authority = gateway_authority::Authority::with_clock(store.clone(), store.clone(), Clock);
+    ))?;
+    let authority =
+        gateway_authority::store::Authority::with_clock(store.clone(), store.clone(), Clock);
     let reservation = run(authority.reserve_kernel(
         "owner",
         "repo",
         &gateway_core::identity::RequestId("real-reservation".into()),
         "responses",
         NOW,
-    ))
-    .unwrap();
+    ))?;
     let key = gateway_authority::keys::kernel_window("owner", Some("repo"));
     let live = store.rows.borrow()[&key.0].clone();
     assert_eq!(
@@ -377,7 +381,7 @@ fn nonreset_admin_preserves_actual_index_and_cas_while_live_retention_remains_or
     let index = live.value["reservations"].clone();
     let mut change = selector(&label, "repo", false);
     body::set(&mut change, "usage_limit_requests", body::json(&8));
-    run(runtime.execute(AdminOperation::KernelUsageSet, input(change.clone()))).unwrap();
+    run(runtime.execute(AdminOperation::KernelUsageSet, input(change.clone())))?;
     let edited = store.rows.borrow()[&key.0].clone();
     assert_eq!(edited.expires_at_ms, None);
     assert_eq!(edited.value["reservations"], index);
@@ -406,18 +410,19 @@ fn nonreset_admin_preserves_actual_index_and_cas_while_live_retention_remains_or
     assert_eq!(*store.rows.borrow(), before);
     run(authority.record_kernel_terminal_intent(
         &reservation,
-        gateway_authority::quota::KernelTerminal::Committed,
+        gateway_authority::kernel::KernelTerminal::Committed,
         NOW,
-    ))
-    .unwrap();
+    ))?;
     assert_eq!(
         store.rows.borrow()[&key.0].expires_at_ms,
         Some(NOW + 60000 + gateway_authority::QUOTA_RETENTION_MS)
     );
+    Ok(())
 }
 
 #[test]
-fn positive_mapless_source_view_is_not_a_writable_or_live_bound_window() {
+fn positive_mapless_source_view_is_not_a_writable_or_live_bound_window()
+-> Result<(), Box<dyn std::error::Error>> {
     let store = Store::default();
     let host = Host::default();
     let config = RuntimeConfig::default();
@@ -434,26 +439,28 @@ fn positive_mapless_source_view_is_not_a_writable_or_live_bound_window() {
     run(runtime.execute(
         AdminOperation::KernelUsageSet,
         input(selector(&label, "repo", true)),
-    ))
-    .unwrap();
+    ))?;
     let key = gateway_authority::keys::kernel_window("owner", Some("repo"));
     let before = store.rows.borrow()[&key.0].clone();
-    let mut document = decode_source_control_record(&before).unwrap();
+    let mut document = decode_source_control_record(&before)?;
     body::set(&mut document, "reserved_requests", body::json(&1));
     store.rows.borrow_mut().insert(
         key.0.clone(),
-        encode_source_control_record("unbound-source", &document, None).unwrap(),
+        encode_source_control_record("unbound-source", &document, None)?,
     );
     let mut request = input(body::json(&json!({})));
     request.query = BTreeMap::from([
         ("owner".into(), vec!["owner".into()]),
         ("repo".into(), vec!["repo".into()]),
     ]);
-    let public = wire(run(runtime.execute(AdminOperation::KernelUsageGet, request)).unwrap());
-    let limit = body::member(&public, "limit").unwrap();
+    let public = wire(run(
+        runtime.execute(AdminOperation::KernelUsageGet, request)
+    )?);
+    let limit = body::member(&public, "limit").ok_or("missing fixture limit")?;
     assert!(body::member(&limit, "reservations").is_none());
     let state = store.rows.borrow().clone();
-    let authority = gateway_authority::Authority::with_clock(store.clone(), store.clone(), Clock);
+    let authority =
+        gateway_authority::store::Authority::with_clock(store.clone(), store.clone(), Clock);
     assert!(
         run(authority.reserve_kernel(
             "owner",
@@ -474,6 +481,7 @@ fn positive_mapless_source_view_is_not_a_writable_or_live_bound_window() {
         409
     );
     assert_eq!(*store.rows.borrow(), state);
+    Ok(())
 }
 
 #[test]
@@ -607,7 +615,8 @@ fn admin_selector_boundary_is_not_the_queue_predicate_and_source_expiry_stays_a_
 }
 
 #[test]
-fn inherited_active_org_index_is_not_discarded_by_source_repo_policy_creation() {
+fn inherited_active_org_index_is_not_discarded_by_source_repo_policy_creation()
+-> Result<(), Box<dyn std::error::Error>> {
     let store = Store::default();
     let host = Host::default();
     let config = RuntimeConfig::default();
@@ -624,17 +633,16 @@ fn inherited_active_org_index_is_not_discarded_by_source_repo_policy_creation() 
     run(runtime.execute(
         AdminOperation::KernelUsageSet,
         input(selector(&org, "org", true)),
-    ))
-    .unwrap();
-    let authority = gateway_authority::Authority::with_clock(store.clone(), store.clone(), Clock);
+    ))?;
+    let authority =
+        gateway_authority::store::Authority::with_clock(store.clone(), store.clone(), Clock);
     let reservation = run(authority.reserve_kernel(
         "owner",
         "repo",
         &gateway_core::identity::RequestId("actual-org-reservation".into()),
         "responses",
         NOW,
-    ))
-    .unwrap();
+    ))?;
     assert!(reservation.repo.is_none());
     let before = store.rows.borrow().clone();
     let repo = Label {
@@ -650,4 +658,5 @@ fn inherited_active_org_index_is_not_discarded_by_source_repo_policy_creation() 
         409
     );
     assert_eq!(*store.rows.borrow(), before);
+    Ok(())
 }

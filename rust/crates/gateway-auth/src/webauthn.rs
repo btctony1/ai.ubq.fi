@@ -1,20 +1,18 @@
 //! Source-compatible ceremony policy. Maintained CBOR/curve libraries parse public data;
 //! the platform supplies only real key import and signature verification primitives.
-use std::{future::Future, io::Cursor};
-
-use ciborium::value::Value as Cbor;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-
 use crate::{
-    GatewayError,
     crypto::{base64url, decode_base64url},
-    invalid,
     passkeys::{
         AssertionVerification, RegistrationVerification, VerifiedRegistration, client_data,
     },
+    types::invalid,
 };
+use ciborium::value::Value as Cbor;
+use gateway_core::error::GatewayError;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::{future::Future, io::Cursor};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

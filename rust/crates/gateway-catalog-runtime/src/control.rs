@@ -1,9 +1,20 @@
 //! Fixed paid control publications, derived in the same store as admission/accounting.
 //! These records are provenance and a coarse index; only authority issues a request receipt.
-use crate::{CatalogRuntime, host::*, state};
-use gateway_authority::{keys, paid::PaidRoutingPolicy, paid_control::*};
+use crate::{
+    CatalogRuntime,
+    host::{CatalogHost, CatalogProvider, CredentialPublication},
+    state,
+};
+use gateway_authority::{
+    keys,
+    paid_control::{
+        PAID_CONTROL_CONFIG_VERSION, PaidControlConfig, PaidControlOwner, PaidProjectionProvenance,
+        PaidProviderObservation, PaidRoutingProjection, PaidSourceCheck,
+    },
+    paid_types::PaidRoutingPolicy,
+};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     identity::MAX_SAFE_INTEGER,
     model::ModelId,
     provider::PaidProvider,
@@ -28,7 +39,6 @@ use gateway_schema::{
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-
 #[derive(Clone, Debug)]
 pub struct PaidObservationPublication {
     provider: PaidProvider,
@@ -659,7 +669,6 @@ fn identifier(row: &SourceJson) -> Option<ModelId> {
         .find_map(|key| source::member(row, key).as_ref().and_then(source::string))
         .map(ModelId::from_source)
 }
-
 fn configured_binding(
     publication: &CredentialPublication,
     provider: PaidProvider,

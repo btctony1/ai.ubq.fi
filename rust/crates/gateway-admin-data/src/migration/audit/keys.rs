@@ -3,7 +3,7 @@ use super::{
 };
 use crate::migration::ObservedRow;
 use gateway_core::{
-    GatewayError, js_string::JsString16, source_control::decode_source_control_record,
+    error::GatewayError, js_string::JsString16, source_control::decode_source_control_record,
     source_json::SourceJson,
 };
 use serde_json::{Value, json};

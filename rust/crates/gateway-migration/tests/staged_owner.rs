@@ -1,12 +1,17 @@
 #![cfg(not(target_arch = "wasm32"))]
-mod support;
 use gateway_core::{
-    GatewayError, js_string::JsString16, query::*, source_graph::*, state::*, tuple_key::TupleKey,
+    error::GatewayError, js_string::JsString16, query::*, source_graph::*, state::*,
+    tuple_key::TupleKey,
 };
-use gateway_migration::{staged::*, *};
+use gateway_migration::{
+    graph_transport,
+    native_capture::{NativeCapture, NativeEntry, NativeValue, prepare_native},
+    staged::*,
+};
+use gateway_migration_test_support::fixture::{Directory, run};
+use gateway_migration_test_support::sqlite_store::SqliteStore;
 use serde_json::{Value, json};
 use std::cell::Cell;
-use support::{fixture::*, sqlite_store::*};
 
 fn graph(value: &Value) -> SourceGraph {
     fn atom(value: &Value, nodes: &mut Vec<GraphNode>) -> GraphAtom {

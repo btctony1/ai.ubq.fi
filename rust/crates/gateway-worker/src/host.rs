@@ -1,18 +1,19 @@
 //! Only actual platform clock, RNG, WebCrypto and fixed authentication reads.
-use std::{collections::BTreeMap, rc::Rc};
-
-use futures_util::StreamExt;
-use gateway_auth::upstream::{AuthUpstreamRequest, AuthUpstreamResponse};
-use gateway_auth::webauthn::{CosePublicKey, SignatureInput, WebAuthnCrypto};
-use gateway_auth::{AuthConfig, AuthHost, GatewayError};
-use gateway_authority::{AuthorityClock, TokenSource};
-use worker::{Env, Fetch, Method, Request, RequestInit, RequestRedirect, Response, Url};
-
 use crate::transport::{
     crypto,
     outbound::{Cancellation, PinnedDestination, send_http},
     random,
 };
+use futures_util::StreamExt;
+use gateway_auth::{
+    types::{AuthConfig, AuthHost},
+    upstream::{AuthUpstreamRequest, AuthUpstreamResponse},
+    webauthn::{CosePublicKey, SignatureInput, WebAuthnCrypto},
+};
+use gateway_authority::store::{AuthorityClock, TokenSource};
+use gateway_core::error::GatewayError;
+use std::{collections::BTreeMap, rc::Rc};
+use worker::{Env, Fetch, Method, Request, RequestInit, RequestRedirect, Response, Url};
 
 pub const AUTH_SETTINGS: &[&str] = &[
     "UOS_AI_TOKEN",
@@ -66,7 +67,7 @@ pub struct PlatformHost {
     pub store: crate::authority::RemoteAuthorityStore,
     pub env: Env,
     pub native: crate::native_host::NativeBindings,
-    pub original: gateway_auth::AuthRequest,
+    pub original: gateway_auth::types::AuthRequest,
     pub request_id: gateway_core::identity::RequestId,
 }
 

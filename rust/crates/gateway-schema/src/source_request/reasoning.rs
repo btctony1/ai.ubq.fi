@@ -1,5 +1,5 @@
 //! Open-string reasoning syntax over original UTF16 values, independent of catalogs.
-use super::{SourceRequestError, trim};
+use super::{error::SourceRequestError, trim};
 use gateway_core::{
     js_string::JsString16, source_json::SourceJson, source_serialization as source,
 };

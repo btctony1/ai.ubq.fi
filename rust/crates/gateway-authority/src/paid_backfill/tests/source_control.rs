@@ -1,4 +1,9 @@
 use super::*;
+use crate::paid::source_records::decode_paid_attempt_record;
+use crate::paid::source_records::decode_paid_rollup_record;
+use crate::paid::source_usage::surplus_usage_from_source;
+use crate::paid_types::PaidCorrelation;
+use crate::paid_types::PaidRollup;
 use gateway_core::{
     js_string::JsString16,
     model::ModelId,
@@ -47,7 +52,8 @@ fn typed<T: serde::de::DeserializeOwned>(store: &Store, key: &RecordKey) -> T {
 }
 
 #[test]
-fn actual_settlement_preserves_first_label_for_three_source_physical_key_collisions() {
+fn actual_settlement_preserves_first_label_for_three_source_physical_key_collisions() -> TestResult
+{
     // Actual pinned Bun oracle ref d537e22d-a279-4f3a-a86d-09376c77e73d:
     // high/low/replacement text bytes all efbfbd; source retains first label and sums.
     let store = Store::default();
@@ -83,19 +89,31 @@ fn actual_settlement_preserves_first_label_for_three_source_physical_key_collisi
         );
         let logical = model(units);
         let raw = source_request(id, false, &logical);
-        let row: PaidAttempt = raw.deserialize().unwrap();
+        let row: PaidAttempt = raw.deserialize()?;
         put_source(&store, key(id), &raw);
         store.put(keys::paid_pending("key", id), json!({"key_id":"key","attempt_id":id,"created_at_ms":NOW-1000,"next_reconciliation_at_ms":NOW}));
         let mut usage = live_usage();
-        usage.correlation = crate::paid::PaidCorrelation::ProviderRequestId(id.into());
-        assert!(run(authority.settle_paid(&row.reservation, &usage, NOW + index as i64)).unwrap());
-        assert!(!run(authority.settle_paid(&row.reservation, &usage, NOW + 10)).unwrap());
-        let saved =
-            crate::paid::decode_paid_attempt_record(&key(id), &store.row(&key(id))).unwrap();
+        usage.correlation = PaidCorrelation::ProviderRequestId(id.into());
+        assert!(run(authority.settle_paid(
+            &row.reservation,
+            &usage,
+            NOW + index as i64
+        ))?);
+        assert!(!run(authority.settle_paid(
+            &row.reservation,
+            &usage,
+            NOW + 10
+        ))?);
+        let saved = decode_paid_attempt_record(&key(id), &store.row(&key(id)))?;
         assert_eq!(saved.model, logical);
-        assert_eq!(saved.reasoning.unwrap().as_units(), &[0xdc00]);
-        let rollup =
-            crate::paid::decode_paid_rollup_record(&first_key, &store.row(&first_key)).unwrap();
+        assert_eq!(
+            saved
+                .reasoning
+                .ok_or("missing fixture reasoning")?
+                .as_units(),
+            &[0xdc00]
+        );
+        let rollup = decode_paid_rollup_record(&first_key, &store.row(&first_key))?;
         assert_eq!(rollup.model, first);
         assert_eq!(rollup.request_count, index as i64 + 1);
         assert_eq!(rollup.provider_quota, (index + 1) as f64 * 5.0);
@@ -123,12 +141,14 @@ fn actual_settlement_preserves_first_label_for_three_source_physical_key_collisi
         .collect();
     println!(
         "M19_SOURCE_WRITER_FIXTURES {}",
-        serde_json::to_string(&rows).unwrap()
+        serde_json::to_string(&rows)?
     );
+    Ok(())
 }
 
 #[test]
-fn backfill_source_rows_preserve_unknown_units_restart_markers_and_collision_labels() {
+fn backfill_source_rows_preserve_unknown_units_restart_markers_and_collision_labels() -> TestResult
+{
     let store = Store::default();
     let high = model(&[0xd800]);
     let low = model(&[0xdc00]);
@@ -143,27 +163,29 @@ fn backfill_source_rows_preserve_unknown_units_restart_markers_and_collision_lab
         "metered",
         crate::paid::rollup_shard("a"),
     );
-    let rollup: crate::paid::PaidRollup = typed(&store, &rollup_key);
+    let rollup: PaidRollup = typed(&store, &rollup_key);
     assert_eq!(rollup.model, high);
     assert_eq!(rollup.request_count, 2);
     assert_eq!(rollup.spend_microcredits, 10.0);
     for (id, logical) in [("a", &high), ("q", &low)] {
-        let raw = decode_source_control_record(&store.row(&key(id))).unwrap();
-        let row: PaidAttempt = raw.deserialize().unwrap();
+        let raw = decode_source_control_record(&store.row(&key(id)))?;
+        let row: PaidAttempt = raw.deserialize()?;
         assert_eq!(&row.model, logical);
         assert_eq!(row.usage_rollup_at_ms, Some(NOW));
-        let extra = source::member(&raw, "source_extra").unwrap();
-        let entries = source::entries(&extra).unwrap();
+        let extra = source::member(&raw, "source_extra").ok_or("missing value")?;
+        let entries = source::entries(&extra).ok_or("missing value")?;
         assert_eq!(entries[0].0.as_units(), &[0xd800]);
-        assert_eq!(source::string(&entries[0].1).unwrap().as_units(), &[0xdc00]);
+        let units = source::string(&entries[0].1).ok_or("missing source units")?;
+        assert_eq!(units.as_units(), &[0xdc00]);
         assert_eq!(
             store.row(&key(id)).expires_at_ms,
             Some(NOW - 1000 + crate::PAID_RETENTION_MS)
         );
     }
     assert_eq!(backfill(&store, 10).requests.rollups_written, 0);
-    let after: crate::paid::PaidRollup = typed(&store, &rollup_key);
+    let after: PaidRollup = typed(&store, &rollup_key);
     assert_eq!(after, rollup);
+    Ok(())
 }
 
 #[test]
@@ -181,70 +203,62 @@ fn source_physical_collision_does_not_merge_distinct_astral_or_literal_escape_co
 }
 
 #[test]
-fn keyed_paid_decoder_retains_expired_data_but_refuses_wrong_key_metadata_and_encoding() {
+fn keyed_paid_decoder_retains_expired_data_but_refuses_wrong_key_metadata_and_encoding()
+-> TestResult {
     let store = Store::default();
     let raw = source_request("a", true, &model(&[0xd800]));
     put_source(&store, key("a"), &raw);
     let row = store.row(&key("a"));
-    assert!(crate::paid::decode_paid_attempt_record(&key("a"), &row).is_ok());
-    assert!(crate::paid::decode_paid_attempt_record(&key("other"), &row).is_err());
+    assert!(decode_paid_attempt_record(&key("a"), &row).is_ok());
+    assert!(decode_paid_attempt_record(&key("other"), &row).is_err());
     let mut expired = row.clone();
     expired.expires_at_ms = Some(NOW - 1);
-    assert!(crate::paid::decode_paid_attempt_record(&key("a"), &expired).is_ok());
+    assert!(decode_paid_attempt_record(&key("a"), &expired).is_ok());
     assert_eq!(expired.expires_at_ms, Some(NOW - 1));
     let mut invalid = row.clone();
     invalid.revision = " ".into();
-    assert!(crate::paid::decode_paid_attempt_record(&key("a"), &invalid).is_err());
+    assert!(decode_paid_attempt_record(&key("a"), &invalid).is_err());
     let mut invalid = row.clone();
     invalid.schema_version = 999;
-    assert!(crate::paid::decode_paid_attempt_record(&key("a"), &invalid).is_err());
-    let invalid =
-        StoredRecord::profile("seed", gateway_core::value::PortableValue::Null, None).unwrap();
-    assert!(crate::paid::decode_paid_attempt_record(&key("a"), &invalid).is_err());
+    assert!(decode_paid_attempt_record(&key("a"), &invalid).is_err());
+    let invalid = StoredRecord::profile("seed", gateway_core::value::PortableValue::Null, None)?;
+    assert!(decode_paid_attempt_record(&key("a"), &invalid).is_err());
+    Ok(())
 }
 
 #[test]
-fn source_pricing_keeps_absent_null_and_malformed_utf16_cache_leaves_distinct() {
-    let mut row: PaidAttempt = source_request("a", false, &model(&[0xd800]))
-        .deserialize()
-        .unwrap();
+fn source_pricing_keeps_absent_null_and_malformed_utf16_cache_leaves_distinct() -> TestResult {
+    let mut row: PaidAttempt = source_request("a", false, &model(&[0xd800])).deserialize()?;
     row.reservation.provider = PaidProvider::Surplus;
     let raw = json!({"input_tokens":10,"output_tokens":3,"total_tokens":13,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":1}});
-    let usage = gateway_core::source_usage::extract_usage_tokens(Some(&raw)).unwrap();
+    let usage =
+        gateway_core::source_usage::extract_usage_tokens(Some(&raw)).ok_or("missing value")?;
     for text in [
         r#"{"input_price_per_token":0.001,"output_price_per_token":0.002}"#,
         r#"{"input_price_per_token":0.001,"output_price_per_token":0.002,"cache_read_price_per_token":null,"cache_write_price_per_token":null}"#,
     ] {
-        let pricing = SourceJson::parse(text).unwrap();
+        let pricing = SourceJson::parse(text)?;
         let actual =
-            crate::paid::surplus_usage_from_source(&row, Some(&usage), Some(&pricing)).unwrap();
+            surplus_usage_from_source(&row, Some(&usage), Some(&pricing)).ok_or("missing value")?;
         assert_eq!(actual.provider_quota, 17000.0);
     }
     for field in ["cache_read_price_per_token", "cache_write_price_per_token"] {
         let pricing = source::object(vec![
-            ("input_price_per_token", SourceJson::parse("0.001").unwrap()),
-            (
-                "output_price_per_token",
-                SourceJson::parse("0.002").unwrap(),
-            ),
+            ("input_price_per_token", SourceJson::parse("0.001")?),
+            ("output_price_per_token", SourceJson::parse("0.002")?),
             (
                 field,
-                JsString16::from_units(vec![0xd800])
-                    .to_source_json()
-                    .unwrap(),
+                JsString16::from_units(vec![0xd800]).to_source_json()?,
             ),
-        ])
-        .unwrap();
-        assert!(
-            crate::paid::surplus_usage_from_source(&row, Some(&usage), Some(&pricing)).is_none()
-        );
+        ])?;
+        assert!(surplus_usage_from_source(&row, Some(&usage), Some(&pricing)).is_none());
     }
     let malformed = gateway_core::source_usage::extract_usage_tokens(Some(
         &json!({"input_tokens":10,"output_tokens":3,"buyer_cost_micro":"bad"}),
     ))
-    .unwrap();
+    .ok_or("missing value")?;
     let valid =
-        SourceJson::parse(r#"{"input_price_per_token":0.001,"output_price_per_token":0.002}"#)
-            .unwrap();
-    assert!(crate::paid::surplus_usage_from_source(&row, Some(&malformed), Some(&valid)).is_none());
+        SourceJson::parse(r#"{"input_price_per_token":0.001,"output_price_per_token":0.002}"#)?;
+    assert!(surplus_usage_from_source(&row, Some(&malformed), Some(&valid)).is_none());
+    Ok(())
 }

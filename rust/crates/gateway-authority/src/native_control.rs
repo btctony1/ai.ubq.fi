@@ -1,26 +1,21 @@
 //! Fixed owner-renewal coordination in the existing authority store.
 //! Wire selectors and fence DTOs are observations, never permissions to mutate native state.
-use std::future::Future;
-
 use gateway_auth::native_auth::AuthenticatedNativeOwner;
-use gateway_core::{GatewayError, model::ModelId};
+use gateway_core::{error::GatewayError, model::ModelId};
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 
 pub mod actor;
 mod context_codec;
-mod custody;
+pub mod custody;
 mod facts;
 pub mod import;
 mod live_renewal;
-mod managed;
-mod owners;
-mod receiver;
+pub mod managed;
+pub mod owners;
+pub mod receiver;
 mod rows;
 pub mod wire;
-pub use custody::validate_native_control_custody;
-pub use managed::{NativeManagedPublication, NativeManagedPublicationDisposition};
-pub use owners::RegisteredRenewalOwners;
-pub use receiver::{NativeRenewalAuthority, RegisteredRenewalOwner};
 
 pub const OWNER_RENEWAL_MAX_MS: i64 = 45_000;
 pub const NATIVE_RENEWAL_FENCE_VERSION: u8 = 2;

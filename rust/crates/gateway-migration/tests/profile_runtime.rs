@@ -1,22 +1,23 @@
 #![cfg(not(target_arch = "wasm32"))]
-mod support;
-use gateway_admin_data::profile::{CanonicalDates, SourceDateHost, to_source_profile};
+use gateway_admin_data::profile::{CanonicalDates, SourceDateHost, source::to_source_profile};
 use gateway_admin_runtime::capabilities::{
     Context, MigrationImport, MigrationProfile, MigrationRequest,
 };
-use gateway_auth::{AuthResponse, AuthResponseBody};
+use gateway_auth::types::{AuthResponse, AuthResponseBody};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     state::*,
     value::{PortableValue, ValueEncoding},
 };
 use gateway_migration::{
+    capture::PrivateCapture,
+    engine::{adopt_empty, prepare},
     profile_runtime::{ProfileHost, execute_profile},
-    *,
 };
+use gateway_migration_test_support::fixture::{Directory, run};
+use gateway_migration_test_support::sqlite_store::SqliteStore;
 use serde_json::{Value, json};
 use std::cell::Cell;
-use support::{fixture::*, sqlite_store::*};
 
 struct Host(Cell<u64>);
 impl SourceDateHost for Host {

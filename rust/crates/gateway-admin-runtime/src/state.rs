@@ -3,13 +3,14 @@ use crate::{
     capabilities::{Context, RuntimeCapabilities},
     store,
 };
-use gateway_admin::{AdminInput, AdminOperation, source_input as source_body};
+use gateway_admin::{operations::AdminInput, routes::AdminOperation, source_input as source_body};
 use gateway_auth::{
-    AuthHost, AuthResponse, conflict, invalid,
     store::{check, commit, put},
+    types::{AuthHost, AuthResponse, conflict, invalid},
 };
-use gateway_core::{GatewayError, query::QueryStore};
-use gateway_core::{js_string::JsString16, source_json::SourceJson};
+use gateway_core::{
+    error::GatewayError, js_string::JsString16, query::QueryStore, source_json::SourceJson,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
@@ -223,7 +224,7 @@ impl<S: QueryStore, H: AuthHost, C: RuntimeCapabilities> AdminRuntime<'_, S, H, 
             if let Ok(message) = message.try_utf8() {
                 return Err(invalid(&message));
             }
-            let error = gateway_schema::source_request::SourceRequestError::new(
+            let error = gateway_schema::source_request::error::SourceRequestError::new(
                 400,
                 message,
                 "invalid_request_error",
@@ -239,8 +240,9 @@ impl<S: QueryStore, H: AuthHost, C: RuntimeCapabilities> AdminRuntime<'_, S, H, 
         // roster/hash grammar above; only that proven field becomes scalar.
         let ids = ids
             .iter()
-            .map(|id| id.try_utf8().expect("validated closed provider label"))
-            .collect::<Vec<_>>();
+            .map(JsString16::try_utf8)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| invalid("provider_ids must contain only strings"))?;
         let ids = normalize_ids(&ids);
         let selected = json!({"provider_ids":ids,"updated_at_ms":input.now_ms});
         let row = self.store.read(&key).await?;

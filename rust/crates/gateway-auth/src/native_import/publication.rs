@@ -1,19 +1,13 @@
 //! Exact shared import publication DATA and its operation-specific reply bound.
 //! No body/start/currentness/durability capability is constructed in this crate.
 use crate::{
-    GatewayError,
     crypto::{Secret, sha256_hex},
     provider_credentials::codex_credential_identity,
 };
-use gateway_core::source_json::SourceJson;
+use gateway_core::{error::GatewayError, source_json::SourceJson};
 use serde::{Deserialize, Serialize};
-mod command;
-pub use command::{
-    ACCESS_MAX_BYTES, ImportAccessDocument, ImportCatalogData, ImportPublicationCommandData,
-    SNAPSHOT_MAX_BYTES, import_publication_max_bytes,
-};
-mod data;
-pub use data::{ImportCatalogDisposition, ImportPublicationDataV1};
+pub mod command;
+pub mod data;
 fn unavailable() -> GatewayError {
     GatewayError::unavailable(
         "Native import preparation is unavailable, changed, expired, or unsupported.",
@@ -74,12 +68,12 @@ pub struct NativeImportPublication {
     pub operation_id: String,
     pub action_ref: String,
     pub disposition: NativeImportPublicationDisposition,
-    pub publication: ImportPublicationDataV1,
+    pub publication: data::ImportPublicationDataV1,
 }
 impl NativeImportPublication {
     pub fn validate_for(
         &self,
-        request: &ImportPublicationCommandData,
+        request: &command::ImportPublicationCommandData,
         actual_request_bytes: &[u8],
     ) -> Result<(), GatewayError> {
         request.validate()?;
@@ -111,7 +105,7 @@ impl NativeImportPublication {
         }
         if matches!(
             p.catalog_disposition,
-            ImportCatalogDisposition::Normalized { .. }
+            data::ImportCatalogDisposition::Normalized { .. }
         ) {
             if [
                 &p.catalog_revision,
@@ -133,7 +127,7 @@ impl NativeImportPublication {
         if body.len() > import_publication_reply_max_bytes() {
             return Err(unavailable());
         }
-        let request = ImportPublicationCommandData::parse(request_bytes)?;
+        let request = command::ImportPublicationCommandData::parse(request_bytes)?;
         let response: Self = serde_json::from_slice(body).map_err(|_| unavailable())?;
         response.validate_for(&request, request_bytes)?;
         Ok(response)
@@ -141,67 +135,22 @@ impl NativeImportPublication {
 }
 /// Derived from the two exact finite success shapes, not an enlarged old cap.
 pub fn import_publication_reply_max_bytes() -> usize {
-    let reference = "r".repeat(256);
-    let long = "\u{1}".repeat(4096);
-    let hash = "a".repeat(64);
-    let maximal = |normalized: bool| NativeImportPublication {
-        v: 1,
-        operation_id: reference.clone(),
-        action_ref: hash.clone(),
-        disposition: NativeImportPublicationDisposition::AlreadyCurrent,
-        publication: ImportPublicationDataV1 {
-            v: 1,
-            operation_id: reference.clone(),
-            claim_ref: reference.clone(),
-            publication_revision: reference.clone(),
-            native_receipt_ref: reference.clone(),
-            native_source_generation: hash.clone(),
-            access_generation: hash.clone(),
-            credential_version: hash.clone(),
-            source_revision: reference.clone(),
-            normalized_revision: reference.clone(),
-            catalog_revision: Some(if normalized {
-                reference.clone()
-            } else {
-                long.clone()
-            }),
-            runtime_revision: Some(if normalized {
-                reference.clone()
-            } else {
-                long.clone()
-            }),
-            auth_generation_revision: Some(if normalized {
-                reference.clone()
-            } else {
-                long.clone()
-            }),
-            paid_control_config_revision: Some(if normalized {
-                reference.clone()
-            } else {
-                long.clone()
-            }),
-            publication_request_digest: hash.clone(),
-            catalog_disposition: if normalized {
-                ImportCatalogDisposition::Normalized {
-                    client_version: "0".repeat(SNAPSHOT_MAX_BYTES - 6) + ".0.0",
-                    upstream_status: 299,
-                }
-            } else {
-                ImportCatalogDisposition::AuthenticatedLimited {
-                    upstream_status: 429,
-                }
-            },
-        },
-    };
-    [false, true]
-        .into_iter()
-        .map(|normalized| {
-            serde_json::to_vec(&maximal(normalized))
-                .expect("Finite fixed publication reply")
-                .len()
-        })
-        .max()
-        .expect("Two finite import reply branches")
+    // This is the closed serde field/tag shell, with empty string contents.
+    // Reference/hash fields are ASCII; each retained control unit needs six bytes.
+    let shell = concat!(
+        r#"{"v":1,"operation_id":"","action_ref":"","disposition":"already_current","#,
+        r#""publication":{"v":1,"operation_id":"","claim_ref":"","publication_revision":"","#,
+        r#""native_receipt_ref":"","native_source_generation":"","access_generation":"","#,
+        r#""credential_version":"","source_revision":"","normalized_revision":"","#,
+        r#""catalog_revision":"","runtime_revision":"","auth_generation_revision":"","#,
+        r#""paid_control_config_revision":"","publication_request_digest":"","catalog_disposition":"#,
+    ).len() + 2;
+    let common = shell + 7 * 256 + 5 * 64;
+    let authenticated =
+        common + 4 * 4096 * 6 + r#"{"kind":"authenticated_limited","upstream_status":429}"#.len();
+    let normalized = common + 4 * 256 + command::SNAPSHOT_MAX_BYTES - 2
+        + r#"{"kind":"normalized","client_version":"","upstream_status":299}"#.len();
+    authenticated.max(normalized)
 }
 /// Larger success responses qualify only through this exact new operation and
 /// complete request/reply binding. Errors retain the old publication cap.
@@ -219,7 +168,7 @@ pub(crate) fn new_reply_limit(
     if operation.as_deref() != Some("codex_auth_import_publish") {
         return Ok(None);
     }
-    ImportPublicationCommandData::parse(request)?;
+    command::ImportPublicationCommandData::parse(request)?;
     if status != 200 {
         return if status >= 400 {
             Ok(None)
@@ -230,7 +179,3 @@ pub(crate) fn new_reply_limit(
     NativeImportPublication::parse_for(response, request)?;
     Ok(Some(import_publication_reply_max_bytes()))
 }
-
-#[cfg(test)]
-#[path = "publication/tests.rs"]
-mod tests;

@@ -1,12 +1,13 @@
 //! Actual task-owned Darwin OS observations. No real credentials/UID provisioning/Codex launch.
 #![cfg(target_os = "macos")]
-use super::*;
+use super::exclusive_owner::ExclusiveManagedOwner;
 use super::{
     acl_inspector,
     exclusive_owner::{Facts, PinnedExecutable},
+    *,
 };
 use gateway_auth::crypto::sha256_hex;
-use gateway_authority::native_control::RegisteredRenewalOwner;
+use gateway_authority::native_control::receiver::RegisteredRenewalOwner;
 use std::{
     fs,
     io::Write,

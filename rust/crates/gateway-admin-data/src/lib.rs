@@ -2,10 +2,9 @@
 pub mod migration;
 pub mod profile;
 mod profile_date;
-mod profile_source;
 pub mod projection;
 
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 use serde_json::{Value, json};
 
 pub(crate) fn number(value: &Value, field: &str) -> Option<f64> {

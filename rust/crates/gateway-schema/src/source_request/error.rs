@@ -1,5 +1,5 @@
 //! Exact source error strings may themselves contain non-scalar UTF16 units.
-use gateway_core::{GatewayError, js_string::JsString16, source_json::SourceJson};
+use gateway_core::{error::GatewayError, js_string::JsString16, source_json::SourceJson};
 use serde::Serialize;
 
 #[derive(Clone, Debug)]

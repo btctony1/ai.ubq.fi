@@ -1,12 +1,15 @@
-use auth::{AuthConfig, AuthHost, AuthService, session_index::*};
-use gateway_auth as auth;
-use serde_json::json;
-#[path = "session_index_cases/support.rs"]
 mod support;
+use gateway_auth::{
+    resolve::AuthService,
+    session_index::*,
+    types::{AuthConfig, AuthHost},
+};
+use serde_json::json;
 use support::*;
 
 #[test]
-fn digest_and_fixed_key_do_not_contain_bearers_or_alias_noncanonical_digests() {
+fn digest_and_fixed_key_do_not_contain_bearers_or_alias_noncanonical_digests()
+-> Result<(), Box<dyn std::error::Error>> {
     let token = "uos_ai_session_SYNTHETIC_INDEX_TOKEN";
     let value = digest(token);
     assert_eq!(value.len(), 64);
@@ -14,81 +17,77 @@ fn digest_and_fixed_key_do_not_contain_bearers_or_alias_noncanonical_digests() {
         value,
         "802402ebdf1f920d74e324319356b4bc68ce160f64f4a694cf924e360330c173"
     );
-    assert_ne!(value, auth::crypto::sha256_hex(token.as_bytes()));
+    assert_ne!(value, gateway_auth::crypto::sha256_hex(token.as_bytes()));
     assert_ne!(value, digest(&format!(" {token}")));
     assert_ne!(value, digest(&format!("{token} ")));
-    let key = index_key(&value).unwrap();
+    let key = index_key(&value)?;
     assert!(!key.0.contains(token));
     for invalid in ["", "abcd", &value.to_uppercase(), &format!(" {value}")] {
         assert!(index_key(invalid).is_err());
     }
+    Ok(())
 }
 
 #[test]
 fn controlled_constructor_preserves_source_revision_and_minimum_absolute_expiry_without_token_data()
-{
+-> Result<(), Box<dyn std::error::Error>> {
     run(async {
         let store = Store::default();
         let value = session("uos_ai_session_SYNTHETIC_INDEX_TOKEN", 500);
-        let row = record_for_session(&value, "source-rev", Some(300)).unwrap();
+        let row = record_for_session(&value, "source-rev", Some(300))?;
         assert_eq!(row.expires_at_ms, Some(300));
         assert_eq!(row.revision, "source-rev");
-        let encoded = serde_json::to_string(&row).unwrap();
+        let encoded = serde_json::to_string(&row)?;
         assert!(!encoded.contains(&value.token));
-        assert!(!encoded.contains(&auth::passkeys::key("sessions", &value.token).0));
-        let key = index_key(&digest(&value.token)).unwrap();
+        assert!(!encoded.contains(&gateway_auth::passkeys::key("sessions", &value.token).0));
+        let key = index_key(&digest(&value.token))?;
         store.rows.borrow_mut().insert(key.0, row);
         let snapshot = read_current(&store, &digest(&value.token), 299)
-            .await
-            .unwrap()
-            .unwrap();
+            .await?
+            .ok_or("missing expected session fixture")?;
         assert_eq!(snapshot.fence.expires_at_ms, 300);
         assert_eq!(snapshot.fence.session_revision, "source-rev");
         assert!(
             read_current(&store, &digest(&value.token), 300)
-                .await
-                .unwrap()
+                .await?
                 .is_none()
         );
         assert_eq!(
-            record_for_session(&value, "source-rev", Some(900))
-                .unwrap()
-                .expires_at_ms,
+            record_for_session(&value, "source-rev", Some(900))?.expires_at_ms,
             Some(500)
         );
         assert_eq!(
-            record_for_session(&value, "source-rev", None)
-                .unwrap()
-                .expires_at_ms,
+            record_for_session(&value, "source-rev", None)?.expires_at_ms,
             Some(500)
         );
-    });
+        Ok(())
+    })
 }
 
 #[test]
-fn missing_legacy_index_never_becomes_implicit_native_session_proof() {
+fn missing_legacy_index_never_becomes_implicit_native_session_proof()
+-> Result<(), Box<dyn std::error::Error>> {
     run(async {
         let store = Store::default();
         let host = Host::default();
         let config = AuthConfig::default();
-        user(&store, true, "policy");
+        user(&store, true, "policy")?;
         let value = session("uos_ai_session_legacy_fixture", host.now_ms() + 1000);
-        install(&store, &value, "legacy-source", None, false);
+        install(&store, &value, "legacy-source", None, false)?;
         let auth = AuthService::new(&store, &host, &config);
         assert!(
             auth.authenticate_admin(&request(&value.token))
-                .await
-                .unwrap()
+                .await?
                 .is_admin
         );
         assert!(
             read_current(&store, &digest(&value.token), host.now_ms())
-                .await
-                .unwrap()
+                .await?
                 .is_none()
         );
         assert!(store.history.borrow().is_empty());
-    });
+        Ok(())
+    })
 }
 
 #[test]

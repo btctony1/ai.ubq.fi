@@ -1,7 +1,7 @@
 //! Source metered-quota.ts monitoring only; this never authorizes a paid request.
 use crate::{store, types::ObservabilityHost};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     state::{AuthorityStore, RecordKey, RecordMutation},
 };
 use serde_json::{Value, json};

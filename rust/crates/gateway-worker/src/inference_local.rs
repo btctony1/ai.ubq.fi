@@ -133,8 +133,7 @@ async fn start_inner(
                     &builder,
                     ResponseOptions {
                         stream,
-                        hybrid: crate::host::setting(&host.env, "JEV_COMPACTION_HYBRID").as_deref()
-                            != Some("0"),
+                        hybrid: true,
                     },
                 )
                 .await
@@ -230,7 +229,7 @@ fn built_response(outcome: CompactionOutcome) -> Result<Response, RoutingError> 
 }
 fn cancelled_response() -> Result<Response, RoutingError> {
     // Frozen compaction.ts643-655 uses cancelledResponse for every observed abort.
-    crate::runtime::auth_response(gateway_auth::AuthResponse::error(
+    crate::runtime::auth_response(gateway_auth::types::AuthResponse::error(
         gateway_admission::cancellation_error(),
     ))
     .map_err(Into::into)

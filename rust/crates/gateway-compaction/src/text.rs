@@ -102,8 +102,6 @@ impl<T: Part + ?Sized> Part for &T {
 }
 macro_rules! numbers {($($t:ty),*)=>{$(impl Part for $t {fn append(&self,out:&mut Vec<u16>){self.to_string().append(out);}})*};}
 numbers!(usize, u64, u32, i64, i32);
-macro_rules! text {($($s:expr),*$(,)?)=>{{let mut units=Vec::new();$(crate::text::Part::append(&$s,&mut units);)*crate::text::Text::new(units)}};}
-pub(crate) use text;
 pub fn whitespace(u: u16) -> bool {
     matches!(u,0x0009..=0x000d|0x0020|0x00a0|0x1680|0x2000..=0x200a|0x2028|0x2029|0x202f|0x205f|0x3000|0xfeff)
 }

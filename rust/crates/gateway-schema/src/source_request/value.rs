@@ -1,6 +1,7 @@
 //! Lazy policy view over the existing SourceJson parser, never a scalar transcript mirror.
 use gateway_core::{
-    GatewayError, js_string::JsString16, source_json::SourceJson, source_serialization as source,
+    error::GatewayError, js_string::JsString16, source_json::SourceJson,
+    source_serialization as source,
 };
 use serde::{Serialize, Serializer};
 use std::{
@@ -303,12 +304,6 @@ pub(super) fn join(values: &[Text], separator: &str) -> Text {
     }
     Text::new(JsString16::from_units(units))
 }
-macro_rules! json {
-    ({$($key:literal:$value:expr),*$(,)?})=>{$crate::source_request::value::Value::object(vec![$((gateway_core::js_string::JsString16::from_utf8($key),$crate::source_request::value::Value::from_serializable(&$value).expect("Source normalization fields serialize"))),*])};
-    ($value:expr)=>{$crate::source_request::value::Value::from_serializable(&$value).expect("Source normalization value serializes")};
-}
-pub(super) use json;
-
 pub(super) fn unknown_key(value: &Value, allowed: &[&str]) -> Option<JsString16> {
     source::entries(&value.source().ok()?)?
         .into_iter()
@@ -323,7 +318,7 @@ pub(super) fn keyed_error(
     prefix: &str,
     key: &JsString16,
     param_prefix: Option<&str>,
-) -> super::SourceRequestError {
+) -> super::error::SourceRequestError {
     let mut message = prefix.encode_utf16().collect::<Vec<_>>();
     message.extend_from_slice(key.as_units());
     let param = param_prefix.map(|prefix| {
@@ -331,5 +326,5 @@ pub(super) fn keyed_error(
         units.extend_from_slice(key.as_units());
         JsString16::from_units(units)
     });
-    super::SourceRequestError::invalid(JsString16::from_units(message), param)
+    super::error::SourceRequestError::invalid(JsString16::from_units(message), param)
 }

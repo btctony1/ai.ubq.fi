@@ -1,17 +1,20 @@
 use crate::{
     classify,
-    journal::{self, AttemptRecord, BillingUsage, Journal, Phase},
+    journal::{self, AttemptRecord, BillingUsage, Journal, Phase, unavailable},
     session::RoutingSession,
     settlement,
-    types::*,
+    types::{
+        AttemptFailure, AttemptUsage, CredentialFence, FailureOrigin, PreparedAttempt,
+        RecoveredSession, RefreshOutcome, RefusalDecision, RevisionCheckWire, RoutingHost,
+        RoutingResult, TransportState,
+    },
 };
-use gateway_authority::{AuthorityClock, TokenSource, quota::KernelTerminal};
-use gateway_core::{
-    GatewayError,
-    lifecycle::{PaidTerminalState, SemanticTerminal, TransportObservation},
-    provider::UpstreamProvider,
-    query::QueryStore,
-};
+use gateway_authority::kernel::KernelTerminal;
+use gateway_authority::store::{AuthorityClock, TokenSource};
+use gateway_core::error::GatewayError;
+use gateway_core::lifecycle::{PaidTerminalState, SemanticTerminal, TransportObservation};
+use gateway_core::provider::UpstreamProvider;
+use gateway_core::query::QueryStore;
 use gateway_providers::policy::{HopDecision, HopFailure};
 
 impl<
@@ -49,85 +52,10 @@ impl<
         }
         let (row, record) = self.observed_attempt(attempt).await?;
         if record.phase != Phase::Prepared {
-            return Err(journal::unavailable(
-                "This attempt's dispatch intent is already consumed.",
-            )
-            .into());
+            return Err(unavailable("This attempt's dispatch intent is already consumed.").into());
         }
-        self.host
-            .ensure_credential_current(&record.fence, &self.input.principal, &record.model)
-            .await?;
-        if let CredentialFence::Codex { admission, .. } = &record.fence {
-            self.authority()
-                .ensure_admission_current(admission, self.now()?)
-                .await?;
-        }
-        if let Some(reservation) = &record.paid {
-            let synthetic = match self.plan.hops.get(record.cursor) {
-                Some(crate::policy::RouteHop::Paid {
-                    provider,
-                    model,
-                    synthetic,
-                }) if provider == &reservation.provider && model == &record.model => *synthetic,
-                _ => {
-                    return Err(journal::unavailable(
-                        "Paid dispatch no longer matches the original pinned hop.",
-                    )
-                    .into());
-                }
-            };
-            let input = gateway_authority::paid::PaidRequest {
-                key_id: reservation.key_id.clone(),
-                request_id: reservation.request_id.clone(),
-                attempt_id: reservation.attempt_id.clone(),
-                provider: reservation.provider,
-                model: record.model.clone(),
-                route: self.input.context.route.clone(),
-                path: if self.input.surface == gateway_providers::ClientSurface::Chat {
-                    "/v1/chat/completions"
-                } else {
-                    "/v1/responses"
-                }
-                .into(),
-                stream: self.input.streamed(),
-                reasoning: self.input.requested_reasoning(),
-                created_at_ms: self.input.context.started_at_ms,
-            };
-            let context = self.paid_context(reservation.provider, synthetic)?;
-            let receipt = self
-                .authority()
-                .authorize_paid_route(&input, &context, self.now()?)
-                .await?;
-            let receipt = self
-                .authority()
-                .bind_paid_original_dispatch(
-                    &receipt,
-                    &self.input.context,
-                    reservation,
-                    self.now()?,
-                )
-                .await?;
-            Self::check_paid_credential(&record.fence, &receipt)?;
-            let authorization = if synthetic {
-                gateway_authority::paid::PaidAuthorization::DirectPaidModel
-            } else {
-                self.paid_authorization(&row).await?
-            };
-            match self
-                .authority()
-                .reserve_paid(&input, &authorization, &receipt, self.now()?)
-                .await?
-            {
-                gateway_authority::paid::PaidAdmission::Existing(current)
-                    if current == *reservation => {}
-                _ => {
-                    return Err(journal::unavailable(
-                        "The paid reservation changed before dispatch.",
-                    )
-                    .into());
-                }
-            }
-        }
+        self.check_dispatch_credential(&record).await?;
+        self.check_paid_dispatch(&row, &record).await?;
         let mut api = row.api.clone();
         if let Some(reservation) = &api {
             api = Some(
@@ -166,9 +94,9 @@ impl<
                     .attempts
                     .iter_mut()
                     .find(|a| a.id == attempt.id)
-                    .ok_or_else(|| journal::unavailable("Attempt disappeared."))?;
+                    .ok_or_else(|| unavailable("Attempt disappeared."))?;
                 if current.phase != Phase::Prepared {
-                    return Err(journal::unavailable("Duplicate attempt dispatch."));
+                    return Err(unavailable("Duplicate attempt dispatch."));
                 }
                 current.phase = Phase::Intent;
                 j.api = api.clone();
@@ -176,6 +104,13 @@ impl<
             },
         )
         .await?;
+        self.check_dispatch_credential(&record).await?;
+        if self.host.cancelled() {
+            return Err(self.host.cancellation_error().into());
+        }
+        Ok(())
+    }
+    async fn check_dispatch_credential(&self, record: &AttemptRecord) -> RoutingResult<()> {
         self.host
             .ensure_credential_current(&record.fence, &self.input.principal, &record.model)
             .await?;
@@ -184,8 +119,75 @@ impl<
                 .ensure_admission_current(admission, self.now()?)
                 .await?;
         }
-        if self.host.cancelled() {
-            return Err(self.host.cancellation_error().into());
+        Ok(())
+    }
+    async fn check_paid_dispatch(
+        &self,
+        row: &Journal,
+        record: &AttemptRecord,
+    ) -> RoutingResult<()> {
+        if let Some(reservation) = &record.paid {
+            let synthetic = match self.plan.hops.get(record.cursor) {
+                Some(crate::policy::RouteHop::Paid {
+                    provider,
+                    model,
+                    synthetic,
+                }) if provider == &reservation.provider && model == &record.model => *synthetic,
+                _ => {
+                    return Err(unavailable(
+                        "Paid dispatch no longer matches the original pinned hop.",
+                    )
+                    .into());
+                }
+            };
+            let input = gateway_authority::paid_types::PaidRequest {
+                key_id: reservation.key_id.clone(),
+                request_id: reservation.request_id.clone(),
+                attempt_id: reservation.attempt_id.clone(),
+                provider: reservation.provider,
+                model: record.model.clone(),
+                route: self.input.context.route.clone(),
+                path: if self.input.surface == gateway_providers::types::ClientSurface::Chat {
+                    "/v1/chat/completions"
+                } else {
+                    "/v1/responses"
+                }
+                .into(),
+                stream: self.input.streamed(),
+                reasoning: self.input.requested_reasoning(),
+                created_at_ms: self.input.context.started_at_ms,
+            };
+            let context = self.paid_context(reservation.provider, synthetic)?;
+            let receipt = self
+                .authority()
+                .authorize_paid_route(&input, &context, self.now()?)
+                .await?;
+            let receipt = self
+                .authority()
+                .bind_paid_original_dispatch(
+                    &receipt,
+                    &self.input.context,
+                    reservation,
+                    self.now()?,
+                )
+                .await?;
+            Self::check_paid_credential(&record.fence, &receipt)?;
+            let authorization = if synthetic {
+                gateway_authority::paid_types::PaidAuthorization::DirectPaidModel
+            } else {
+                self.paid_authorization(row).await?
+            };
+            match self
+                .authority()
+                .reserve_paid(&input, &authorization, &receipt, self.now()?)
+                .await?
+            {
+                gateway_authority::paid_types::PaidAdmission::Existing(current)
+                    if current == *reservation => {}
+                _ => {
+                    return Err(unavailable("The paid reservation changed before dispatch.").into());
+                }
+            }
         }
         Ok(())
     }
@@ -307,10 +309,9 @@ impl<
             .into());
         }
         if failure.transport == TransportState::NotStarted && record.transport_started {
-            return Err(journal::unavailable(
-                "NotStarted report conflicts with durable transport intent.",
-            )
-            .into());
+            return Err(
+                unavailable("NotStarted report conflicts with durable transport intent.").into(),
+            );
         }
         if failure.transport == TransportState::NotStarted {
             self.change(|j| {
@@ -347,7 +348,7 @@ impl<
         }
         let mut decision = RefusalDecision::Return;
         let mut cursor = record.cursor;
-        if self.plan.synthetic {
+        if self.plan.synthetic && record.paid.is_none() {
             decision = match gateway_providers::policy::deepseek_decision(failure.failure, false) {
                 HopDecision::Advance => {
                     cursor += 1;
@@ -359,66 +360,8 @@ impl<
         } else if let CredentialFence::Codex { admission, .. } = &record.fence
             && failure.origin == FailureOrigin::Provider
         {
-            if let Some(block) = classify::codex_quota(
-                failure.status,
-                &failure.headers,
-                &failure.body,
-                failure.body_complete,
-                self.now()?,
-            ) {
-                if self
-                    .authority()
-                    .record_quota_block(admission, block, self.now()?)
-                    .await?
-                {
-                    decision = RefusalDecision::Continue;
-                }
-            } else if failure.status == Some(401) {
-                let version = admission.binding.credential_version.0.clone();
-                let refreshed = row.refreshed_versions.contains(&version);
-                if !refreshed {
-                    self.change(|j| {
-                        j.refreshed_versions.push(version.clone());
-                        Ok(())
-                    })
-                    .await?;
-                    let published =
-                        self.host.refresh_codex(&record.fence).await? == RefreshOutcome::Published;
-                    if published
-                        || self
-                            .authority()
-                            .mark_credential_invalid(admission, self.now()?)
-                            .await?
-                    {
-                        decision = RefusalDecision::Continue;
-                    }
-                } else if self
-                    .authority()
-                    .mark_credential_invalid(admission, self.now()?)
-                    .await?
-                {
-                    decision = RefusalDecision::Continue;
-                }
-            } else if let Some(detail) = classify::unsupported_model(
-                failure.status,
-                &failure.body,
-                failure.body_complete,
-                &record.model,
-            ) && self
-                .authority()
-                .learn_model_unavailable(admission, &detail, self.now()?)
-                .await?
-            {
-                if row.model_sibling_retries < 1 {
-                    self.change(|j| {
-                        j.model_sibling_retries += 1;
-                        Ok(())
-                    })
-                    .await?;
-                    decision = RefusalDecision::Continue;
-                } else {
-                    return Err(classify::model_unavailable_error(&record.model).into());
-                }
+            if self.codex_retry(&row, &record, admission, &failure).await? {
+                decision = RefusalDecision::Continue;
             }
         } else if record.paid.is_some() && failure.origin == FailureOrigin::Provider {
             if gateway_providers::policy::paid_should_advance(
@@ -432,58 +375,7 @@ impl<
             && failure.origin == FailureOrigin::Provider
             && failure.status == Some(429)
         {
-            let now = self.now()?;
-            let response_prohibited = gateway_providers::lithos::retry_prohibited(&failure.headers);
-            let wait = lithos_wait_ms(&failure.headers, now);
-            let rung = gateway_providers::policy::lithos_canonical(&record.model);
-            self.lithos_attempted.borrow_mut().insert(rung.clone());
-            if response_prohibited {
-                self.lithos_no_retry.borrow_mut().insert(rung);
-            }
-            if !self.input.retry_prohibited {
-                let next = {
-                    let no_retry = self.lithos_no_retry.borrow();
-                    let attempted = self.lithos_attempted.borrow();
-                    self.lithos
-                        .borrow()
-                        .eligible(&record.model, now, &no_retry, &attempted)
-                };
-                if let Some(next) = next
-                    && next != record.model
-                {
-                    if !response_prohibited && let Some(wait) = wait {
-                        self.lithos.borrow_mut().refuse(&record.model, now, wait);
-                    }
-                    decision = RefusalDecision::Continue;
-                } else if !response_prohibited && let Some(wait) = wait {
-                    let retry_target = {
-                        let no_retry = self.lithos_no_retry.borrow();
-                        self.lithos
-                            .borrow()
-                            .retry_eligible(&record.model, &no_retry)
-                    };
-                    if retry_target.is_some() && self.waits.borrow_mut().claim(wait, false) {
-                        self.lithos_attempted.borrow_mut().clear();
-                        self.renew().await?;
-                        let outcome = self.host.wait(wait).await;
-                        if !(0..=9_007_199_254_740_991).contains(&outcome.elapsed_ms) {
-                            return Err(
-                                journal::unavailable("The host wait duration is invalid.").into()
-                            );
-                        }
-                        self.elapsed_wait_ms.set(
-                            self.elapsed_wait_ms
-                                .get()
-                                .saturating_add(outcome.elapsed_ms),
-                        );
-                        outcome.result?;
-                        if self.host.cancelled() {
-                            return Ok(RefusalDecision::Abort);
-                        }
-                        decision = RefusalDecision::Continue;
-                    }
-                }
-            }
+            decision = self.lithos_refusal(&record.model, &failure).await?;
         }
         if decision == RefusalDecision::Continue {
             self.change(|j| {
@@ -512,6 +404,116 @@ impl<
             }
         }
         Ok(decision)
+    }
+    async fn codex_retry(
+        &self,
+        row: &Journal,
+        record: &AttemptRecord,
+        admission: &gateway_authority::routing_types::AdmittedAccount,
+        failure: &AttemptFailure,
+    ) -> RoutingResult<bool> {
+        if let Some(block) = classify::codex_quota(
+            failure.status,
+            &failure.headers,
+            &failure.body,
+            failure.body_complete,
+            self.now()?,
+        ) {
+            return Ok(self
+                .authority()
+                .record_quota_block(admission, block, self.now()?)
+                .await?);
+        }
+        if failure.status == Some(401) {
+            let version = admission.binding.credential_version.0.clone();
+            let published = !row.refreshed_versions.contains(&version) && {
+                self.change(|j| {
+                    j.refreshed_versions.push(version.clone());
+                    Ok(())
+                })
+                .await?;
+                self.host.refresh_codex(&record.fence).await? == RefreshOutcome::Published
+            };
+            return Ok(published
+                || self
+                    .authority()
+                    .mark_credential_invalid(admission, self.now()?)
+                    .await?);
+        }
+        if let Some(detail) = classify::unsupported_model(
+            failure.status,
+            &failure.body,
+            failure.body_complete,
+            &record.model,
+        ) && self
+            .authority()
+            .learn_model_unavailable(admission, &detail, self.now()?)
+            .await?
+        {
+            if row.model_sibling_retries >= 1 {
+                return Err(classify::model_unavailable_error(&record.model).into());
+            }
+            self.change(|j| {
+                j.model_sibling_retries += 1;
+                Ok(())
+            })
+            .await?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+    async fn lithos_refusal(
+        &self,
+        model: &gateway_core::model::ModelId,
+        failure: &AttemptFailure,
+    ) -> RoutingResult<RefusalDecision> {
+        let now = self.now()?;
+        let response_prohibited = gateway_providers::lithos::retry_prohibited(&failure.headers);
+        let wait = lithos_wait_ms(&failure.headers, now);
+        let rung = gateway_providers::policy::lithos_canonical(model);
+        self.lithos_attempted.borrow_mut().insert(rung.clone());
+        if response_prohibited {
+            self.lithos_no_retry.borrow_mut().insert(rung);
+        }
+        if self.input.retry_prohibited {
+            return Ok(RefusalDecision::Return);
+        }
+        let next = {
+            let denied = self.lithos_no_retry.borrow();
+            let tried = self.lithos_attempted.borrow();
+            self.lithos.borrow().eligible(model, now, &denied, &tried)
+        };
+        if let Some(next) = next
+            && &next != model
+        {
+            if !response_prohibited && let Some(wait) = wait {
+                self.lithos.borrow_mut().refuse(model, now, wait);
+            }
+            return Ok(RefusalDecision::Continue);
+        }
+        let Some(wait) = wait.filter(|_| !response_prohibited) else {
+            return Ok(RefusalDecision::Return);
+        };
+        let retry_target = {
+            let no_retry = self.lithos_no_retry.borrow();
+            self.lithos.borrow().retry_eligible(model, &no_retry)
+        };
+        if retry_target.is_none() || !self.waits.borrow_mut().claim(wait, false) {
+            return Ok(RefusalDecision::Return);
+        }
+        self.lithos_attempted.borrow_mut().clear();
+        self.renew().await?;
+        let outcome = self.host.wait(wait).await;
+        if !(0..=9_007_199_254_740_991).contains(&outcome.elapsed_ms) {
+            return Err(journal::unavailable("The host wait duration is invalid.").into());
+        }
+        let elapsed = &self.elapsed_wait_ms;
+        elapsed.set(elapsed.get().saturating_add(outcome.elapsed_ms));
+        outcome.result?;
+        if self.host.cancelled() {
+            return Ok(RefusalDecision::Abort);
+        }
+        Ok(RefusalDecision::Continue)
     }
     pub async fn finish(
         &self,
@@ -546,7 +548,7 @@ fn paid_terminal(terminal: SemanticTerminal) -> PaidTerminalState {
         SemanticTerminal::Failed | SemanticTerminal::Error => PaidTerminalState::Failed,
     }
 }
-fn lithos_wait_ms(headers: &gateway_providers::Headers, now: i64) -> Option<i64> {
+fn lithos_wait_ms(headers: &gateway_providers::types::Headers, now: i64) -> Option<i64> {
     let wait = gateway_providers::lithos::rate_limit_wait(headers, now as f64, |raw| {
         chrono::DateTime::parse_from_rfc2822(raw)
             .ok()

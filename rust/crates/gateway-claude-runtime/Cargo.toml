@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+gateway-claude-runtime-test-support.workspace = true
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
 
 [lints]

@@ -1,6 +1,5 @@
 #![cfg(unix)]
 use gateway_auth::{
-    GatewayError,
     crypto::base64url,
     native::NATIVE_CONTROL_PATH,
     native_auth::{
@@ -8,6 +7,7 @@ use gateway_auth::{
         NativeNonceAuthority,
     },
 };
+use gateway_core::error::GatewayError;
 use gateway_native::daemon_config::{NativeDaemonConfig, PreparedNativeDaemonConfig};
 use serde_json::{Value, json};
 

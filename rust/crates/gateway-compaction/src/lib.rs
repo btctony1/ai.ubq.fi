@@ -1,4 +1,5 @@
 //! Source-compatible Jev compaction. The host owns fixed I/O and request lifecycle.
+macro_rules! text {($($s:expr),*$(,)?)=>{{let mut units=Vec::new();$(crate::text::Part::append(&$s,&mut units);)*crate::text::Text::new(units)}};}
 mod engine;
 mod hybrid;
 mod model;

@@ -1,6 +1,6 @@
 //! Resource selection is readonly and never reconstructs import permission.
 use super::*;
-use crate::native_control::{RegisteredRenewalOwner, RegisteredRenewalOwners};
+use crate::native_control::{owners::RegisteredRenewalOwners, receiver::RegisteredRenewalOwner};
 fn registry(f: &Fixture) -> RegisteredRenewalOwners {
     RegisteredRenewalOwners::configured(vec![
         RegisteredRenewalOwner::configured(

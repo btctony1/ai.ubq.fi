@@ -1,7 +1,7 @@
 use crate::types::ObservabilityHost;
 use gateway_auth::crypto::uuid_from_random;
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::{QueryEntry, QueryRequest, QuerySelector, QueryStore},
     state::{
         AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,

@@ -1,9 +1,9 @@
 //! Bounded migration bindings; full native capture is private, never a public admin body.
-pub mod wire;
-
-use gateway_core::{GatewayError, query::QueryStore};
-pub use gateway_migration::MigrationError;
-pub use gateway_migration::operational::{NativeMigrationRequest, NativeMigrationResponse};
+use gateway_core::{error::GatewayError, query::QueryStore};
+use gateway_migration::{
+    error::MigrationError,
+    operational::{NativeMigrationRequest, NativeMigrationResponse},
+};
 #[cfg(target_arch = "wasm32")]
 use worker::js_sys;
 
@@ -11,12 +11,12 @@ pub async fn execute_profile<S: QueryStore>(
     store: &S,
     request: gateway_admin_runtime::capabilities::MigrationRequest,
     context: gateway_admin_runtime::capabilities::Context,
-) -> Result<gateway_auth::AuthResponse, GatewayError> {
+) -> Result<gateway_auth::types::AuthResponse, GatewayError> {
     gateway_migration::profile_runtime::execute_profile(store, &ProfileHost, request, context).await
 }
 
 struct ProfileHost;
-impl gateway_migration::SourceDateHost for ProfileHost {
+impl gateway_admin_data::profile::SourceDateHost for ProfileHost {
     fn date_value(&self, input: Option<&serde_json::Value>) -> Result<Option<i64>, GatewayError> {
         let raw = input
             .map(gateway_core::source_json::SourceJson::from_serializable)
@@ -99,7 +99,7 @@ async fn local_operator_adoption(
     }
     // Decode original NativeCapture v2 bytes directly: the shared public
     // request decoder remains unchanged and cannot mint this private setup.
-    let capture: gateway_migration::NativeCapture =
+    let capture: gateway_migration::native_capture::NativeCapture =
         serde_json::from_slice(&input.to_vec()).map_err(|_| refused())?;
     if capture.v != 2 {
         return Err(refused());

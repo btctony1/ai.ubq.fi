@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { parse } from "@std/yaml";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -51,15 +51,23 @@ const sourceSelection: TestSelection = {
   runAll: false,
   reason: "selected",
 };
-const ciContext = (event: string, base = "", author = ""): NodeJS.ProcessEnv => ({
-  GITHUB_EVENT_NAME: event,
-  GITHUB_BASE_REF: base,
-  GITHUB_PR_AUTHOR: author,
-});
+let dispatchEventCount = 0;
+const ciContext = (event: string, base = "", author = ""): NodeJS.ProcessEnv => {
+  const context: NodeJS.ProcessEnv = { GITHUB_EVENT_NAME: event, GITHUB_BASE_REF: base, GITHUB_PR_AUTHOR: author };
+  if (event === "workflow_dispatch") {
+    const eventPath = join(fixture, `workflow-dispatch-${dispatchEventCount++}.json`);
+    writeFileSync(eventPath, JSON.stringify({ inputs: { base_ref: base, sentinel_pr_author: author } }));
+    context.GITHUB_EVENT_PATH = eventPath;
+    context.GITHUB_BASE_REF = "";
+    context.GITHUB_PR_AUTHOR = "";
+  }
+  return context;
+};
 const protectedContexts = [
   ciContext("merge_group"),
   ciContext("pull_request", "queue-canary", "owner"),
   ciContext("pull_request", "development", "ubiquity-sentinel[bot]"),
+  ciContext("workflow_dispatch", "development", "ubiquity-sentinel[bot]"),
   { ...ciContext("push"), GITHUB_REF: "refs/heads/development" },
 ];
 const scopeCommand = (args: readonly string[], context: NodeJS.ProcessEnv, paths = "AGENTS.md") =>
@@ -75,6 +83,63 @@ const scopeCommand = (args: readonly string[], context: NodeJS.ProcessEnv, paths
       ...context,
     },
   });
+
+test("hosted native profiles retain bootstrap, exact binding and failure aggregation without portable gates", () => {
+  const workflow = parse(readFileSync(join(ROOT, ".github/workflows/deno-deploy.yml"), "utf8")) as {
+    jobs: { native: { steps: { name?: string; run?: string }[] } };
+  };
+  const command = workflow.jobs.native.steps.find((step) => step.name === "Complete native-mode Bun test profiles")?.run;
+  expect(command).toBeDefined();
+  const directory = mkdtempSync(join(fixture, "native-profiles-"));
+  const bin = join(directory, "bin");
+  for (const path of [
+    "bin",
+    "scripts",
+    "tools/lint/node_modules/.bin",
+    "node_modules/@types/bun",
+    "node_modules/@types/node",
+    "node_modules/typescript/bin",
+    "uos-native-kv",
+  ])
+    mkdirSync(join(directory, path), { recursive: true });
+  for (const path of [
+    "bun.lock",
+    "tools/lint/bun.lock",
+    "node_modules/@types/bun/index.d.ts",
+    "node_modules/@types/node/index.d.ts",
+    "node_modules/typescript/bin/tsc",
+  ])
+    writeFileSync(join(directory, path), "fixture\n");
+  for (const name of ["eslint", "prettier", "knip"]) writeFileSync(join(directory, "tools/lint/node_modules/.bin", name), "#!/bin/sh\n", { mode: 0o700 });
+  copyFileSync(join(ROOT, "scripts/_bootstrap.sh"), join(directory, "scripts/_bootstrap.sh"));
+  const binding = JSON.stringify({ artifactDirectory: "/fixture/path with spaces", expectedProvenanceSha256: "a".repeat(64) });
+  writeFileSync(join(directory, "uos-native-kv/receipt.json"), binding + "\n");
+  const executable = join(bin, "bun");
+  writeFileSync(
+    executable,
+    '#!/bin/sh\nif [ "$1" = --version ]; then echo 1.4.0; exit 0; fi\nprintf \'%s\\037\' "$@" >> "$UOS_CI_COMMANDS"\nprintf \'\\n\' >> "$UOS_CI_COMMANDS"\nif [ "$3" = scripts/test-runner.ts ] && [ "$4" = "$UOS_FAIL_PROFILE" ]; then exit 7; fi\n'
+  );
+  chmodSync(executable, 0o700);
+  const profiles = ["deploy-guards", "vps", "main", "sentinel", "quality", "benchmark"];
+  for (const failedProfile of ["", "deploy-guards"]) {
+    const receipt = join(directory, `commands-${failedProfile || "success"}.txt`);
+    const result = spawnSync("/bin/bash", ["-c", command ?? "exit 99"], {
+      cwd: directory,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { PATH: `${bin}:/usr/bin:/bin`, RUNNER_TEMP: directory, UOS_CI_COMMANDS: receipt, UOS_FAIL_PROFILE: failedProfile },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(failedProfile ? 1 : 0);
+    const calls = readFileSync(receipt, "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((line) => line.split("\u001f").slice(0, -1));
+    expect(calls).toEqual([
+      ["--no-env-file", "--no-install", "scripts/patch-bun-types.ts"],
+      ...profiles.map((profile) => ["--no-env-file", "--no-install", "scripts/test-runner.ts", profile, `--native-kv-binding=${binding}`]),
+    ]);
+  }
+});
 
 describe("Sentinel complete CI check set", () => {
   test("admits all real jobs without widening documentation or source test selection", () => {
@@ -131,6 +196,13 @@ describe("Sentinel complete CI check set", () => {
       { ...ciContext("push"), GITHUB_REF: "development" },
       { ...ciContext("workflow_dispatch"), GITHUB_REF: "refs/heads/development" },
       ciContext("workflow_dispatch", "queue-canary", "ubiquity-sentinel[bot]"),
+      ciContext("workflow_dispatch", "development", ""),
+      ciContext("workflow_dispatch", "", "ubiquity-sentinel[bot]"),
+      ciContext("workflow_dispatch", "development", "owner"),
+      ciContext("workflow_dispatch", "development-extra", "ubiquity-sentinel[bot]"),
+      ciContext("workflow_dispatch", "development", "ubiquity-sentinel"),
+      ciContext("workflow_dispatch", "development", "ubiquity-sentinel[bot]-extra"),
+      { ...ciContext("workflow_dispatch", "development", "owner"), GITHUB_ACTOR: "ubiquity-sentinel[bot]" },
       ciContext("pull_request_target", "queue-canary", "ubiquity-sentinel[bot]"),
       ciContext("pull_request", "queue-canary-extra", "owner"),
       ciContext("pull_request", "development", "ubiquity-sentinel"),
@@ -149,6 +221,40 @@ describe("Sentinel complete CI check set", () => {
       ciScopeForSelection(sourceSelection, ROOT, { ...ciContext("pull_request", "development", "ubiquity-sentinel[bot]"), GITHUB_ACTOR: "owner" })
         .completeCheckSet
     ).toBe(true);
+  });
+
+  test("manual CI JSON reads real event inputs with reserved environment fields empty", () => {
+    const context = ciContext("workflow_dispatch", "development", "ubiquity-sentinel[bot]");
+    expect(context.GITHUB_BASE_REF).toBe("");
+    expect(context.GITHUB_PR_AUTHOR).toBe("");
+    for (const paths of ["AGENTS.md", "scripts/test-scope.test.ts", "rust/crates/gateway-native/src/lib.rs"]) {
+      const ci = scopeCommand(["scripts/test-scope.ts", "--ci-json"], context, paths);
+      expect(ci.status).toBe(0);
+      expect(JSON.parse(ci.stdout)).toMatchObject({ completeCheckSet: true, needsDocs: true, needsArtifact: true, needsRustNative: true, needsRustWasm: true });
+    }
+    const eventPath = join(fixture, "invalid-dispatch.json");
+    const spoofed = { ...context, GITHUB_BASE_REF: "development", GITHUB_PR_AUTHOR: "ubiquity-sentinel[bot]", GITHUB_ACTOR: "ubiquity-sentinel[bot]" };
+    for (const payload of [
+      "not JSON",
+      "null",
+      "[]",
+      "{}",
+      '{"inputs":null}',
+      '{"inputs":[]}',
+      '{"inputs":{}}',
+      '{"inputs":{"base_ref":"development"}}',
+      '{"inputs":{"sentinel_pr_author":"ubiquity-sentinel[bot]"}}',
+    ]) {
+      writeFileSync(eventPath, payload);
+      const ci = scopeCommand(["scripts/test-scope.ts", "--ci-json"], { ...spoofed, GITHUB_EVENT_PATH: eventPath });
+      expect(ci.status).toBe(0);
+      expect(JSON.parse(ci.stdout).completeCheckSet).toBe(false);
+    }
+    for (const path of ["", join(fixture, "missing-dispatch.json")]) {
+      const ci = scopeCommand(["scripts/test-scope.ts", "--ci-json"], { ...spoofed, GITHUB_EVENT_PATH: path });
+      expect(ci.status).toBe(0);
+      expect(JSON.parse(ci.stdout).completeCheckSet).toBe(false);
+    }
   });
 
   test("still builds artifacts for protected no-base and no-changes selections", () => {
@@ -693,21 +799,30 @@ describe("Rust changed-path CI selection", () => {
     expect(JSON.parse(ci.stdout).affectedTests).toEqual(["scripts/test-scope.test.ts"]);
   });
 
-  test("complete contexts schedule real Rust jobs without changing documentation test selection", () => {
+  test("complete contexts schedule real Rust jobs without widening selected tests", () => {
     for (const context of protectedContexts) {
-      expect(ciScopeForSelection(docsSelection, ROOT, context)).toMatchObject({
-        completeCheckSet: true,
-        affectedTests: [],
-        needsRustNative: true,
-        needsRustWasm: true,
-        needsRustBuild: true,
-      });
+      for (const selection of [docsSelection, { ...sourceSelection, paths: ["rust/crates/gateway-native/src/lib.rs"], affectedTests: [] }]) {
+        expect(ciScopeForSelection(selection, ROOT, context)).toMatchObject({
+          ...selection,
+          completeCheckSet: true,
+          needsRustNative: true,
+          needsRustWasm: true,
+          needsRustBuild: true,
+        });
+      }
     }
   });
 });
 
-test("native-only companion source does not schedule a WASM compilation on ordinary PRs", () => {
-  const ci = scopeCommand(["scripts/test-scope.ts", "--ci-json"], {}, "rust/crates/gateway-native/src/lib.rs");
+test.each([
+  "gateway-native",
+  "gateway-native-supervisor-read",
+  "gateway-quality",
+  "gateway-quality-syntax",
+  "gateway-claude-runtime-test-support",
+  "gateway-migration-test-support",
+])("native-only %s source does not schedule WASM compilation on ordinary PRs", (name) => {
+  const ci = scopeCommand(["scripts/test-scope.ts", "--ci-json"], {}, `rust/crates/${name}/src/lib.rs`);
   expect(ci.status).toBe(0);
   expect(JSON.parse(ci.stdout)).toMatchObject({
     affectedTests: [],
@@ -715,5 +830,53 @@ test("native-only companion source does not schedule a WASM compilation on ordin
     needsRustWasm: false,
     needsRustBuild: false,
     needsTypeScriptValidate: false,
+  });
+});
+
+test.each(["gateway-admin-test-support", "gateway-extras-runtime-test-support"])(
+  "portable %s fixture source keeps WASM compilation on ordinary PRs",
+  (name) => {
+    const ci = scopeCommand(["scripts/test-scope.ts", "--ci-json"], {}, `rust/crates/${name}/src/lib.rs`);
+    expect(ci.status).toBe(0);
+    expect(JSON.parse(ci.stdout)).toMatchObject({
+      affectedTests: [],
+      needsRustNative: true,
+      needsRustWasm: true,
+      needsRustBuild: true,
+      needsTypeScriptValidate: false,
+    });
+  }
+);
+
+test("parser launcher and staged Clippy tests are in the selected quality profile", () => {
+  for (const path of ["scripts/rust-quality.ts", "scripts/rust-quality-clippy.ts"]) {
+    const selected = scopeCommand(["scripts/test-runner.ts", "quality", "--list"], {}, path);
+    expect(selected.status).toBe(0);
+    const profiles = JSON.parse(selected.stdout) as { files: string[] }[];
+    expect(profiles.flatMap((profile) => profile.files)).toContain(path.replace(".ts", ".test.ts"));
+  }
+});
+
+describe("private-copy trusted controller source selection", () => {
+  const controller = "tests/private-bun-copy-confinement.test.ts";
+  const producer = "tools/cloudflare/private-bun-copy.ts";
+  const create = (present = true) => {
+    const root = mkdtempSync(join(fixture, "private-controller-"));
+    mkdirSync(join(root, "tools/cloudflare"), { recursive: true });
+    mkdirSync(join(root, "tests"));
+    mkdirSync(join(root, "src"));
+    writeFileSync(join(root, producer), "import '../../src/snapshot.ts';\n");
+    writeFileSync(join(root, "src/snapshot.ts"), "export const snapshot = 1;\n");
+    if (present) writeFileSync(join(root, controller), "// Launches fixed product path through an OS child.\n");
+    return root;
+  };
+  test("producer and transitive source changes select the existing controller without importing product code", () => {
+    const root = create();
+    for (const path of [producer, "src/snapshot.ts"]) expect(selectAffectedTestFiles([path], [controller], root)).toEqual([controller]);
+    expect(selectAffectedTestFiles(["src/foreign.ts"], [controller], root)).toEqual([]);
+  });
+  test("missing controller and neighboring candidates cannot acquire synthetic controller coverage", () => {
+    expect(selectAffectedTestFiles([producer], [controller], create(false))).toEqual([]);
+    expect(selectAffectedTestFiles([producer], [controller + ".other"], create())).toEqual([]);
   });
 });

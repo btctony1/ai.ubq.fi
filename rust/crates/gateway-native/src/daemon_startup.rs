@@ -7,7 +7,7 @@ use crate::{
     supervisor::SourceId,
     supervisor_data::{SupervisorData, SupervisorSourceConfig},
 };
-use gateway_auth::GatewayError;
+use gateway_core::error::GatewayError;
 use std::path::PathBuf;
 pub(crate) mod live_bootstrap;
 pub(crate) fn source_policy(
@@ -20,65 +20,54 @@ pub(crate) fn source_policy(
     for source in &config.sources {
         let socket = source.socket_path().to_owned();
         unix_sockets.push(socket.clone());
-        if let Some(home) = source.codex_home() {
-            if !home.is_dir() {
-                sources.push(SupervisorSourceConfig::configured(
-                    SourceId::parse(source.id())?,
-                    source.name().into(),
-                    socket,
-                    source.codex_home().map(PathBuf::from),
-                )?);
-                continue;
-            }
+        if let Some(home) = source.codex_home().filter(|home| home.is_dir()) {
             let canonical_home = std::fs::canonicalize(home).map_err(|_| {
-                gateway_auth::GatewayError::unavailable(
+                GatewayError::unavailable(
                     "Configured source home is unavailable",
                     "native_source_unavailable",
                 )
             })?;
             list_directories.push(canonical_home.clone());
             for entry in std::fs::read_dir(home).map_err(|_| {
-                gateway_auth::GatewayError::unavailable(
+                GatewayError::unavailable(
                     "Configured source directory is unavailable",
                     "native_source_unavailable",
                 )
             })? {
                 let entry = entry.map_err(|_| {
-                    gateway_auth::GatewayError::unavailable(
+                    GatewayError::unavailable(
                         "Configured source entry is unavailable",
                         "native_source_unavailable",
                     )
                 })?;
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                if matches!(name.as_ref(), "sessions" | "archived_sessions")
+                if !(matches!(name.as_ref(), "sessions" | "archived_sessions")
                     || name
                         .strip_prefix("state_")
                         .and_then(|name| name.strip_suffix(".sqlite"))
                         .is_some_and(|number| {
                             !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
-                        })
+                        }))
                 {
-                    let canonical = std::fs::canonicalize(entry.path()).map_err(|_| {
-                        gateway_auth::GatewayError::unavailable(
-                            "Configured source path is unavailable",
-                            "native_source_unavailable",
-                        )
-                    })?;
-                    if !canonical.starts_with(&canonical_home) {
-                        return Err(gateway_auth::GatewayError::unavailable(
-                            "Configured source path escapes its home",
-                            "native_source_unavailable",
-                        ));
-                    }
-                    readonly_paths.push(canonical);
-                    for suffix in ["-wal", "-shm"] {
-                        let companion =
-                            PathBuf::from(format!("{}{suffix}", entry.path().display()));
-                        if companion.is_file() {
-                            readonly_paths.push(companion);
-                        }
-                    }
+                    continue;
+                }
+                let canonical = std::fs::canonicalize(entry.path()).map_err(|_| {
+                    GatewayError::unavailable(
+                        "Configured source path is unavailable",
+                        "native_source_unavailable",
+                    )
+                })?;
+                if !canonical.starts_with(&canonical_home) {
+                    return Err(GatewayError::unavailable(
+                        "Configured source path escapes its home",
+                        "native_source_unavailable",
+                    ));
+                }
+                readonly_paths.push(canonical);
+                for suffix in ["-wal", "-shm"] {
+                    let companion = PathBuf::from(format!("{}{suffix}", entry.path().display()));
+                    readonly_paths.extend(companion.is_file().then_some(companion));
                 }
             }
         }
@@ -111,7 +100,7 @@ pub(crate) fn source_policy(
 }
 pub(crate) fn request_service(
     config: PreparedNativeDaemonConfig,
-    connector: std::sync::Arc<dyn crate::live_bridge::NativeLiveConnector>,
+    connector: std::sync::Arc<dyn crate::live_bridge::socket::NativeLiveConnector>,
     reverse: Option<std::net::TcpStream>,
 ) -> Result<NativeHttpService, GatewayError> {
     request_service_with(
@@ -120,16 +109,17 @@ pub(crate) fn request_service(
         reverse,
         |target, socket, identity, connector| {
             #[cfg(not(test))]
-            let authority = crate::live_bridge::NativeLiveAuthorityHttp::from_connected(
+            let authority = crate::live_bridge::authority::NativeLiveAuthorityHttp::from_connected(
                 target, socket, identity,
             )?;
             #[cfg(test)]
-            let authority = crate::live_bridge::NativeLiveAuthorityHttp::with_test_roots(
-                target,
-                socket,
-                identity,
-                live_tests::authority_roots(),
-            )?;
+            let authority =
+                crate::live_bridge::authority::NativeLiveAuthorityHttp::with_test_roots(
+                    target,
+                    socket,
+                    identity,
+                    live_tests::authority_roots(),
+                )?;
             let service = crate::live_bridge::NativeLiveService::configured(
                 std::sync::Arc::new(authority),
                 connector,
@@ -142,13 +132,13 @@ pub(crate) fn request_service(
 }
 fn request_service_with(
     config: PreparedNativeDaemonConfig,
-    connector: std::sync::Arc<dyn crate::live_bridge::NativeLiveConnector>,
+    connector: std::sync::Arc<dyn crate::live_bridge::socket::NativeLiveConnector>,
     reverse: Option<std::net::TcpStream>,
     build_live: impl FnOnce(
         &str,
         std::net::TcpStream,
         gateway_auth::native_auth::NativeTransportIdentity,
-        std::sync::Arc<dyn crate::live_bridge::NativeLiveConnector>,
+        std::sync::Arc<dyn crate::live_bridge::socket::NativeLiveConnector>,
     ) -> Result<crate::live_bridge::NativeLiveService, GatewayError>,
 ) -> Result<NativeHttpService, GatewayError> {
     if config.owner_renewal.is_some() {

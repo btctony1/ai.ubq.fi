@@ -1,26 +1,23 @@
 //! Recoverable request intent only. Counters, pool state and billing remain m03-owned.
 use crate::types::{CredentialFence, RevisionCheckWire};
-use gateway_authority::TokenSource;
-use gateway_authority::{
-    paid::{PaidCorrelation, PaidReservation, PaidUsage},
-    quota::{ApiReservation, KernelReservation},
-};
+use gateway_authority::kernel::KernelReservation;
+use gateway_authority::paid_types::{PaidCorrelation, PaidReservation, PaidUsage};
+use gateway_authority::quota::ApiReservation;
+use gateway_authority::store::TokenSource;
+use gateway_core::error::GatewayError;
+use gateway_core::identity::{PaidAttemptId, RequestContext};
+use gateway_core::lifecycle::TransportObservation;
 use gateway_core::local_work::{LocalWorkRecord, journal_local_work};
+use gateway_core::model::ModelId;
 use gateway_core::provider::UpstreamProvider;
-use gateway_core::{
-    GatewayError,
-    identity::{PaidAttemptId, RequestContext},
-    lifecycle::TransportObservation,
-    model::ModelId,
-    source_control::{decode_source_control_record, encode_source_control_record},
-    source_json::SourceJson,
-    source_serialization as source,
-    state::{
-        AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,
-        StoredRecord,
-    },
-    tuple_key::{ScalarKeyPart, TupleKey},
+use gateway_core::source_control::{decode_source_control_record, encode_source_control_record};
+use gateway_core::source_json::SourceJson;
+use gateway_core::source_serialization as source;
+use gateway_core::state::{
+    AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,
+    StoredRecord,
 };
+use gateway_core::tuple_key::{ScalarKeyPart, TupleKey};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -129,6 +126,40 @@ pub struct Journal {
     pub local_work: Option<LocalWorkRecord>,
 }
 impl Journal {
+    pub(crate) fn empty(
+        v: u32,
+        context: RequestContext,
+        input_digest: String,
+        lease_expires_at_ms: i64,
+        updated_at_ms: i64,
+    ) -> Self {
+        Self {
+            v,
+            context,
+            input_digest,
+            api: None,
+            kernel: None,
+            cursor: 0,
+            attempts: vec![],
+            active: None,
+            model_sibling_retries: 0,
+            refreshed_versions: vec![],
+            recovery_attempted: false,
+            claude_unavailable: false,
+            semantic_committed: false,
+            terminal_intent: None,
+            finished: false,
+            recovering: false,
+            lease_expires_at_ms,
+            updated_at_ms,
+            extras_family: None,
+            extras_child_count: None,
+            extras_dispatch: None,
+            children: vec![],
+            kernel_override: None,
+            local_work: None,
+        }
+    }
     pub(crate) fn decode(value: &SourceJson) -> Result<Self, GatewayError> {
         let local = journal_local_work(value)?;
         let row: Self = value

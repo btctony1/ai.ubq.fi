@@ -1,22 +1,22 @@
-use crate::source_input as input;
+use crate::{
+    audit::{self, RETENTION_MS},
+    keys::{ApiKeyRecord, public_record},
+    source_input as input,
+};
 use gateway_auth::{
-    AuthResponse, api_keys, invalid,
+    api_keys,
     passkeys::{PasskeyUser, user_wire},
     store,
+    types::{AuthResponse, invalid},
 };
-use gateway_core::source_json::SourceJson;
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::{QueryRequest, QuerySelector, QueryStore},
+    source_json::SourceJson,
     source_serialization as source,
     state::{RecordKey, StoredRecord},
 };
 use serde_json::json;
-
-use crate::{
-    audit::{self, RETENTION_MS},
-    keys::{ApiKeyRecord, public_record},
-};
 
 /// Each storage call is bounded; source list endpoints exhaust the cursor rather than truncate silently.
 async fn prefix_rows<S: QueryStore>(
@@ -195,7 +195,7 @@ pub async fn effective_key_record_with_usage<S: QueryStore>(
         .await?;
     if let Some(row) = paid {
         row.validate_version()?;
-        let paid: gateway_authority::paid::PaidWindow =
+        let paid: gateway_authority::paid_types::PaidWindow =
             serde_json::from_value(row.json_value()?.clone()).map_err(|_| {
                 GatewayError::unavailable(
                     "Paid billing window is corrupt",

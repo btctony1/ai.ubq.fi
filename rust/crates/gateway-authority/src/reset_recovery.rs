@@ -1,21 +1,38 @@
 //! Provider-outcome reconciliation and verified-reset recovery, with no provider I/O.
-use crate::reset::{
-    FullPoolResetReconciliation, ResetAuthorization, ResetCandidate, ResetRecord, ResetState,
-    authorization_fences, check_record, reset_invocation,
-};
-use crate::routing::{AdmittedAccount, ProbeLease, read_view};
 use crate::{
-    Authority, PROBE_LEASE_MS, TokenSource, add, invalid, keys, next_generation, text, unavailable,
+    PROBE_LEASE_MS, add, invalid, keys, next_generation,
+    reset::{ResetAuthorization, authorization_fences, check_record},
+    reset_types::{
+        FullPoolResetReconciliation, ResetCandidate, ResetRecord, ResetState, reset_invocation,
+    },
+    routing::read_view,
+    routing_types::{AdmittedAccount, ProbeLease},
+    store::{Authority, TokenSource},
+    text, unavailable,
 };
-use gateway_core::GatewayError;
-use gateway_core::identity::{ActiveSelection, ActiveTransitionReason};
-use gateway_core::state::AuthorityStore;
+use gateway_core::{
+    error::GatewayError,
+    identity::{ActiveSelection, ActiveTransitionReason},
+    state::AuthorityStore,
+};
+
+fn existing_reset_block_reason(row: &ResetRecord, now: i64) -> Result<Option<&str>, GatewayError> {
+    let error = row.last_error_code.as_deref();
+    Ok(Some(match row.state {
+        ResetState::Verified if row.verified_at_ms.is_some() => return Ok(None),
+        ResetState::Claimed if row.lease_expires_at_ms <= now => "unsubmitted_transaction",
+        ResetState::Claimed => "in_progress",
+        ResetState::Submitted | ResetState::Unknown => "terminal_outcome_ambiguous",
+        ResetState::Rejected => error.unwrap_or("previously_rejected"),
+        ResetState::Verified => return Err(invalid("Verified reset timestamp is missing.")),
+    }))
+}
 
 impl<S: AuthorityStore, I: TokenSource> Authority<S, I> {
     /// Source preexistingBankedReset: never request inventory or create a redemption/budget.
     pub async fn reconcile_full_pool_reset(
         &self,
-        proof: &crate::routing::CohortProof,
+        proof: &crate::routing_types::CohortProof,
         original: &gateway_core::identity::RequestContext,
     ) -> Result<FullPoolResetReconciliation, GatewayError> {
         if !self.migrate_full_pool_reset_settings().await? {
@@ -62,23 +79,10 @@ impl<S: AuthorityStore, I: TokenSource> Authority<S, I> {
                 if row.v != 1 || row.identity != invocation.identity {
                     return Err(invalid("Existing reset record context does not match."));
                 }
-                if row.state != ResetState::Verified || row.verified_at_ms.is_none() {
-                    let reason = match row.state {
-                        ResetState::Claimed if row.lease_expires_at_ms <= now => {
-                            "unsubmitted_transaction".into()
-                        }
-                        ResetState::Claimed => "in_progress".into(),
-                        ResetState::Submitted | ResetState::Unknown => {
-                            "terminal_outcome_ambiguous".into()
-                        }
-                        ResetState::Rejected => row
-                            .last_error_code
-                            .unwrap_or_else(|| "previously_rejected".into()),
-                        ResetState::Verified => {
-                            return Err(invalid("Verified reset timestamp is missing."));
-                        }
-                    };
-                    return Ok(FullPoolResetReconciliation::Blocked { reason });
+                if let Some(reason) = existing_reset_block_reason(&row, now)? {
+                    return Ok(FullPoolResetReconciliation::Blocked {
+                        reason: reason.into(),
+                    });
                 }
                 existing = Some((candidate, row));
                 break;
@@ -194,7 +198,7 @@ impl<S: AuthorityStore, I: TokenSource> Authority<S, I> {
     /// A documented reset terminal grants a fenced probe, never recovered capacity.
     pub async fn elect_full_pool_reset(
         &self,
-        permit: &crate::full_pool_reset::AutomaticResetPermit,
+        permit: &crate::full_pool_reset::types::AutomaticResetPermit,
         expected: &ResetRecord,
     ) -> Result<Option<AdmittedAccount>, GatewayError> {
         let now = self.fresh_time(0)?;
@@ -261,7 +265,7 @@ impl<S: AuthorityStore, I: TokenSource> Authority<S, I> {
             let lease = ProbeLease {
                 token: self.tokens.next_token()?,
                 generation: slot.generation as i64,
-                circuit: crate::routing::ProbeCircuit::Quota,
+                circuit: crate::routing_types::ProbeCircuit::Quota,
                 quota_class: Some(candidate.proof.quota_class),
                 expires_at_ms: add(now, PROBE_LEASE_MS)?,
             };

@@ -8,7 +8,7 @@ use gateway_observability::{
 use std::rc::Rc;
 use worker::Context;
 
-use super::{Body, account::CurrentLiveAccount};
+use super::{account::CurrentLiveAccount, body::Body};
 
 pub(super) async fn response(
     store: crate::authority::RemoteAuthorityStore,

@@ -1,5 +1,5 @@
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::{QueryPage, QueryRequest, QueryStore},
     state::{
         AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, StoredRecord,

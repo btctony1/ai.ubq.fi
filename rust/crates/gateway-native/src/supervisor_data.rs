@@ -1,14 +1,15 @@
 //! Constructor-owned read-only source registry, snapshot cache and selection capabilities.
 use crate::{
-    redaction::redact,
     supervisor::{InventoryScope, KnownThread, SourceId},
     supervisor_brief::{self, SupervisorBriefContext},
-    supervisor_inventory::{self as inventory, SessionParts, ThreadProbe, text},
-    supervisor_metadata::{self, MetadataRead},
     transport::{SupervisorMethod, SupervisorTransport},
     unix::UnixSupervisor,
 };
-use gateway_core::GatewayError;
+use gateway_core::{error::GatewayError, redaction::redact};
+use gateway_native_supervisor_read::{
+    inventory::{self, SessionParts, ThreadProbe, text},
+    metadata::{self as supervisor_metadata, MetadataRead},
+};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -34,7 +35,7 @@ impl SupervisorSourceConfig {
         codex_home: Option<PathBuf>,
     ) -> Result<Self, GatewayError> {
         let name = name
-            .trim_matches(crate::redaction::source_whitespace)
+            .trim_matches(gateway_core::redaction::source_whitespace)
             .to_owned();
         if name.is_empty()
             || name.encode_utf16().count() > 64

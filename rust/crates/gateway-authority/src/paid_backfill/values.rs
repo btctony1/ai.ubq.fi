@@ -1,5 +1,5 @@
-use crate::{PAID_RETENTION_MS, add, nonnegative, paid::PaidAttempt, validate_time};
-use gateway_core::{GatewayError, identity::MAX_SAFE_INTEGER};
+use crate::{PAID_RETENTION_MS, add, nonnegative, paid_types::PaidAttempt, validate_time};
+use gateway_core::{error::GatewayError, identity::MAX_SAFE_INTEGER};
 use serde_json::{Value, json};
 
 pub(super) fn expiry(anchor: i64, now: i64) -> Result<i64, GatewayError> {

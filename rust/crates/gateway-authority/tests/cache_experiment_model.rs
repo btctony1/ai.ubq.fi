@@ -1,5 +1,5 @@
 //! Golden outputs captured from the current TypeScript source, with no provider I/O.
-use gateway_authority::cache_experiment::{model::*, request_body};
+use gateway_authority::cache_experiment::{model::*, run::request_body};
 use serde_json::Value;
 
 fn fixture() -> Value {

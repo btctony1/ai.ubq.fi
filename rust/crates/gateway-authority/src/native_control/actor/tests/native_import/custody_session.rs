@@ -1,7 +1,10 @@
 //! Actual original admin/admission/start + genuine MAC peer; verifier itself is readonly.
 use super::*;
+use crate::native_control::custody::validate_native_control_custody;
 use crate::native_control::import::{
-    AuthenticatedNativeImport, ImportCustodyStartedRequest, NativeImportClaim, NativeImportMode,
+    AuthenticatedNativeImport,
+    custody_session::ImportCustodyStartedRequest,
+    effects::{NativeImportClaim, NativeImportMode},
 };
 use gateway_auth::{
     native::{NATIVE_CONTROL_PATH, NATIVE_RENEWAL_AUTHORITY_PATH},
@@ -533,38 +536,43 @@ fn request_data_has_exact_required_fields_version_and_existing_finite_domains() 
 }
 
 #[test]
-fn normal_v3_required_null_action_and_actual_started_request_preserve_original_lifetime() {
+fn normal_v3_required_null_action_and_actual_started_request_preserve_original_lifetime()
+-> TestResult {
     run(async {
         let f = Fixture::new();
         let (proof, mut claim, data) = f.prepare_version(true, true).await;
         let key = crate::native_control::rows::key("action", &data.action_ref);
-        let row = f.store.rows.lock().unwrap().get(&key.0).unwrap().clone();
+        let row = f
+            .store
+            .rows
+            .lock()
+            .map_err(|error| error.to_string())?
+            .get(&key.0)
+            .ok_or("missing value")?
+            .clone();
         assert_eq!(row.value["v"], 3);
-        assert!(row.value.as_object().unwrap().contains_key("publication"));
+        let fields = row.value.as_object().ok_or("missing action fields")?;
+        assert!(fields.contains_key("publication"));
         assert!(row.value["publication"].is_null());
         assert_eq!(data.deadline_ms, proof.deadline_ms());
-        crate::native_control::validate_native_control_custody(&key, &row).unwrap();
+        validate_native_control_custody(&key, &row)?;
         let peer = f.peer(&data, 70).await;
         let snapshot = f.snapshot();
-        let observation = f
-            .control()
-            .verify_started_custody(&peer, &data)
-            .await
-            .unwrap();
+        let observation = f.control().verify_started_custody(&peer, &data).await?;
         assert_eq!(observation.deadline_ms(), data.deadline_ms);
         assert_eq!(f.snapshot(), snapshot);
         assert!(
             f.control()
                 .start_import(&mut claim, &proof)
-                .await
-                .unwrap()
+                .await?
                 .is_none()
         );
         for mutation in ["missing", "unknown", "partial"] {
             let mut wrong = row.clone();
             match mutation {
                 "missing" => {
-                    wrong.value.as_object_mut().unwrap().remove("publication");
+                    let fields = wrong.value.as_object_mut().ok_or("missing action fields")?;
+                    fields.remove("publication");
                 }
                 "unknown" => {
                     wrong.value["extra"] = json!(true);
@@ -574,26 +582,36 @@ fn normal_v3_required_null_action_and_actual_started_request_preserve_original_l
                 }
             }
             assert!(
-                crate::native_control::validate_native_control_custody(&key, &wrong).is_err(),
+                validate_native_control_custody(&key, &wrong).is_err(),
                 "{mutation}"
             );
         }
-    });
+        Ok(())
+    })
 }
 #[test]
-fn historical_v2_preparation_remains_lossless_without_publication_permission() {
+fn historical_v2_preparation_remains_lossless_without_publication_permission() -> TestResult {
     run(async {
         let f = Fixture::new();
         let (_, _, data) = f.prepare(true).await;
         let key = crate::native_control::rows::key("action", &data.action_ref);
-        let row = f.store.rows.lock().unwrap().get(&key.0).unwrap().clone();
+        let row = f
+            .store
+            .rows
+            .lock()
+            .map_err(|error| error.to_string())?
+            .get(&key.0)
+            .ok_or("missing value")?
+            .clone();
         assert_eq!(row.value["v"], 2);
-        assert!(!row.value.as_object().unwrap().contains_key("publication"));
+        let fields = row.value.as_object().ok_or("missing action fields")?;
+        assert!(!fields.contains_key("publication"));
         let mut wrong = row.clone();
         wrong.value["publication"] = json!(null);
-        assert!(crate::native_control::validate_native_control_custody(&key, &wrong).is_err());
-        crate::native_control::validate_native_control_custody(&key, &row).unwrap();
-    });
+        assert!(validate_native_control_custody(&key, &wrong).is_err());
+        validate_native_control_custody(&key, &row)?;
+        Ok(())
+    })
 }
 
 mod publication;

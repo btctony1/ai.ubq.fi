@@ -1,11 +1,9 @@
 //! Authoritative source-wire errors; diagnostics never replace the original body.
-use std::rc::Rc;
-
-use gateway_core::GatewayError;
-use gateway_routing_runtime::types::{RoutingError, SourceRefusalBody};
-use worker::Response;
-
 use crate::inference_capture::Capture;
+use gateway_core::error::GatewayError;
+use gateway_routing_runtime::types::{RoutingError, SourceRefusalBody};
+use std::rc::Rc;
+use worker::Response;
 
 pub(crate) async fn error_response(
     error: RoutingError,

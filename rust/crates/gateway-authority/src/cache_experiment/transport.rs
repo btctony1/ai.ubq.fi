@@ -5,19 +5,17 @@ use super::{
     state::{CyclePermit, record_key},
 };
 use crate::{
-    Authority, TokenSource,
-    routing::{ProbeCircuit, ProbeLease, model_quota_class, read_pinned_view},
-    store::Transaction,
+    routing::{model_quota_class, read_pinned_view},
+    routing_types::{ProbeCircuit, ProbeLease},
+    store::{Authority, TokenSource, Transaction},
 };
 use gateway_auth::{
     crypto::Secret,
     provider_credentials::{CodexSourcePool, codex_source_pool_key, parse_codex_source_pool},
 };
-use gateway_core::{
-    GatewayError,
-    identity::{AccountBinding, PoolVersionstamp},
-    state::AuthorityStore,
-};
+use gateway_core::error::GatewayError;
+use gateway_core::identity::{AccountBinding, PoolVersionstamp};
+use gateway_core::state::AuthorityStore;
 use serde_json::Value;
 
 pub(super) struct Session {
@@ -93,7 +91,7 @@ impl<S: AuthorityStore, I: TokenSource> Authority<S, I> {
     pub async fn record_cache_quota_block(
         &self,
         dispatch: &CacheDispatch,
-        block: crate::routing::QuotaBlock,
+        block: crate::routing_types::QuotaBlock,
         now: i64,
     ) -> Result<bool, GatewayError> {
         self.record_bound_quota_block(

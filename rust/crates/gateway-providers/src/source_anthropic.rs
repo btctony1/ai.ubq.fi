@@ -1,8 +1,9 @@
 //! The existing lossless Claude selection, without a scalar transcript mirror.
 use crate::{
     replay::{ReplayEntry, ReplayTransport},
-    source as s, source_tools,
-    types::*,
+    source as s,
+    source_tools::{self, ToolMap},
+    types::{ClaudeBodyOptions, PrepareOptions},
 };
 use gateway_core::{source_json::SourceJson, source_serialization as json};
 fn eq(value: &SourceJson, literal: &str) -> bool {
@@ -665,7 +666,7 @@ pub(crate) fn chat(
 fn append_chat_item(
     item: &SourceJson,
     messages: &mut Vec<SourceJson>,
-    names: &crate::types::ToolMap,
+    names: &ToolMap,
 ) -> Option<()> {
     let kind = s::control(&s::get(item, "type")).unwrap_or_else(|| "message".into());
     match kind.as_str() {

@@ -6,7 +6,7 @@ use crate::{
     types::ObservabilityHost,
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     source_json::SourceJson,
     state::{AuthorityStore, RecordKey, RecordMutation, StoredRecord},
 };

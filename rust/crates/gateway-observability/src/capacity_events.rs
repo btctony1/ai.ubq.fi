@@ -1,10 +1,11 @@
 //! Redacted source capacity markers and verified reset backfill; no reset execution.
-use crate::{ObservabilityRuntime, types::ObservabilityHost};
 use crate::{
+    ObservabilityRuntime,
     capacity_shapes::{BUCKET_MS, RETENTION_MS},
     store,
+    types::ObservabilityHost,
 };
-use gateway_core::{GatewayError, query::QueryStore};
+use gateway_core::{error::GatewayError, query::QueryStore};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 fn text(v: &Value, max: usize) -> bool {

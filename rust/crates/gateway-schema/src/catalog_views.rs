@@ -1,7 +1,7 @@
 use crate::{
     aliases::*, catalog::*, metadata::*, model_control as c, provider_catalog::*, selection::*,
 };
-use gateway_core::{GatewayError, model::ModelId, source_json::SourceJson};
+use gateway_core::{error::GatewayError, model::ModelId, source_json::SourceJson};
 fn snapshot_models(input: &CatalogInput, full: bool) -> Vec<SourceJson> {
     let snapshot = if full {
         input.codex()

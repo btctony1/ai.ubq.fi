@@ -3,7 +3,8 @@ use crate::{
     connector_policy, connector_protocol::ControlError, daemon_config::NativeDaemonConfig,
     http_server, nonce_sqlite::SqliteNonceStore,
 };
-use gateway_auth::{GatewayError, crypto::sha256_hex};
+use gateway_auth::crypto::sha256_hex;
+use gateway_core::error::GatewayError;
 use std::{
     fs,
     io::{Read, Write},

@@ -1,7 +1,7 @@
 //! Named default/model snapshot audit; source text never crosses a Value transcript.
 use super::{AuditInventory, ObservedRow, SliceInventory, source_fields};
 use gateway_core::{
-    GatewayError, js_string::JsString16, source_control::decode_source_control_record,
+    error::GatewayError, js_string::JsString16, source_control::decode_source_control_record,
     source_json::SourceJson, source_serialization as source,
 };
 use serde_json::json;

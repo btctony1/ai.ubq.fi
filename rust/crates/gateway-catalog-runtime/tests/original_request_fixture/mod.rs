@@ -1,15 +1,11 @@
 //! Original request fixture uses the actual public admission and existing full journal format.
 use super::{MemoryStore, TestAuthority};
-use gateway_authority::{
-    REQUEST_LEASE_MS,
-    paid::PaidRequest,
-    paid_control::{PaidRequestContext, PaidRoutingReceipt},
-};
-use gateway_core::{
-    GatewayError,
-    identity::{PrincipalId, RequestContext},
-    tuple_key::{ScalarKeyPart, TupleKey},
-};
+use gateway_authority::REQUEST_LEASE_MS;
+use gateway_authority::paid_control::{PaidRequestContext, PaidRoutingReceipt};
+use gateway_authority::paid_types::PaidRequest;
+use gateway_core::error::GatewayError;
+use gateway_core::identity::{PrincipalId, RequestContext};
+use gateway_core::tuple_key::{ScalarKeyPart, TupleKey};
 use serde_json::json;
 
 pub fn journal_key(id: &str) -> gateway_core::state::RecordKey {

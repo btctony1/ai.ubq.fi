@@ -1,8 +1,10 @@
 //! Actual Worker WebCrypto AES-GCM for the source embeddings job envelope.
-use gateway_core::GatewayError;
-use worker::js_sys::{Array, ArrayBuffer, Function, Object, Promise, Reflect, Uint8Array};
-use worker::wasm_bindgen::{JsCast, JsValue};
-use worker::wasm_bindgen_futures::JsFuture;
+use gateway_core::error::GatewayError;
+use worker::{
+    js_sys::{Array, ArrayBuffer, Function, Object, Promise, Reflect, Uint8Array},
+    wasm_bindgen::{JsCast, JsValue},
+    wasm_bindgen_futures::JsFuture,
+};
 
 pub async fn encrypt(
     key: &[u8; 32],

@@ -1,5 +1,5 @@
 //! Source Jev SDK and hybrid-residue wire, without ordinary route/admission planners.
-use gateway_core::{GatewayError, js_string::JsString16, source_json::SourceJson};
+use gateway_core::{error::GatewayError, js_string::JsString16, source_json::SourceJson};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -197,5 +197,4 @@ pub(super) fn parse_response(
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;

@@ -5,10 +5,12 @@ use crate::{
     native_import::NativeImportContext,
 };
 use gateway_authority::native_control::import::{
-    AuthenticatedImportTerminal, AuthenticatedNativeImport, ImportCustodyStartedRequest,
-    NativeImportBinding, NativeImportStart,
+    AuthenticatedNativeImport,
+    custody_session::ImportCustodyStartedRequest,
+    effects::{NativeImportBinding, NativeImportStart},
+    remote::AuthenticatedImportTerminal,
 };
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 use std::{
     os::unix::fs::MetadataExt,
     time::{Duration, Instant},
@@ -16,7 +18,7 @@ use std::{
 
 /// Only the fixed actor's genuine original Start plus its inherited live peer can issue this.
 /// ```compile_fail
-/// use gateway_native::existing_account_import::LiveImportCustody;
+/// use gateway_native::existing_account_import::live_custody::LiveImportCustody;
 /// let forged: LiveImportCustody<'_> = serde_json::from_str("{}").unwrap();
 /// ```
 pub struct LiveImportCustody<'a> {

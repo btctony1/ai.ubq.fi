@@ -1,12 +1,11 @@
+use crate::crypto::Secret;
+use gateway_core::error::GatewayError;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
 };
-
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-use crate::{GatewayError, crypto::Secret};
 
 pub const CANONICAL_ORIGIN: &str = "https://ai.ubq.fi";
 pub const CANDIDATE_ORIGIN: &str = "https://rust-candidate.ai.ubq.fi";

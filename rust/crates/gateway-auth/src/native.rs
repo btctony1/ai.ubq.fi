@@ -1,12 +1,11 @@
 //! Versioned private native carrier. These are constructor capabilities, not
 //! public OpenAI request fields or caller-selected network/filesystem targets.
-use serde::{Deserialize, Serialize};
-
 use crate::{
-    GatewayError,
     crypto::{base64url, decode_base64url, sha256_hex},
-    invalid,
+    types::invalid,
 };
+use gateway_core::error::GatewayError;
+use serde::{Deserialize, Serialize};
 
 pub const NATIVE_WIRE_VERSION: u8 = 1;
 pub const NATIVE_RPC_PATH: &str = "/v1/native/rpc";

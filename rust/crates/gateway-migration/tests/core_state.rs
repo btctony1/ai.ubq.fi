@@ -1,10 +1,17 @@
 #![cfg(not(target_arch = "wasm32"))]
-mod support;
 use gateway_auth::store::key;
 use gateway_core::{state::AuthorityStore, tuple_key::TupleKey};
-use gateway_migration::{native_stage::Captured, *};
+use gateway_migration::{
+    core_state::CORE_STATE_DO_ROW_WRITE_LIMIT,
+    engine::adopt_empty,
+    native_capture::{NativeCapture, NativeEntry, NativeRevision, NativeValue, prepare_native},
+    native_custody::{NativeCustody, OwnedNativeSnapshot},
+    native_inverse::export_native_latest,
+    native_stage::Captured,
+};
+use gateway_migration_test_support::fixture::{Directory, run};
+use gateway_migration_test_support::sqlite_store::SqliteStore;
 use serde_json::{Value, json};
-use support::{fixture::*, sqlite_store::*};
 
 const SOURCE: &str = "6d4d4790a7c06514b92938ff677dbfd52764461d";
 
@@ -342,19 +349,17 @@ fn unknown_source_family_is_refused_before_any_adoption_plan() {
 }
 
 #[test]
-fn selected_core_adopts_restarts_reads_quota_and_round_trips_current_accounting() {
+fn selected_core_adopts_restarts_reads_quota_and_round_trips_current_accounting()
+-> Result<(), Box<dyn std::error::Error>> {
     let token = format!("u_{}", "2".repeat(64));
     let directory = Directory::new();
     let path = directory.file("core.sqlite3");
     let spool = directory.file("spool");
-    std::fs::create_dir(&spool).unwrap();
-    let core = Captured::owned(capture(valid_core_entries()), &spool)
-        .unwrap()
-        .core_capture()
-        .unwrap();
+    std::fs::create_dir(&spool)?;
+    let core = Captured::owned(capture(valid_core_entries()), &spool)?.core_capture()?;
     let prepared = match prepare_native(&core.capture) {
         Ok(prepared) => prepared,
-        Err(gateway_migration::MigrationError::SourceInventory(audit)) => panic!(
+        Err(gateway_migration::error::MigrationError::SourceInventory(audit)) => panic!(
             "prepare_native failed: {:?}",
             audit
                 .errors
@@ -372,29 +377,27 @@ fn selected_core_adopts_restarts_reads_quota_and_round_trips_current_accounting(
     );
     assert_eq!(core.manifest.do_row_writes, 19);
     let store = SqliteStore::open(&path);
-    let receipt = run(adopt_empty(&store, &prepared)).unwrap();
+    let receipt = run(adopt_empty(&store, &prepared))?;
     assert_eq!(receipt.source_rows, core.manifest.selected_rows);
     assert_eq!(receipt.derived_rows, core.manifest.derived_rows);
     drop(store);
 
     let store = SqliteStore::open(&path);
     assert_eq!(
-        run(gateway_auth::api_keys::authenticate(&store, &token, 2300))
-            .unwrap()
-            .key_id,
+        run(gateway_auth::api_keys::authenticate(&store, &token, 2300))?.key_id,
         "core-key"
     );
-    let listed = run(gateway_admin::reads::api_keys(&store, 2300)).unwrap();
+    let listed = run(gateway_admin::reads::api_keys(&store, 2300))?;
     assert_eq!(listed.status, 200);
-    let body = String::from_utf8(listed.body.to_bytes().unwrap()).unwrap();
+    let body = String::from_utf8(listed.body.to_bytes()?)?;
     assert!(body.contains("core-key"));
     assert!(body.contains("42"));
-    let listed: Value = serde_json::from_str(&body).unwrap();
+    let listed: Value = serde_json::from_str(&body)?;
     assert_eq!(
         listed["data"][0]["paid_fallback_reserved_credits"].as_f64(),
         Some(0.000005)
     );
-    let authority = gateway_authority::Authority::with_clock(
+    let authority = gateway_authority::store::Authority::with_clock(
         store.clone(),
         support_clock::Tokens(std::sync::atomic::AtomicU64::new(1)),
         support_clock::Clock,
@@ -404,33 +407,29 @@ fn selected_core_adopts_restarts_reads_quota_and_round_trips_current_accounting(
         &gateway_core::identity::RequestId("post-restart".into()),
         "responses",
         2300,
-    ))
-    .unwrap();
+    ))?;
     assert_eq!(reservation.request_id.0, "post-restart");
     drop(authority);
     let paid_key = gateway_authority::keys::paid_attempt("core-key", "current");
-    let paid = run(store.read(&paid_key)).unwrap().unwrap();
-    let paid = gateway_authority::paid::decode_paid_attempt_record(&paid_key, &paid).unwrap();
+    let paid = run(store.read(&paid_key))?.ok_or("Expected retained fixture row")?;
+    let paid =
+        gateway_authority::paid::source_records::decode_paid_attempt_record(&paid_key, &paid)?;
     assert_eq!(
         paid.billing_state,
         gateway_core::lifecycle::BillingState::Unresolved
     );
     assert_eq!(paid.reservation.reserved_microcredits, 5);
-    let gate = run(store.read(&gateway_authority::keys::paid_gate()))
-        .unwrap()
-        .unwrap();
+    let gate = run(store.read(&gateway_authority::keys::paid_gate()))?
+        .ok_or("Expected retained fixture row")?;
     assert_eq!(
-        gate.json_value().unwrap()["pending"]
+        gate.json_value()?["pending"]
             .as_object()
-            .unwrap()
+            .ok_or("Expected pending accounting object")?
             .len(),
         1
     );
-    let latest = run(export_native_latest(&store, 2300)).unwrap();
-    let paid_sort = TupleKey::from_record_key(&paid_key)
-        .unwrap()
-        .sort_bytes()
-        .to_vec();
+    let latest = run(export_native_latest(&store, 2300))?;
+    let paid_sort = TupleKey::from_record_key(&paid_key)?.sort_bytes().to_vec();
     assert!(
         latest
             .entries
@@ -438,8 +437,7 @@ fn selected_core_adopts_restarts_reads_quota_and_round_trips_current_accounting(
             .any(|entry| entry.raw_key == paid_sort)
     );
     let paid_window = gateway_authority::keys::paid_window("core-key", 3000);
-    let paid_window_sort = TupleKey::from_record_key(&paid_window)
-        .unwrap()
+    let paid_window_sort = TupleKey::from_record_key(&paid_window)?
         .sort_bytes()
         .to_vec();
     assert!(
@@ -450,19 +448,14 @@ fn selected_core_adopts_restarts_reads_quota_and_round_trips_current_accounting(
         "derived paid window must not become source state"
     );
     let inverse = SqliteStore::open(&directory.file("inverse.sqlite3"));
-    let inverse_prepared = prepare_native(&latest).unwrap();
-    run(adopt_empty(&inverse, &inverse_prepared)).unwrap();
+    let inverse_prepared = prepare_native(&latest)?;
+    run(adopt_empty(&inverse, &inverse_prepared))?;
     assert_eq!(
-        run(gateway_auth::api_keys::authenticate(&inverse, &token, 2300))
-            .unwrap()
-            .key_id,
+        run(gateway_auth::api_keys::authenticate(&inverse, &token, 2300))?.key_id,
         "core-key"
     );
-    assert!(
-        run(inverse.read(&key(json!(["uos_ai", "admin_error_log"]))))
-            .unwrap()
-            .is_none()
-    );
+    assert!(run(inverse.read(&key(json!(["uos_ai", "admin_error_log"]))))?.is_none());
+    Ok(())
 }
 
 #[test]
@@ -499,8 +492,11 @@ fn bounded_core_staging_uses_the_same_spool_and_write_budget() {
 
 struct NoCustody;
 impl NativeCustody for NoCustody {
-    async fn observe(&self, _: &str) -> Result<OwnedNativeSnapshot, gateway_core::GatewayError> {
-        Err(gateway_core::GatewayError::unavailable(
+    async fn observe(
+        &self,
+        _: &str,
+    ) -> Result<OwnedNativeSnapshot, gateway_core::error::GatewayError> {
+        Err(gateway_core::error::GatewayError::unavailable(
             "no native custody in synthetic core-state fixture",
             "migration_native_custody_required",
         ))
@@ -508,9 +504,9 @@ impl NativeCustody for NoCustody {
 }
 
 mod support_clock {
-    use gateway_core::GatewayError;
+    use gateway_core::error::GatewayError;
     pub struct Tokens(pub std::sync::atomic::AtomicU64);
-    impl gateway_authority::TokenSource for Tokens {
+    impl gateway_authority::store::TokenSource for Tokens {
         fn next_token(&self) -> Result<String, GatewayError> {
             Ok(format!(
                 "core-fixture-{}",
@@ -519,7 +515,7 @@ mod support_clock {
         }
     }
     pub struct Clock;
-    impl gateway_authority::AuthorityClock for Clock {
+    impl gateway_authority::store::AuthorityClock for Clock {
         fn now_ms(&self) -> Result<i64, GatewayError> {
             Ok(2300)
         }

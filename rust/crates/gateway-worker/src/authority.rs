@@ -1,24 +1,22 @@
 //! Private Worker-binding protocol for the single coordination authority.
 //! The public router must never forward client requests to these store routes.
 
-use std::rc::Rc;
-
+use crate::{storage::SqliteAuthorityStore, transport::body::request_bytes};
 use futures_util::StreamExt;
-use gateway_core::GatewayError;
-use gateway_core::query::{QueryEntry, QueryPage, QueryRequest, QuerySelector, QueryStore};
-use gateway_core::state::{
-    AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,
-    StoredRecord,
+use gateway_core::{
+    error::GatewayError,
+    query::{QueryEntry, QueryPage, QueryRequest, QuerySelector, QueryStore},
+    state::{
+        AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,
+        StoredRecord,
+    },
 };
 use serde::{Deserialize, Serialize};
-use worker::js_sys::Uint8Array;
+use std::rc::Rc;
 use worker::{
     DurableObject, Env, Headers, Method, Request, RequestInit, Response, State, Stub,
-    durable_object,
+    durable_object, js_sys::Uint8Array,
 };
-
-use crate::storage::SqliteAuthorityStore;
-use crate::transport::body::request_bytes;
 
 const WIRE_VERSION_HEADER: &str = "x-uos-authority-wire-version";
 const WIRE_VERSION: &str = "1";
@@ -352,7 +350,7 @@ impl RemoteAuthorityStore {
         &self,
         request: gateway_admin_runtime::capabilities::MigrationRequest,
         context: gateway_admin_runtime::capabilities::Context,
-    ) -> Result<gateway_auth::AuthResponse, GatewayError> {
+    ) -> Result<gateway_auth::types::AuthResponse, GatewayError> {
         match self
             .exchange(StoreRequest::ProfileMigration {
                 request: request.into(),
@@ -366,7 +364,7 @@ impl RemoteAuthorityStore {
                 headers,
                 body,
             } => {
-                let mut response = gateway_auth::AuthResponse::source_json(status, body);
+                let mut response = gateway_auth::types::AuthResponse::source_json(status, body);
                 response.headers = headers;
                 Ok(response)
             }

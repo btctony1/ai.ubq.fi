@@ -5,13 +5,14 @@ pub mod host;
 pub mod providers;
 pub mod state;
 mod versioned;
-pub use host::*;
-pub use state::CatalogState;
 
 use gateway_core::{
-    GatewayError, query::QueryStore, source_json::SourceJson, source_serialization as source,
+    error::GatewayError, query::QueryStore, source_json::SourceJson, source_serialization as source,
 };
 use gateway_schema::{catalog::ProviderCatalog, catalog_cache::CatalogResponse};
+use host::{
+    CatalogFetch, CatalogHost, CatalogProvider, CredentialPublication, ProviderBinding, unavailable,
+};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -125,7 +126,7 @@ impl CatalogRuntime {
         store: &S,
         publication: &CredentialPublication,
         now_ms: i64,
-    ) -> Result<CatalogState, GatewayError> {
+    ) -> Result<state::CatalogState, GatewayError> {
         self.load_view(store, publication, now_ms, false).await
     }
     /// The source public/admin picker may show anonymous discovery without
@@ -135,7 +136,7 @@ impl CatalogRuntime {
         store: &S,
         publication: &CredentialPublication,
         now_ms: i64,
-    ) -> Result<CatalogState, GatewayError> {
+    ) -> Result<state::CatalogState, GatewayError> {
         self.load_view(store, publication, now_ms, true).await
     }
     async fn load_view<S: QueryStore>(
@@ -144,7 +145,7 @@ impl CatalogRuntime {
         publication: &CredentialPublication,
         now_ms: i64,
         public: bool,
-    ) -> Result<CatalogState, GatewayError> {
+    ) -> Result<state::CatalogState, GatewayError> {
         self.hydrate_observations(store, publication, public, now_ms)
             .await?;
         let mut state = state::load_state(

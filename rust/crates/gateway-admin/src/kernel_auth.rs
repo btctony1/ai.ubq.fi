@@ -1,12 +1,11 @@
 //! Source kernel auth projection and missing-policy queue, on the common authority.
-use std::cmp::Ordering;
-
 use gateway_admin_data::migration::kernel::normalize_policy;
-use gateway_auth::{AuthHost, crypto::base64url, store};
+use gateway_auth::{crypto::base64url, store, types::AuthHost};
 use gateway_authority::keys;
-use gateway_core::{GatewayError, state::AuthorityStore};
+use gateway_core::{error::GatewayError, state::AuthorityStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::cmp::Ordering;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelPrincipalState {

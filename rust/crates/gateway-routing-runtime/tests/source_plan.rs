@@ -1,9 +1,10 @@
+use gateway_core::error::GatewayError;
 mod source_input;
 use gateway_core::{
     js_string::JsString16, model::ModelId, provider::UpstreamProvider, source_json::SourceJson,
     source_serialization as source,
 };
-use gateway_providers::ClientSurface;
+use gateway_providers::types::ClientSurface;
 use gateway_routing_runtime::{
     policy::{self, RouteHop},
     types::{RoutingError, RoutingInput, SourceRefusalBody},
@@ -18,8 +19,8 @@ impl gateway_schema::aliases::SourceStringCollator for NoSortingExpected {
         &self,
         _left: &JsString16,
         _right: &JsString16,
-    ) -> Result<std::cmp::Ordering, gateway_core::GatewayError> {
-        Err(gateway_core::GatewayError::unavailable(
+    ) -> Result<std::cmp::Ordering, GatewayError> {
+        Err(GatewayError::unavailable(
             "This captured source case performs no alias sorting.",
             "unexpected_alias_comparison",
         ))

@@ -1,8 +1,7 @@
-use futures_util::StreamExt;
-use gateway_core::GatewayError;
-use worker::{AbortSignal, Request, Response, ResponseBody};
-
 use super::outbound::Cancellation;
+use futures_util::StreamExt;
+use gateway_core::error::GatewayError;
+use worker::{AbortSignal, Request, Response, ResponseBody};
 
 pub const INFERENCE_JSON_MAX_BYTES: usize = 32 * 1024 * 1024;
 pub const PASSKEY_BODY_MAX_BYTES: usize = 64 * 1024;

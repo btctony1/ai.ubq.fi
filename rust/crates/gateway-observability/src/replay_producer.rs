@@ -1,6 +1,6 @@
 //! Source request-owned failure capture. No caller JSON can mint this transport input.
-use crate::{ObservabilityRuntime, types::ObservabilityHost};
 use crate::{
+    ObservabilityRuntime,
     host_types::BuildIdentity,
     incidents::{IncidentEvidence, IncidentObservation},
     replay_crypto::{self, FingerprintInput, ReplayBody, ReplayKey},
@@ -10,6 +10,7 @@ use crate::{
     replay_trace::UpstreamTrace,
     replay_values::{SourceObject, read_json_record},
     store,
+    types::ObservabilityHost,
 };
 use base64::{
     Engine,
@@ -17,7 +18,7 @@ use base64::{
 };
 use gateway_auth::crypto::sha256_hex;
 use gateway_core::{
-    GatewayError, js_string::JsString16, query::QueryStore, source_json::SourceJson,
+    error::GatewayError, js_string::JsString16, query::QueryStore, source_json::SourceJson,
     state::RecordKey,
 };
 use serde::Serialize;

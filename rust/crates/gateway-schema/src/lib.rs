@@ -18,5 +18,3 @@ pub mod selection;
 pub mod snapshot;
 pub mod source_request;
 pub mod util;
-pub use gateway_core::GatewayError;
-pub use serde_json::{Map, Value};

@@ -1,5 +1,5 @@
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::*,
     source_control::{decode_source_control_record, encode_source_control_record},
     source_json::SourceJson,
@@ -25,6 +25,7 @@ impl Wake for WakeThread {
         self.0.unpark();
     }
 }
+type TestResult = Result<(), Box<dyn std::error::Error>>;
 fn run<F: Future>(future: F) -> F::Output {
     let waker = Waker::from(Arc::new(WakeThread(std::thread::current())));
     let mut context = Context::from_waker(&waker);
@@ -72,11 +73,26 @@ impl AuthorityStore for Store {
         Ok(CommitOutcome::Committed)
     }
 }
-fn prepared(generation: &str, body_generation: &str, now: i64) -> PreparedCatalog {
-    prepare_catalog("0.163.0",generation,body_generation,r#"{ "future": 1, "models": [{"slug":"a","context_window":272000,"max_context_window":872000}] }"#,Some("upstream-tag"),Some("application/json"),now,&BTreeMap::new()).unwrap()
+fn prepared(
+    generation: &str,
+    body_generation: &str,
+    now: i64,
+) -> Result<PreparedCatalog, GatewayError> {
+    prepare_catalog(
+        CatalogIdentity {
+            client_version: "0.163.0",
+            auth_generation: generation,
+            body_generation,
+        },
+        r#"{ "future": 1, "models": [{"slug":"a","context_window":272000,"max_context_window":872000}] }"#,
+        Some("upstream-tag"),
+        Some("application/json"),
+        now,
+        &BTreeMap::new(),
+    )
 }
 #[test]
-fn actual_gzip_round_trip_retains_source_and_served_integrity() {
+fn actual_gzip_round_trip_retains_source_and_served_integrity() -> TestResult {
     let mut enrichment = BTreeMap::new();
     enrichment.insert(
         "a".into(),
@@ -86,16 +102,17 @@ fn actual_gzip_round_trip_retains_source_and_served_integrity() {
         },
     );
     let prepared = prepare_catalog(
-        "0.163.0",
-        "auth",
-        "body",
+        CatalogIdentity {
+            client_version: "0.163.0",
+            auth_generation: "auth",
+            body_generation: "body",
+        },
         r#"{ "models": [{"slug":"a","context_window":272000}] }"#,
         Some("upstream"),
         None,
         1000,
         &enrichment,
-    )
-    .unwrap();
+    )?;
     assert!(prepared.chunks.iter().all(|c| c.len() <= CHUNK_BYTES));
     let body = decode_chunks(
         &prepared.chunks,
@@ -103,17 +120,27 @@ fn actual_gzip_round_trip_retains_source_and_served_integrity() {
         prepared.metadata.body_bytes,
         &prepared.metadata.sha256,
     )
-    .unwrap();
+    .ok_or("missing fixture value")?;
     let source = decode_chunks(
         &prepared.source_chunks,
-        prepared.metadata.source_compressed_bytes.unwrap(),
-        prepared.metadata.source_body_bytes.unwrap(),
-        prepared.metadata.source_sha256.as_deref().unwrap(),
+        prepared
+            .metadata
+            .source_compressed_bytes
+            .ok_or("missing fixture value")?,
+        prepared
+            .metadata
+            .source_body_bytes
+            .ok_or("missing fixture value")?,
+        prepared
+            .metadata
+            .source_sha256
+            .as_deref()
+            .ok_or("missing fixture value")?,
     )
-    .unwrap();
+    .ok_or("missing fixture value")?;
     assert_ne!(body, source);
     assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap()["models"][0]["context_window"],
+        serde_json::from_str::<Value>(&body)?["models"][0]["context_window"],
         1050000
     );
     let mut corrupt = prepared.chunks.clone();
@@ -127,29 +154,21 @@ fn actual_gzip_round_trip_retains_source_and_served_integrity() {
         )
         .is_none()
     );
+    Ok(())
 }
 #[test]
-fn durable_publication_is_fenced_and_reclaims_superseded_chunks() {
+fn durable_publication_is_fenced_and_reclaims_superseded_chunks() -> TestResult {
     let store = Store::default();
     store.seed_generation("auth");
-    let one = prepared("auth", "one", 1000);
-    assert!(run(publish_catalog(&store, &one)).unwrap());
-    let loaded = run(load_catalog(&store, "0.163.0", "auth", 1001))
-        .unwrap()
-        .unwrap();
+    let one = prepared("auth", "one", 1000)?;
+    assert!(run(publish_catalog(&store, &one))?);
+    let loaded =
+        run(load_catalog(&store, "0.163.0", "auth", 1001))?.ok_or("missing fixture value")?;
     assert!(loaded.source_body.is_some());
-    assert!(
-        run(load_catalog(&store, "0.163.0", "different", 1001))
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        run(load_catalog(&store, "0.163.0", "auth", 1000 + RETENTION_MS))
-            .unwrap()
-            .is_none()
-    );
-    let two = prepared("auth", "two", 2000);
-    assert!(run(publish_catalog(&store, &two)).unwrap());
+    assert!(run(load_catalog(&store, "0.163.0", "different", 1001))?.is_none());
+    assert!(run(load_catalog(&store, "0.163.0", "auth", 1000 + RETENTION_MS))?.is_none());
+    let two = prepared("auth", "two", 2000)?;
+    assert!(run(publish_catalog(&store, &two))?);
     assert!(
         !store
             .records
@@ -157,8 +176,8 @@ fn durable_publication_is_fenced_and_reclaims_superseded_chunks() {
             .contains_key(&chunk_key("0.163.0", "one", 0, false).0)
     );
     store.seed_generation("rotated");
-    let stale = prepared("auth", "stale", 3000);
-    assert!(!run(publish_catalog(&store, &stale)).unwrap());
+    let stale = prepared("auth", "stale", 3000)?;
+    assert!(!run(publish_catalog(&store, &stale))?);
     assert!(
         !store
             .records
@@ -169,10 +188,11 @@ fn durable_publication_is_fenced_and_reclaims_superseded_chunks() {
         .records
         .borrow()
         .get(&metadata_key("0.163.0").0)
-        .unwrap()
+        .ok_or("missing fixture value")?
         .value
         .clone();
     assert_eq!(metadata["body_generation"], "two");
+    Ok(())
 }
 #[test]
 fn lease_ownership_prevents_duplicate_refresh_and_foreign_release() {
@@ -201,13 +221,15 @@ fn lease_ownership_prevents_duplicate_refresh_and_foreign_release() {
     );
 }
 #[test]
-fn client_conditionals_bind_served_bytes_including_enrichment() {
+fn client_conditionals_bind_served_bytes_including_enrichment() -> TestResult {
     let store = Store::default();
     store.seed_generation("auth");
-    assert!(run(publish_catalog(&store, &prepared("auth", "one", 1000))).unwrap());
-    let loaded = run(load_catalog(&store, "0.163.0", "auth", 1001))
-        .unwrap()
-        .unwrap();
+    assert!(run(publish_catalog(
+        &store,
+        &prepared("auth", "one", 1000)?
+    ))?);
+    let loaded =
+        run(load_catalog(&store, "0.163.0", "auth", 1001))?.ok_or("missing fixture value")?;
     let input = CatalogInput {
         selection: Some(ProviderSelection {
             provider_ids: vec!["codex".into()],
@@ -217,7 +239,10 @@ fn client_conditionals_bind_served_bytes_including_enrichment() {
     };
     let response = catalog_response(&loaded, None, CacheState::Hit, &input);
     assert_eq!(response.body.as_deref(), Some(loaded.body.as_str()));
-    let etag = response.headers.get("ETag").unwrap();
+    let etag = response
+        .headers
+        .get("ETag")
+        .ok_or("missing fixture value")?;
     assert_ne!(etag, "upstream-tag");
     let conditional = catalog_response(&loaded, Some(etag), CacheState::Hit, &input);
     assert_eq!(conditional.status, 304);
@@ -227,15 +252,15 @@ fn client_conditionals_bind_served_bytes_including_enrichment() {
         Some(&format!("\"other\", {etag}")),
         etag
     ));
+    Ok(())
 }
 #[test]
-fn cache_decisions_never_revalidate_enriched_legacy_as_source() {
+fn cache_decisions_never_revalidate_enriched_legacy_as_source() -> TestResult {
     let store = Store::default();
     store.seed_generation("auth");
-    run(publish_catalog(&store, &prepared("auth", "one", 1000))).unwrap();
-    let mut loaded = run(load_catalog(&store, "0.163.0", "auth", 1001))
-        .unwrap()
-        .unwrap();
+    run(publish_catalog(&store, &prepared("auth", "one", 1000)?))?;
+    let mut loaded =
+        run(load_catalog(&store, "0.163.0", "auth", 1001))?.ok_or("missing fixture value")?;
     assert_eq!(
         initial_action(Some(&loaded), 1001),
         CatalogAction::Serve(CacheState::Hit)
@@ -267,21 +292,23 @@ fn cache_decisions_never_revalidate_enriched_legacy_as_source() {
         lease_action(None, false, 1000),
         CatalogAction::WaitCold { until_ms: 6000 }
     ));
+    Ok(())
 }
 #[test]
-fn exact_query_and_version_bound_keep_caches_separate() {
+fn exact_query_and_version_bound_keep_caches_separate() -> TestResult {
     assert_eq!(requested_client_version(&[]), None);
     assert_eq!(requested_client_version(&["0.163.0", "0.163.0"]), Some(""));
     assert!(validate_client_version("").is_err());
     let mut metadata = Vec::new();
     for i in 0..34 {
-        let mut entry = prepared("auth", &i.to_string(), i).metadata;
+        let mut entry = prepared("auth", &i.to_string(), i)?.metadata;
         entry.client_version = format!("0.{i}.0");
         metadata.push(entry);
     }
     let removed = prune_versions(&metadata, "0.0.0");
     assert_eq!(removed.len(), 2);
     assert!(removed.iter().all(|m| m.client_version != "0.0.0"));
+    Ok(())
 }
 
 #[test]
@@ -381,7 +408,7 @@ impl QueryStore for Store {
     }
 }
 #[test]
-fn typed_catalog_keys_and_paginated_pruning_use_shared_tuple_contract() {
+fn typed_catalog_keys_and_paginated_pruning_use_shared_tuple_contract() -> TestResult {
     for key in [
         auth_generation_key(),
         metadata_key("0.163.0"),
@@ -391,19 +418,16 @@ fn typed_catalog_keys_and_paginated_pruning_use_shared_tuple_contract() {
         runtime_config_key(),
     ] {
         assert!(key.0.starts_with("tuple-v1:"));
-        TupleKey::from_record_key(&key)
-            .unwrap()
-            .validate_stored_key()
-            .unwrap();
+        TupleKey::from_record_key(&key)?.validate_stored_key()?;
     }
     let store = Store::default();
     store.seed_generation("auth");
     for index in 0..35 {
-        let mut prepared = prepared("auth", &format!("g{index}"), 1000 + index);
+        let mut prepared = prepared("auth", &format!("g{index}"), 1000 + index)?;
         prepared.metadata.client_version = format!("0.{index}.0");
-        assert!(run(publish_catalog(&store, &prepared)).unwrap());
+        assert!(run(publish_catalog(&store, &prepared))?);
     }
-    run(prune_stored_catalog_versions(&store, "0.0.0", 2000)).unwrap();
+    run(prune_stored_catalog_versions(&store, "0.0.0", 2000))?;
     let count = store
         .records
         .borrow()
@@ -429,6 +453,7 @@ fn typed_catalog_keys_and_paginated_pruning_use_shared_tuple_contract() {
             .borrow()
             .contains_key(&chunk_key("0.1.0", "g1", 0, false).0)
     );
+    Ok(())
 }
 
 #[test]

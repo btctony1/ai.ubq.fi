@@ -2,10 +2,10 @@
 //! No reservation/index permission, new namespace, or generic storage interpretation.
 use crate::{parse, store};
 use gateway_admin::source_input as body;
-use gateway_auth::invalid;
-use gateway_authority::quota::{KernelPolicy, KernelWindow};
+use gateway_auth::types::invalid;
+use gateway_authority::kernel::{KernelPolicy, KernelWindow};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     source_control::{decode_source_control_record, encode_source_control_record},
     source_json::SourceJson,

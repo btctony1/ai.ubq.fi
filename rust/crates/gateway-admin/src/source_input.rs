@@ -1,7 +1,7 @@
 //! Data-only admin field views over the shared source JSON/string grammar.
 //! The single AdminInput body stays SourceJson; these views grant no authority.
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     source_json::SourceJson,
     source_serialization as source,

@@ -4,13 +4,14 @@ use gateway_auth::{
     provider_credentials::{CodexSourceAccount, CodexSourcePool, codex_source_pool_key},
 };
 use gateway_authority::{
-    Authority, AuthorityClock, TokenSource,
     capacity::*,
+    capacity_rules::parse_capacity_store,
     keys,
     paid_control::PaidControlOwner,
-    routing::{PoolAccount, SubscriptionPool, parse_capacity_store},
+    routing_types::{PoolAccount, SubscriptionPool},
+    store::{Authority, AuthorityClock, TokenSource},
 };
-use gateway_core::{GatewayError, identity::PoolVersionstamp, state::StoredRecord};
+use gateway_core::{error::GatewayError, identity::PoolVersionstamp, state::StoredRecord};
 use gateway_observability::{ObservabilityRuntime, host_types::*, types::ObservabilityHost};
 use serde_json::{Value, json};
 use std::{

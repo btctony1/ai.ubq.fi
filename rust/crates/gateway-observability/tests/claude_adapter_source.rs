@@ -3,7 +3,7 @@ mod support;
 use gateway_admin_runtime::capabilities::{CodexRequest, Context, ProviderRequest};
 use gateway_auth::crypto::sha256_hex;
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::{QueryPage, QueryRequest, QueryStore},
     source_json::SourceJson,
     state::{AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, StoredRecord},

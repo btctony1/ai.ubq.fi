@@ -1,5 +1,6 @@
 //! Exact chart transitions and hourly research folds from source capacity-history/rollups.
 use crate::capacity_shapes::{BUCKET_MS, HOUR_MS, source};
+use gateway_core::error::GatewayError;
 use serde_json::{Value, json};
 pub fn same_cohort(a: &Value, b: &Value) -> bool {
     a["account_cohort_id"].is_string() && a["account_cohort_id"] == b["account_cohort_id"]
@@ -136,8 +137,8 @@ pub fn merge_rollup(previous: Option<&Value>, point: &Value) -> Value {
 pub fn merge_remote_history(
     local: &[Value],
     remote: &[(String, Value)],
-    compare: impl Fn(&str, &str) -> Result<std::cmp::Ordering, gateway_core::GatewayError>,
-) -> Result<Vec<Value>, gateway_core::GatewayError> {
+    compare: impl Fn(&str, &str) -> Result<std::cmp::Ordering, GatewayError>,
+) -> Result<Vec<Value>, GatewayError> {
     let mut ordered = local.to_vec();
     ordered.sort_by_key(|p| {
         (
@@ -179,19 +180,18 @@ pub fn merge_remote_history(
         }
         let i = ordered
             .partition_point(|p| crate::store::safe_i64(&p["sampled_at_ms"]).unwrap_or(0) < sample);
+        let identity = |p: &Value, slot| {
+            let s = source(p, slot)?;
+            Some(if s["failure_kind"] == "not_configured" {
+                json!("not_configured")
+            } else {
+                s["account_cohort_id"].clone()
+            })
+        };
         let matches = |p: &Value| {
             [1, 2].into_iter().all(|slot| {
-                let identity = |p: &Value| {
-                    source(p, slot).map(|s| {
-                        if s["failure_kind"] == "not_configured" {
-                            json!("not_configured")
-                        } else {
-                            s["account_cohort_id"].clone()
-                        }
-                    })
-                };
-                let a = identity(p);
-                a.is_some() && a != Some(Value::Null) && a == identity(point)
+                let a = identity(p, slot);
+                a.is_some() && a != Some(Value::Null) && a == identity(point, slot)
             })
         };
         if !i

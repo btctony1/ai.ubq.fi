@@ -1,8 +1,9 @@
 //! Source recordTerminalUsageRollup: one event-owned, bounded write to the existing rollup.
-use crate::{ObservabilityRuntime, types::ObservabilityHost};
-use crate::{records::valid_usage_rollup_source, store};
+use crate::{
+    ObservabilityRuntime, records::valid_usage_rollup_source, store, types::ObservabilityHost,
+};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     identity::MAX_SAFE_INTEGER,
     js_string::JsString16,
     query::QueryStore,

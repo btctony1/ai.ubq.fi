@@ -1,9 +1,8 @@
 //! Source-compatible FoundationDB tuple bytes, shared by every portable storage operation.
 //! Matches patched @deno/kv 0.14.0 and src/storage/key-compatibility.ts.
 
+use crate::{error::GatewayError, state::RecordKey};
 use serde_json::Value;
-
-use crate::{GatewayError, state::RecordKey};
 
 const KEY_PREFIX: &str = "tuple-v1:";
 const SIGN_BIT: u64 = 1 << 63;
@@ -256,12 +255,11 @@ fn walk_source_bytes(
                         .get(offset)
                         .ok_or_else(|| invalid_key("A tuple string/bytes part is truncated."))?;
                     offset += 1;
+                    if byte == 0 && bytes.get(offset) != Some(&0xff) {
+                        break;
+                    }
                     if byte == 0 {
-                        if bytes.get(offset) == Some(&0xff) {
-                            offset += 1;
-                        } else {
-                            break;
-                        }
+                        offset += 1;
                     }
                     if let Some(value) = &mut value {
                         value.push(byte);

@@ -1,10 +1,12 @@
 use super::*;
+use crate::native_control::custody::validate_native_control_custody;
 use crate::{
     native_control::{
-        NativeRenewalAuthority, NativeRenewalCancellation, RegisteredRenewalOwner, actor,
+        NativeRenewalCancellation, actor, receiver::NativeRenewalAuthority,
+        receiver::RegisteredRenewalOwner,
     },
     paid_control::{PAID_CONTROL_CONFIG_VERSION, PaidControlConfig, PaidControlOwner},
-    routing::{PoolAccount, SubscriptionPool},
+    routing_types::{PoolAccount, SubscriptionPool},
 };
 use gateway_auth::{
     crypto::{base64url, sha256_hex},
@@ -164,7 +166,7 @@ async fn header(
         .unwrap()
 }
 #[test]
-fn existing_import_uses_actual_admin_source_before_header_and_body_proof() {
+fn existing_import_uses_actual_admin_source_before_header_and_body_proof() -> TestResult {
     run(async {
         let store = Store::default();
         let id = identity();
@@ -179,13 +181,11 @@ fn existing_import_uses_actual_admin_source_before_header_and_body_proof() {
             &request(&token),
             &context("passkey-user:user-fixture", None),
         )
-        .await
-        .unwrap();
+        .await?;
         let registered = RegisteredRenewalOwner::configured(
             "native-owner".into(),
             "/tmp/native-import-synthetic-owner".into(),
-        )
-        .unwrap();
+        )?;
         let control =
             NativeRenewalAuthority::configured(&authority, &id, &registered, &cfg, &Cancel);
         let prepared = control
@@ -195,50 +195,42 @@ fn existing_import_uses_actual_admin_source_before_header_and_body_proof() {
                     account_id_hash: hash,
                 },
             )
-            .await
-            .unwrap();
+            .await?;
         let meta = prepared.metadata().clone();
         let body = b"ORIGINAL_SYNTHETIC_DOCUMENT";
         let admitted = control
             .admit_import(header(&id, &meta, body, 1).await)
-            .await
-            .unwrap();
-        let proof = control.finish_import(admitted, body).await.unwrap();
+            .await?;
+        let proof = control.finish_import(admitted, body).await?;
         assert_eq!(proof.metadata(), &meta);
         assert!(proof.require_body(b"different", 1_000_000).is_err());
-        control.recheck_import(&proof).await.unwrap();
+        control.recheck_import(&proof).await?;
         {
-            let rows = store.rows.lock().unwrap();
-            let row = rows
-                .get(&crate::native_control::rows::key("action", &meta.action_ref).0)
-                .unwrap();
-            let json = serde_json::to_string(&row.value).unwrap();
+            let rows = store.rows.lock().map_err(|error| error.to_string())?;
+            let custody_key = crate::native_control::rows::key("action", &meta.action_ref);
+            let row = rows.get(&custody_key.0).ok_or("missing action row")?;
+            let json = serde_json::to_string(&row.value)?;
             assert!(!json.contains(&sha256_hex(body)));
             assert!(!json.contains("ORIGINAL_SYNTHETIC_DOCUMENT"));
             assert!(!json.contains(&token));
-            let custody_key = crate::native_control::rows::key("action", &meta.action_ref);
             assert_eq!(row.value["v"], 3);
-            assert!(row.value.as_object().unwrap().contains_key("publication"));
+            assert!(
+                row.value
+                    .as_object()
+                    .ok_or("missing value")?
+                    .contains_key("publication")
+            );
             assert!(row.value["publication"].is_null());
-            crate::native_control::validate_native_control_custody(&custody_key, row).unwrap();
+            validate_native_control_custody(&custody_key, row)?;
             let mut malformed = row.clone();
             malformed.value["body_sha256"] = json!(sha256_hex(body));
-            assert!(
-                crate::native_control::validate_native_control_custody(&custody_key, &malformed)
-                    .is_err()
-            );
+            assert!(validate_native_control_custody(&custody_key, &malformed).is_err());
             malformed = row.clone();
             malformed.value["v"] = json!(4);
-            assert!(
-                crate::native_control::validate_native_control_custody(&custody_key, &malformed)
-                    .is_err()
-            );
+            assert!(validate_native_control_custody(&custody_key, &malformed).is_err());
             malformed = row.clone();
             malformed.expires_at_ms = Some(1_100_000);
-            assert!(
-                crate::native_control::validate_native_control_custody(&custody_key, &malformed)
-                    .is_err()
-            );
+            assert!(validate_native_control_custody(&custody_key, &malformed).is_err());
         }
         store.seed(
             passkeys::key("users", "user-fixture"),
@@ -246,7 +238,8 @@ fn existing_import_uses_actual_admin_source_before_header_and_body_proof() {
             user(false),
         );
         assert!(control.recheck_import(&proof).await.is_err());
-    });
+        Ok(())
+    })
 }
 #[test]
 fn import_source_owner_action_epoch_and_expiry_replacement_refuse_mint() {

@@ -1,18 +1,19 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-
-use gateway_core::GatewayError;
-use gateway_core::source_control::{decode_source_control_record, encode_source_control_record};
-use gateway_core::source_json::SourceJson;
-use gateway_core::state::{
-    AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,
-    StoredRecord,
+use crate::{invalid, text, validate_time};
+use gateway_core::{
+    error::GatewayError,
+    source_control::{decode_source_control_record, encode_source_control_record},
+    source_json::SourceJson,
+    state::{
+        AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,
+        StoredRecord,
+    },
 };
 use gateway_schema::aliases::SourceStringCollator;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-
-use crate::{invalid, text, validate_time};
+use serde::{Serialize, de::DeserializeOwned};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 /// Platform-supplied cryptographically unique opaque tokens. Revisions are never parsed.
 /// A reset owner or probe token must remain unpredictable to other callers.

@@ -1,12 +1,10 @@
 use crate::{store::*, types::ExtrasHost};
 use chrono::{DateTime, SecondsFormat, Utc};
+use gateway_core::error::GatewayError;
 use gateway_core::js_string::JsString16;
-use gateway_core::{
-    GatewayError,
-    query::{QueryRequest, QuerySelector, QueryStore},
-    state::{RecordKey, RecordMutation},
-    tuple_key::{DecodedKeyPart, TupleKey},
-};
+use gateway_core::query::{QueryRequest, QuerySelector, QueryStore};
+use gateway_core::state::{RecordKey, RecordMutation};
+use gateway_core::tuple_key::{DecodedKeyPart, TupleKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 pub const RPM: u64 = 3;

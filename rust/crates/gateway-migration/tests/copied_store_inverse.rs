@@ -3,16 +3,13 @@ mod copied_store_inverse {
     pub mod driver;
     pub mod store;
 }
-mod support;
 
 use copied_store_inverse::store::ReadonlyStore;
-use gateway_auth::{
-    crypto::base64url,
-    native_auth::NativeNonceAuthority,
-    native_credentials::{NativeOwnerId, OwnerFence, parse_native_document},
-    native_replay::StoreNonceAuthority,
-    provider_credentials::codex_source_pool_key,
-};
+use gateway_auth::crypto::base64url;
+use gateway_auth::native_auth::NativeNonceAuthority;
+use gateway_auth::native_credentials::{NativeOwnerId, OwnerFence, parse_native_document};
+use gateway_auth::native_replay::StoreNonceAuthority;
+use gateway_auth::provider_credentials::codex_source_pool_key;
 use gateway_core::{
     js_string::JsString16,
     query::{QueryRequest, QuerySelector, QueryStore},
@@ -21,10 +18,13 @@ use gateway_core::{
     tuple_key::{KeyPart, TupleKey},
 };
 use gateway_migration::{
-    NativeCapture, NativeEntry, NativeRevision, NativeValue, adopt_empty, graph_transport,
+    engine::adopt_empty,
+    graph_transport,
+    native_capture::{NativeCapture, NativeEntry, NativeRevision, NativeValue, prepare_native},
     native_operator::{NativeCustodyRegistration, prepare_local_bootstrap},
-    prepare_native,
 };
+use gateway_migration_test_support::fixture::{Directory, run};
+use gateway_migration_test_support::sqlite_store::SqliteStore;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -32,10 +32,6 @@ use std::{
     fs,
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
-};
-use support::{
-    fixture::{Directory, run},
-    sqlite_store::SqliteStore,
 };
 
 const NOW: i64 = 2400;

@@ -2,11 +2,11 @@
 //! inputs; the product service supplies only its actual AuthHost clock.
 use ciborium::value::Value as Cbor;
 use gateway_auth::{
-    GatewayError,
     crypto::{base64url, decode_base64url},
     passkeys::{AssertionVerification, PasskeyCredential, RegistrationVerification},
     webauthn::*,
 };
+use gateway_core::error::GatewayError;
 use serde_json::Value;
 use std::{
     future::Future,
@@ -64,22 +64,22 @@ struct MaintainedCrypto;
 impl WebAuthnCrypto for MaintainedCrypto {
     async fn validate_key(&self, key: &CosePublicKey) -> Result<(), GatewayError> {
         webauthn_rs_core::source_compat::validate_public_key(&cose(key))
-            .map_err(|_| gateway_auth::invalid("Invalid real COSE key"))
+            .map_err(|_| gateway_auth::types::invalid("Invalid real COSE key"))
     }
     async fn verify_signature(&self, input: SignatureInput) -> Result<bool, GatewayError> {
         let signature = match (input.key.jwk["kty"].as_str(), input.key.jwk["crv"].as_str()) {
             (Some("EC"), Some("P-256")) => p256::ecdsa::Signature::from_slice(&input.signature)
-                .unwrap()
+                .map_err(|_| gateway_auth::types::invalid("Invalid ECDSA signature"))?
                 .to_der()
                 .as_bytes()
                 .to_vec(),
             (Some("EC"), Some("P-384")) => p384::ecdsa::Signature::from_slice(&input.signature)
-                .unwrap()
+                .map_err(|_| gateway_auth::types::invalid("Invalid ECDSA signature"))?
                 .to_der()
                 .as_bytes()
                 .to_vec(),
             (Some("EC"), Some("P-521")) => p521::ecdsa::Signature::from_slice(&input.signature)
-                .unwrap()
+                .map_err(|_| gateway_auth::types::invalid("Invalid ECDSA signature"))?
                 .to_der()
                 .as_bytes()
                 .to_vec(),
@@ -90,7 +90,7 @@ impl WebAuthnCrypto for MaintainedCrypto {
             &signature,
             &input.data,
         )
-        .map_err(|_| gateway_auth::invalid("Invalid real signature"))
+        .map_err(|_| gateway_auth::types::invalid("Invalid real signature"))
     }
 }
 #[test]

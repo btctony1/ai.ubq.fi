@@ -1,15 +1,15 @@
 use crate::{AdminRuntime, capabilities::RuntimeCapabilities, store};
-use gateway_admin::{PaidKeyFields, source_input as input};
+use gateway_admin::{operations::PaidKeyFields, source_input as input};
 use gateway_auth::{
-    AuthHost, conflict, invalid,
     store::{check, commit, put},
+    types::{AuthHost, conflict, invalid},
 };
 use gateway_authority::{
     keys,
-    paid::{PaidAttempt, PaidWindow, ReconciliationGate},
+    paid_types::{PaidAttempt, PaidWindow, ReconciliationGate},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     identity::MAX_SAFE_INTEGER,
     lifecycle::BillingState,
     model::ModelId,

@@ -1,13 +1,12 @@
 //! Private native-source graph wire. Strings remain validated JSON tokens throughout.
 use crate::{GatewayError, SourceJson, invalid};
 use gateway_admin_data::profile::{
-    decode_base64, encode_base64, from_source_profile, normalize_bigint, to_source_profile,
+    decode_base64, encode_base64, normalize_bigint,
+    source::{from_source_profile, to_source_profile},
 };
-use gateway_core::{
-    js_string::JsString16,
-    source_graph::{ErrorKind, GraphAtom, GraphNode, SourceGraph, ViewKind},
-    value::PortableValue,
-};
+use gateway_core::js_string::JsString16;
+use gateway_core::source_graph::{ErrorKind, GraphAtom, GraphNode, SourceGraph, ViewKind};
+use gateway_core::value::PortableValue;
 use std::collections::BTreeMap;
 
 type Fields = BTreeMap<String, SourceJson>;

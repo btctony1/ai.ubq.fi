@@ -1,7 +1,12 @@
 //! Source GitHub/kernel-scoped agent-message API over the shared tuple store.
-use gateway_auth::{AuthMethod, AuthPrincipal};
+use crate::{
+    authority::RemoteAuthorityStore,
+    storage::now_ms,
+    transport::{body::inference_bytes, random},
+};
+use gateway_auth::types::{AuthMethod, AuthPrincipal};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::{QueryRequest, QuerySelector, QueryStore},
     state::{
         AtomicTransition, AuthorityStore, CommitOutcome, RecordMutation, RevisionCheck,
@@ -16,12 +21,6 @@ use gateway_schema::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use worker::{Method, Request, Response};
-
-use crate::{
-    authority::RemoteAuthorityStore,
-    storage::now_ms,
-    transport::{body::inference_bytes, random},
-};
 
 #[derive(Deserialize, Serialize)]
 struct AgentMessage {

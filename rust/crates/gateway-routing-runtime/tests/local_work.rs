@@ -1,10 +1,13 @@
-use gateway_auth::AuthMethod;
+use gateway_auth::types::AuthMethod;
 use gateway_authority::{
-    Authority, AuthorityClock, REQUEST_LEASE_MS, TokenSource, keys,
-    quota::{ApiReservation, KernelPolicy},
+    REQUEST_LEASE_MS,
+    kernel::KernelPolicy,
+    keys,
+    quota::ApiReservation,
+    store::{Authority, AuthorityClock, TokenSource},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     lifecycle::{BodyOutcome, DeliveryOutcome, ReaderTermination},
     local_work::{LocalSemanticOutcome, LocalTerminalObservation},
     query::{QueryPage, QueryRequest, QuerySelector, QueryStore},
@@ -14,11 +17,15 @@ use gateway_core::{
     },
     tuple_key::{ScalarKeyPart, TupleKey},
 };
-use gateway_routing_runtime::local_work::completion::response::{
-    LocalAccountingProgress, LocalWireKind,
-};
 use gateway_routing_runtime::{
-    custody, local_work::*, policy, session::RoutingSession, settlement::recover_pending,
+    custody,
+    local_work::{
+        completion::response::{LocalAccountingProgress, LocalWireKind},
+        *,
+    },
+    policy,
+    session::RoutingSession,
+    settlement::recover_pending,
     types::RoutingHost,
 };
 use gateway_routing_runtime_test_support::{exec::*, host::*, input::*, seed::*, store::*};

@@ -1,7 +1,7 @@
 use crate::types::ExtrasHost;
 use gateway_auth::crypto::{sha256_hex, uuid_from_random};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     state::{
         AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,
         StoredRecord,

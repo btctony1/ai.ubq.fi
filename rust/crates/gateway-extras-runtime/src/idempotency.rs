@@ -3,7 +3,7 @@ use crate::{
     types::{ExtrasHost, ExtrasResponse},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::QueryStore,
     state::{RecordKey, RecordMutation, StoredRecord},
 };

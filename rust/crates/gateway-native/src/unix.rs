@@ -1,4 +1,14 @@
 //! Registry-bound Unix websocket adapter. This module never launches a process or refreshes OAuth itself.
+use crate::{
+    supervisor::{RENEWAL_FRAME_LIMIT, SUPERVISOR_FRAME_LIMIT},
+    transport::{NativeOwnerTransport, RenewalStep, SupervisorMethod, SupervisorTransport},
+};
+use gateway_auth::native_credentials::{
+    NativeCredentials, NativeOwnerId, owner_unavailable, parse_native_document,
+};
+use gateway_core::error::GatewayError;
+use serde_json::{Value, json};
+use socket2::{Domain, SockAddr, Socket as OsSocket, Type};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -9,20 +19,10 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-
-use gateway_core::GatewayError;
-use serde_json::{Value, json};
-use socket2::{Domain, SockAddr, Socket as OsSocket, Type};
 use tungstenite::{
     Message, WebSocket,
     client::{IntoClientRequest, client_with_config},
     protocol::WebSocketConfig,
-};
-
-use crate::{
-    NativeCredentials, NativeOwnerId, NativeOwnerTransport, RenewalStep, SupervisorMethod,
-    SupervisorTransport, owner_unavailable, parse_native_document,
-    supervisor::{RENEWAL_FRAME_LIMIT, SUPERVISOR_FRAME_LIMIT},
 };
 
 struct DeadlineStream {

@@ -1,6 +1,10 @@
-use gateway_schema::{catalog::*, metadata::MetadataHint};
+use gateway_schema::{
+    catalog::{CatalogInput, ProviderCatalog},
+    catalog_views::build_catalog_snapshot,
+    metadata::MetadataHint,
+    native_catalog::native_catalog,
+};
 use serde_json::{Value, json};
-#[path = "support/source_catalog.rs"]
 mod support;
 
 #[test]

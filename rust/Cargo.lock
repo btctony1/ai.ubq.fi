@@ -843,11 +843,12 @@ name = "gateway-admin"
 version = "0.1.0"
 dependencies = [
  "gateway-admin-data",
+ "gateway-admin-test-support",
  "gateway-auth",
  "gateway-authority",
  "gateway-core",
  "gateway-providers",
- "gateway-publication",
+ "gateway-publication-policy",
  "serde",
  "serde_json",
  "url",
@@ -872,12 +873,22 @@ version = "0.1.0"
 dependencies = [
  "gateway-admin",
  "gateway-admin-data",
+ "gateway-admin-test-support",
  "gateway-auth",
  "gateway-authority",
  "gateway-core",
  "gateway-schema",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "gateway-admin-test-support"
+version = "0.1.0"
+dependencies = [
+ "gateway-auth",
+ "gateway-core",
+ "gateway-schema",
 ]
 
 [[package]]
@@ -917,6 +928,7 @@ dependencies = [
  "gateway-auth",
  "gateway-core",
  "gateway-providers",
+ "gateway-routing-runtime-test-support",
  "gateway-schema",
  "getrandom 0.4.3",
  "rustls",
@@ -928,14 +940,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "gateway-catalog-runtime"
+name = "gateway-capacity-recovery"
 version = "0.1.0"
 dependencies = [
  "gateway-auth",
  "gateway-authority",
  "gateway-core",
+ "gateway-observability",
+ "gateway-observability-test-support",
+ "gateway-schema",
+ "serde_json",
+]
+
+[[package]]
+name = "gateway-catalog-runtime"
+version = "0.1.0"
+dependencies = [
+ "gateway-admin-test-support",
+ "gateway-auth",
+ "gateway-authority",
+ "gateway-core",
  "gateway-native",
  "gateway-providers",
+ "gateway-publication-policy",
+ "gateway-routing-runtime-test-support",
  "gateway-schema",
  "serde",
  "serde_json",
@@ -949,11 +977,27 @@ dependencies = [
  "gateway-admin-runtime",
  "gateway-auth",
  "gateway-catalog-runtime",
+ "gateway-claude-runtime-test-support",
  "gateway-core",
  "gateway-providers",
  "gateway-schema",
  "rusqlite",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "gateway-claude-runtime-test-support"
+version = "0.1.0"
+dependencies = [
+ "gateway-admin-runtime",
+ "gateway-auth",
+ "gateway-catalog-runtime",
+ "gateway-claude-runtime",
+ "gateway-core",
+ "gateway-providers",
+ "gateway-schema",
+ "rusqlite",
  "serde_json",
 ]
 
@@ -988,11 +1032,20 @@ dependencies = [
  "futures-util",
  "gateway-auth",
  "gateway-core",
+ "gateway-extras-runtime-test-support",
  "gateway-providers",
  "gateway-schema",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "gateway-extras-runtime-test-support"
+version = "0.1.0"
+dependencies = [
+ "gateway-core",
+ "serde_json",
 ]
 
 [[package]]
@@ -1017,6 +1070,7 @@ dependencies = [
  "gateway-authority",
  "gateway-claude-runtime",
  "gateway-core",
+ "gateway-migration-test-support",
  "gateway-native",
  "gateway-observability",
  "gateway-routing-runtime",
@@ -1028,6 +1082,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway-migration-test-support"
+version = "0.1.0"
+dependencies = [
+ "gateway-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "gateway-native"
 version = "0.1.0"
 dependencies = [
@@ -1035,7 +1099,10 @@ dependencies = [
  "gateway-auth",
  "gateway-authority",
  "gateway-core",
+ "gateway-native-supervisor-read",
  "gateway-publication",
+ "gateway-publication-policy",
+ "gateway-publication-transport",
  "getrandom 0.4.3",
  "httparse",
  "landlock",
@@ -1052,6 +1119,16 @@ dependencies = [
  "ureq",
  "url",
  "webpki-roots",
+]
+
+[[package]]
+name = "gateway-native-supervisor-read"
+version = "0.1.0"
+dependencies = [
+ "gateway-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1082,6 +1159,7 @@ name = "gateway-observability-test-support"
 version = "0.1.0"
 dependencies = [
  "gateway-core",
+ "gateway-observability",
  "gateway-schema",
 ]
 
@@ -1103,8 +1181,68 @@ dependencies = [
  "gateway-auth",
  "gateway-authority",
  "gateway-core",
+ "gateway-publication-policy",
+ "gateway-publication-test-support",
+ "gateway-publication-transport",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "gateway-publication-policy"
+version = "0.1.0"
+dependencies = [
+ "gateway-auth",
+ "gateway-authority",
+ "gateway-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "gateway-publication-test-support"
+version = "0.1.0"
+dependencies = [
+ "gateway-auth",
+ "gateway-authority",
+ "gateway-core",
+ "gateway-publication",
+ "gateway-publication-policy",
+ "gateway-publication-transport",
+ "serde_json",
+]
+
+[[package]]
+name = "gateway-publication-transport"
+version = "0.1.0"
+dependencies = [
+ "gateway-auth",
+ "gateway-authority",
+ "gateway-core",
+ "gateway-publication",
+ "gateway-publication-policy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "gateway-quality"
+version = "0.1.0"
+dependencies = [
+ "gateway-quality-syntax",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "gateway-quality-syntax"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1156,10 +1294,12 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "gateway-admin",
+ "gateway-admin-data",
  "gateway-admin-runtime",
  "gateway-admission",
  "gateway-auth",
  "gateway-authority",
+ "gateway-capacity-recovery",
  "gateway-catalog-runtime",
  "gateway-claude-runtime",
  "gateway-compaction",
@@ -1168,9 +1308,13 @@ dependencies = [
  "gateway-live-runtime",
  "gateway-migration",
  "gateway-observability",
+ "gateway-observability-test-support",
  "gateway-providers",
  "gateway-publication",
+ "gateway-publication-policy",
+ "gateway-publication-transport",
  "gateway-routing-runtime",
+ "gateway-routing-runtime-test-support",
  "gateway-schema",
  "serde",
  "serde_json",
@@ -1185,7 +1329,8 @@ dependencies = [
  "gateway-auth",
  "gateway-authority",
  "gateway-core",
- "gateway-publication",
+ "gateway-publication-policy",
+ "gateway-publication-transport",
  "gateway-worker",
  "gateway-worker-fixture-setup",
  "serde_json",
@@ -1200,6 +1345,8 @@ dependencies = [
  "gateway-authority",
  "gateway-core",
  "gateway-publication",
+ "gateway-publication-policy",
+ "gateway-publication-transport",
  "gateway-worker",
  "serde_json",
 ]
@@ -2377,6 +2524,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_spanned"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "serde_urlencoded"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2717,6 +2873,45 @@ checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
 dependencies = [
  "pin-project-lite",
 ]
+
+[[package]]
+name = "toml"
+version = "1.1.6+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
+dependencies = [
+ "indexmap 2.14.2",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "1.1.1+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "toml_parser"
+version = "1.1.3+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
+dependencies = [
+ "winnow",
+]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.2+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tracing"
@@ -3175,6 +3370,12 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "winnow"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 
 [[package]]
 name = "wit-bindgen"

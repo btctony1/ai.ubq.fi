@@ -1,8 +1,18 @@
 //! Private stopped-file preparation. No full-capture payload collection, VM,
 //! database, public import route, or capability is created by these spool files.
+use crate::core_state::{CoreStateCapture, CoreStateManifest};
+use crate::error::MigrationError;
+use crate::native_capture::{NativeCapture, NativeEntry};
+use crate::native_custody::NativeCustody;
 use crate::native_spool::{RowInventory, Spool, Writer};
-use crate::*;
+use crate::{Mapping, Row, Transform, digest, invalid, json, starts};
+use gateway_core::error::GatewayError;
+use gateway_core::source_json::SourceJson;
+use gateway_core::state::StoredRecord;
+use gateway_core::tuple_key::TupleKey;
+use serde::Deserialize;
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
+use serde_json::Value;
 use std::{
     collections::BTreeMap,
     fs::File,
@@ -83,16 +93,16 @@ impl Captured {
     /// Select the bounded operational core without touching a target or opening
     /// a credential. The returned capture still needs the existing preparation
     /// and custody gates before any adoption.
-    pub fn core_capture(&self) -> Result<crate::CoreStateCapture, MigrationError> {
+    pub fn core_capture(&self) -> Result<CoreStateCapture, MigrationError> {
         crate::core_state::select_spool(&self.header, &self.entries)
     }
     /// Select and prepare the bounded core in one private offline operation.
     /// The returned plan still needs the existing staged adoption and activation gates.
-    pub async fn prepare_core<H: crate::NativeCustody>(
+    pub async fn prepare_core<H: NativeCustody>(
         self,
         host: &H,
-    ) -> Result<(crate::CoreStateManifest, crate::staged::StagePlan), MigrationError> {
-        let crate::CoreStateCapture { capture, manifest } = self.core_capture()?;
+    ) -> Result<(CoreStateManifest, crate::staged::StagePlan), MigrationError> {
+        let CoreStateCapture { capture, manifest } = self.core_capture()?;
         let directory = crate::native_stage::directory(&self.directory)?;
         let plan = Captured::owned(capture, &directory)?.prepare(host).await?;
         Ok((manifest, plan))
@@ -177,7 +187,7 @@ impl Captured {
         }
         reader.verify_end()?;
         let projected = projected.seal()?;
-        let (bound, derived) = crate::indexes::bind_spooled(
+        let (bound, derived) = crate::indexes::disk::bind_spooled(
             &projected,
             self.header.captured_at_ms,
             &revision,
@@ -189,35 +199,15 @@ impl Captured {
         let mut reader = bound.reader()?;
         let mut index = 0usize;
         while let Some(bytes) = reader.next_raw()? {
-            #[derive(Deserialize)]
-            struct RawRow<'a> {
-                key: String,
-                #[serde(borrow)]
-                record: &'a serde_json::value::RawValue,
-                mapping: Mapping,
-            }
-            let mut row: RawRow<'_> = serde_json::from_slice(&bytes)
-                .map_err(|_| invalid("Private canonical row cannot be decoded"))?;
-            row.mapping.baseline_digest =
-                gateway_auth::crypto::sha256_hex(row.record.get().as_bytes());
-            if row.mapping.transform == Transform::Identity {
-                row.mapping.source.value = SourceJson::parse("null")?;
-                row.mapping.source.key.clear();
-            }
-            let mapping = crate::engine::mapping_key(&capture_id, &row.key);
-            let record = StoredRecord::json(&revision, json(&row.mapping)?, None);
-            mapping_digests.insert(mapping.0.clone(), digest(&record)?);
-            if !keys.insert(row.key.clone()) {
-                return Err(invalid("Staged canonical inventory has duplicate keys").into());
-            }
-            canonical.push(&crate::staged::CanonicalRecord {
-                key: mapping,
-                record,
-            })?;
-            if row.key != reader.spool().key(index)? {
-                return Err(invalid("Private canonical key changed").into());
-            }
-            canonical.push_canonical(row.key, row.record, reader.spool().expiry(index))?;
+            canonical_row(
+                &bytes,
+                index,
+                &reader,
+                (&capture_id, &revision),
+                &mut canonical,
+                &mut mapping_digests,
+                &mut keys,
+            )?;
             index += 1;
         }
         reader.verify_end()?;
@@ -252,6 +242,47 @@ impl Captured {
         )?)
     }
 }
+fn canonical_row(
+    bytes: &[u8],
+    index: usize,
+    reader: &crate::native_spool::Reader<Row>,
+    identity: (&str, &str),
+    canonical: &mut Writer<crate::staged::CanonicalRecord>,
+    mapping_digests: &mut BTreeMap<String, String>,
+    keys: &mut std::collections::BTreeSet<String>,
+) -> Result<(), MigrationError> {
+    let (capture_id, revision) = identity;
+    #[derive(Deserialize)]
+    struct RawRow<'a> {
+        key: String,
+        #[serde(borrow)]
+        record: &'a serde_json::value::RawValue,
+        mapping: Mapping,
+    }
+    let mut row: RawRow<'_> = serde_json::from_slice(bytes)
+        .map_err(|_| invalid("Private canonical row cannot be decoded"))?;
+    row.mapping.baseline_digest = gateway_auth::crypto::sha256_hex(row.record.get().as_bytes());
+    if row.mapping.transform == Transform::Identity {
+        row.mapping.source.value = SourceJson::parse("null")?;
+        row.mapping.source.key.clear();
+    }
+    let mapping = crate::engine::mapping_key(capture_id, &row.key);
+    let record = StoredRecord::json(revision, json(&row.mapping)?, None);
+    mapping_digests.insert(mapping.0.clone(), digest(&record)?);
+    if !keys.insert(row.key.clone()) {
+        return Err(invalid("Staged canonical inventory has duplicate keys").into());
+    }
+    canonical.push(&crate::staged::CanonicalRecord {
+        key: mapping,
+        record,
+    })?;
+    if row.key != reader.spool().key(index)? {
+        return Err(invalid("Private canonical key changed").into());
+    }
+    canonical.push_canonical(row.key, row.record, reader.spool().expiry(index))?;
+    Ok(())
+}
+
 fn private_file(path: &Path) -> Result<File, GatewayError> {
     use std::os::unix::fs::MetadataExt;
     let before =

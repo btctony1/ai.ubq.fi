@@ -4,7 +4,7 @@ use super::{
     rows::{self, ActionRow, GenerationEffect, OperationRow, Phase, TerminalPublication, fail},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     source_control::decode_source_control_record,
     source_serialization as source,
     state::{RecordKey, StoredRecord},
@@ -211,7 +211,7 @@ pub fn validate_native_control_custody(
         "action" => {
             let value = decode_source_control_record(record)?;
             if source::member(&value, "kind").is_some() {
-                return super::import::validate_custody(&value, id);
+                return super::import::custody::validate_custody(&value, id);
             }
             let row: ActionRow = value.deserialize().map_err(|_| fail())?;
             if row.v != 2 || row.action_ref != *id || row.fence.principal != row.actor.principal() {

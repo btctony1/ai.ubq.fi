@@ -1,13 +1,13 @@
-use gateway_auth::AuthPrincipal;
+use gateway_auth::types::AuthPrincipal;
 use gateway_core::{
-    GatewayError, identity::RequestContext, lifecycle::SemanticTerminal, model::ModelId,
+    error::GatewayError, identity::RequestContext, lifecycle::SemanticTerminal, model::ModelId,
     source_json::SourceJson,
 };
 use gateway_providers::{
     extras::MultipartFile,
     types::{PrepareOptions, PreparedRequest},
 };
-use gateway_schema::source_request::SourceRequestError;
+use gateway_schema::source_request::error::SourceRequestError;
 use serde_json::Value;
 use std::{collections::BTreeMap, future::Future};
 

@@ -1,5 +1,5 @@
 //! Exact source-derived authenticated principal identity shared by admission/routing.
-use gateway_auth::AuthPrincipal;
+use gateway_auth::types::AuthPrincipal;
 
 pub fn principal_id(principal: &AuthPrincipal) -> String {
     principal.method.principal_id(

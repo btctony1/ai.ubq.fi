@@ -1,7 +1,11 @@
 //! Ubiquity Passport caller authentication. URLs are fixed constants; only a
 //! separately registered preview client may vary its public origin and redirect.
-use std::{cell::RefCell, collections::BTreeMap};
-
+use crate::{
+    crypto::{Secret, base64url, decode_base64url},
+    types::{AuthConfig, AuthHost, AuthRequest, AuthResponse, AuthResponseBody, unauthorized},
+    upstream::AuthUpstreamRequest,
+};
+use gateway_core::error::GatewayError;
 use rsa::{
     BigUint, RsaPublicKey,
     pkcs1v15::{Signature, VerifyingKey},
@@ -11,14 +15,8 @@ use rsa::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Sha256;
+use std::{cell::RefCell, collections::BTreeMap};
 use url::Url;
-
-use crate::{
-    AuthConfig, AuthHost, AuthRequest, AuthResponse, AuthResponseBody, GatewayError,
-    crypto::{Secret, base64url, decode_base64url},
-    unauthorized,
-    upstream::AuthUpstreamRequest,
-};
 
 pub const PASSPORT_ISSUER: &str = "https://passport.ubq.fi";
 pub const PASSPORT_AUTHORIZE_URL: &str = "https://passport.ubq.fi/authorize";

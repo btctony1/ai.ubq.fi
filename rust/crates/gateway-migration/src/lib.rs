@@ -1,20 +1,20 @@
 //! Offline reversible source-state adoption through the one existing authority.
 //! This library neither opens a source VM database nor grants runtime/publication ownership.
-mod capture;
+pub mod capture;
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-mod core_state;
-mod engine;
-mod error;
+pub mod core_state;
+pub mod engine;
+pub mod error;
 pub mod graph_transport;
 mod graph_tree;
 mod indexes;
-mod initial_owner;
-mod inverse;
-mod native_capture;
-mod native_custody;
+pub mod initial_owner;
+pub mod inverse;
+pub mod native_capture;
+pub mod native_custody;
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 mod native_history_reconcile;
-mod native_inverse;
+pub mod native_inverse;
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 mod native_latest;
 #[cfg(all(unix, not(target_arch = "wasm32")))]
@@ -30,42 +30,15 @@ mod profile_coupling;
 mod profile_reset;
 pub mod profile_runtime;
 mod profile_validate;
-mod projection;
+pub mod projection;
 mod rollup_source;
 mod source_metadata;
 pub mod staged;
 
-pub use capture::{PrivateCapture, SourceEntry};
-#[cfg(all(unix, not(target_arch = "wasm32")))]
-pub use core_state::{
-    CORE_STATE_DO_ROW_WRITE_LIMIT, CoreStateCapture, CoreStateManifest, CoreStateRuleCount,
-};
-pub use engine::{
-    AdoptionReceipt, PreparedAdoption, adopt_empty, adopt_empty_with_initial_control_owner, prepare,
-};
-pub use error::MigrationError;
-pub use gateway_admin_data::profile::{CanonicalDates, SourceDateHost};
-pub use initial_owner::InitialControlOwnerAdoptionReceipt;
-pub use inverse::{
-    ArtifactContext, CustodyRecord, PrivateRollbackBundle, export_latest, export_rollback_bundle,
-};
-pub use native_capture::{NativeCapture, NativeEntry, NativeRevision, NativeValue, prepare_native};
-pub use native_custody::{
-    LocalNativeCapture, LocalNativeRollbackBundle, NativeCustody, OwnedNativeSnapshot,
-    export_native_rollback_with_custody, export_native_with_custody, prepare_native_with_custody,
-    sanitize_native_capture,
-};
-pub use native_inverse::{
-    NativeRollbackBundle, export_native_latest, export_native_rollback_bundle,
-};
-pub use projection::known_source_family;
-
+use gateway_core::error::GatewayError;
 use gateway_core::source_json::SourceJson;
-use gateway_core::{
-    GatewayError,
-    state::{RecordKey, StoredRecord},
-    tuple_key::TupleKey,
-};
+use gateway_core::state::{RecordKey, StoredRecord};
+use gateway_core::tuple_key::TupleKey;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -85,7 +58,7 @@ pub enum Transform {
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Mapping {
     #[serde(with = "source_storage")]
-    source: SourceEntry,
+    source: capture::SourceEntry,
     // Only non-secret transformed source rows need an original value sidecar.
     transform: Transform,
     baseline_digest: String,
@@ -168,7 +141,7 @@ fn parts(key: &RecordKey) -> Result<Vec<Value>, GatewayError> {
 mod source_storage {
     use super::*;
     pub fn serialize<S: serde::Serializer>(
-        entry: &SourceEntry,
+        entry: &capture::SourceEntry,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         let raw = serde_json::to_string(entry).map_err(serde::ser::Error::custom)?;
@@ -176,7 +149,7 @@ mod source_storage {
     }
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
-    ) -> Result<SourceEntry, D::Error> {
+    ) -> Result<capture::SourceEntry, D::Error> {
         let raw = String::deserialize(deserializer)?;
         serde_json::from_str(&raw).map_err(serde::de::Error::custom)
     }

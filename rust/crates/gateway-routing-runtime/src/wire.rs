@@ -9,10 +9,13 @@ use gateway_core::{
     source_serialization as source,
 };
 use gateway_providers::{
-    ClientSurface, OrdinaryPhaseOptions, OrdinaryPreparationContext, PreparedClaudeBody,
-    PreparedClaudeOrdinary, prepare_source_request,
+    source_request::prepare_source_request,
+    types::{
+        ClientSurface, OrdinaryPhaseOptions, OrdinaryPreparationContext, PreparedClaudeBody,
+        PreparedClaudeOrdinary,
+    },
 };
-use gateway_schema::source_request::SourceRequestError;
+use gateway_schema::source_request::error::SourceRequestError;
 /// A derived per-hop object, never a mutation of the authoritative original request.
 pub(crate) fn set(
     raw: &mut SourceJson,
@@ -96,7 +99,7 @@ fn ordinary_context(
             .and_then(|value| source::string(&value))
             .filter(|value| !value.as_units().is_empty())
             .ok_or_else(|| {
-                gateway_core::GatewayError::unavailable(
+                gateway_core::error::GatewayError::unavailable(
                     "The validated runtime default reasoning control is unavailable.",
                     "runtime_config_invalid",
                 )

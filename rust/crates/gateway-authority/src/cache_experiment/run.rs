@@ -2,8 +2,8 @@
 use super::{
     PreparedTarget, RefreshPermit, model::*, state::CyclePermit, transport::CacheDispatch,
 };
-use crate::{Authority, TokenSource};
-use gateway_core::{GatewayError, identity::PoolVersionstamp, state::AuthorityStore};
+use crate::store::{Authority, TokenSource};
+use gateway_core::{error::GatewayError, identity::PoolVersionstamp, state::AuthorityStore};
 use serde_json::{Value, json};
 use std::future::Future;
 

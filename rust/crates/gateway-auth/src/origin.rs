@@ -1,6 +1,6 @@
 use url::Url;
 
-use crate::{AuthConfig, AuthRequest, CANDIDATE_ORIGIN, CANONICAL_ORIGIN};
+use crate::types::{AuthConfig, AuthRequest, CANDIDATE_ORIGIN, CANONICAL_ORIGIN};
 
 fn exact_origin(value: &str) -> Option<String> {
     let raw = value.trim();

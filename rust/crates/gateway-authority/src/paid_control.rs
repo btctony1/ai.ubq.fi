@@ -1,21 +1,23 @@
 //! Fixed same-authority derived control metadata; these DTOs grant no write capability.
+use crate::{
+    keys,
+    paid_types::{PaidRequest, PaidRoutingPolicy},
+    positive,
+    store::{Authority, TokenSource, Transaction},
+    text, unavailable,
+};
+use gateway_core::error::GatewayError;
+use gateway_core::model::ModelId;
 use gateway_core::provider::PaidProvider;
-use gateway_core::state::RevisionCheck;
-use gateway_core::{model::ModelId, source_json::SourceJson, source_serialization as source};
-use gateway_providers::ClientSurface;
+use gateway_core::source_json::SourceJson;
+use gateway_core::source_serialization as source;
+use gateway_core::state::{AuthorityStore, RecordKey, RevisionCheck};
+use gateway_core::tuple_key::{ScalarKeyPart, TupleKey};
+use gateway_providers::policy::{self, DeepseekHop, PaidRoutingInput};
+use gateway_providers::types::ClientSurface;
+use gateway_schema::{catalog_store, selection::ProviderSelection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use crate::paid::{PaidRequest, PaidRoutingPolicy};
-use crate::store::Transaction;
-use crate::{Authority, TokenSource, keys, positive, text, unavailable};
-use gateway_core::{
-    GatewayError,
-    state::{AuthorityStore, RecordKey},
-    tuple_key::{ScalarKeyPart, TupleKey},
-};
-use gateway_providers::policy::{self, DeepseekHop, PaidRoutingInput};
-use gateway_schema::{catalog_store, selection::ProviderSelection};
 use std::collections::BTreeSet;
 mod original;
 
@@ -157,7 +159,7 @@ pub struct PaidRoutingReceipt {
     pub(crate) context: PaidRequestContext,
     pub(crate) checks: Vec<RevisionCheck>,
     pub(crate) original_request: Option<gateway_core::identity::RequestContext>,
-    pub(crate) existing_paid: Option<crate::paid::PaidReservation>,
+    pub(crate) existing_paid: Option<crate::paid_types::PaidReservation>,
     owner_id: String,
     owner_epoch: String,
     configuration_generation: String,

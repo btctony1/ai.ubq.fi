@@ -1,7 +1,7 @@
 use super::{ObservedRow, check, key, put, starts};
 use crate::{error, integer, json_number, number, present, text};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     state::{AtomicTransition, RecordMutation},
 };
 use serde_json::{Value, json};
