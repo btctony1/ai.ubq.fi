@@ -9,6 +9,7 @@ case ${1:-} in
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 root=$(mktemp -d "${TMPDIR:?set TMPDIR to a writable fixture directory}/gpg-dsh-migration.XXXXXX")
+root=$(CDPATH='' cd -- "$root" && pwd -P)
 legacy_pid=
 installer_pid=
 new_pid=
@@ -141,7 +142,7 @@ start_installer 30
 /bin/sh "$installed" >"$root/new.out" 2>"$root/new.err" &
 new_pid=$!
 attempts=0
-until ps -p "$new_pid" -o args= | grep -q gpg-dsh-install-wait; do
+until ps -ww -p "$new_pid" -o args= | grep -q gpg-dsh-install-wait; do
   attempts=$((attempts + 1))
   [ "$attempts" -lt 200 ] || fail 'new signing did not reach the installation barrier'
   kill -0 "$new_pid" 2>/dev/null || { cat "$root/new.err" >&2; fail 'new signing exited instead of waiting'; }

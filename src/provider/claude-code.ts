@@ -388,6 +388,9 @@ export const buildClaudeCodeRequest = (
     supportsNativeReasoningEffort: (options.nativeReasoningEfforts?.length ?? 0) > 0,
     nativeReasoningEfforts: options.nativeReasoningEfforts,
     supportsNativeDisabledThinking: options.supportsNativeDisabledThinking,
+    // Codex advertises hosted web_search by default; the direct Messages lane
+    // has no equivalent server tool and must not reject the whole turn.
+    omitHostedWebSearch: true,
   });
   if (!built) return null;
   // `prompt_cache_key` is a reseller-router affinity hint with no place in the
@@ -642,6 +645,7 @@ export const fetchClaudeCodeResponses = async (body: unknown, options: ClaudeCod
     reasoningSummary: responseReasoningSummary(body),
     reasoningReplayScope: options.reasoningReplayScope,
     provider: "claude_code",
+    toolNames: native.toolNames,
   });
   return {
     ...(accountBinding ? { account_binding: accountBinding } : {}),

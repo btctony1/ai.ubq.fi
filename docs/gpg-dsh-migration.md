@@ -23,6 +23,7 @@ Merging this change does not install anything on the owner's Mac, and no patch a
    A difference is expected; inspect it before authorizing installation. This replaces the direct `install -m`
    step in the older signing-helper installation notes for legacy upgrades. The installer does not change Git
    configuration, credentials, the real GnuPG homedir, or service configuration.
+
 4. Resume signing jobs only after the installer reports success. The existing `gpg.program` path is unchanged.
    The first sandboxed signing call then removes abandoned legacy copies and uses `$TMPDIR/dsh-gnupg-<uid>/seed`.
 
