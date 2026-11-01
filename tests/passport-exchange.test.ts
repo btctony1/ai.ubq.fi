@@ -5,6 +5,7 @@ import { createFetchMock } from "./helpers/fetch-mock.ts";
 
 const ORIGIN = "https://ai.ubq.fi";
 const STATE_COOKIE = "__Host-uos_ai_passport_state";
+const VERIFIER_COOKIE = "__Host-uos_ai_passport_verifier";
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -16,9 +17,12 @@ const callback = async (): Promise<Response> => {
   assert(login);
   const state = new URL(login.headers.get("Location") ?? "").searchParams.get("state");
   assert(state);
-  const stateCookie = login.headers.getSetCookie()[0].split(";")[0];
+  const cookies = login.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
   const response = await handlePassportRoute(
-    new Request(`${ORIGIN}/auth/callback?state=${state}&code=fixture-code`, { headers: { Cookie: stateCookie } }),
+    new Request(`${ORIGIN}/auth/callback?state=${state}&code=fixture-code`, { headers: { Cookie: cookies } }),
     "/auth/callback"
   );
   assert(response);
@@ -26,7 +30,10 @@ const callback = async (): Promise<Response> => {
 };
 
 const assertFailure = async (response: Response, status: number, code: string): Promise<void> => {
-  assert.deepEqual(response.headers.getSetCookie(), [`${STATE_COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`]);
+  assert.deepEqual(
+    response.headers.getSetCookie(),
+    [STATE_COOKIE, VERIFIER_COOKIE].map((name) => `${name}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`)
+  );
   assert.equal(response.headers.get("Cache-Control"), "no-store");
   assert.equal(response.status, status);
   assert.equal((await response.json()).error.code, code);
