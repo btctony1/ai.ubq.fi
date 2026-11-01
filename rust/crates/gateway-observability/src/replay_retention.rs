@@ -1,12 +1,12 @@
 //! Source replay-retention.ts: fenced reservations, staging and exactly-once charge release.
-use crate::{ObservabilityRuntime, types::ObservabilityHost};
 use crate::{
-    replay_model as model,
+    ObservabilityRuntime, replay_model as model,
     replay_retention_schema::{self as schema, RetentionLimits},
     store,
+    types::ObservabilityHost,
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::QueryStore,
     state::{RecordMutation, StoredRecord},
     value::PortableValue,

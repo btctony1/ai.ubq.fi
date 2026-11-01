@@ -1,18 +1,21 @@
 //! SQLite-backed coordination storage. Transactions never contain external I/O.
 
-use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
-
-use gateway_core::GatewayError;
-use gateway_core::identity::MAX_SAFE_INTEGER;
-use gateway_core::query::{QueryEntry, QueryPage, QueryRequest, QueryStore};
-use gateway_core::state::{
-    AtomicTransition, AuthorityStore, CommitOutcome, PORTABLE_STATE_VERSION, RecordKey,
-    RecordMutation, StoredRecord,
+use gateway_core::{
+    error::GatewayError,
+    identity::MAX_SAFE_INTEGER,
+    query::{QueryEntry, QueryPage, QueryRequest, QueryStore},
+    state::{
+        AtomicTransition, AuthorityStore, CommitOutcome, PORTABLE_STATE_VERSION, RecordKey,
+        RecordMutation, StoredRecord,
+    },
+    tuple_key::TupleKey,
 };
-use gateway_core::tuple_key::TupleKey;
 use serde::Deserialize;
+use std::{
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 use worker::{SqlStorage, SqlStorageValue, Storage};
 
 const MAX_REVISION_BYTES: usize = 4096;

@@ -11,9 +11,8 @@ pub(crate) mod relay_delay;
 pub mod stream;
 pub mod websocket;
 
+use gateway_core::error::GatewayError;
 use std::collections::BTreeMap;
-
-use gateway_core::GatewayError;
 use worker::Request;
 
 /// Bounds supplied by the route's existing policy, never by a client header.

@@ -1,4 +1,5 @@
 //! Shared finite fixtures for routing-runtime unit and integration tests.
+pub mod authority;
 pub mod exec;
 pub mod host;
 pub mod input;

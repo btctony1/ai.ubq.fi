@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
-mod support;
-use gateway_migration::{operational::*, *};
-use support::{fixture::*, sqlite_store::*};
+use gateway_migration::{native_capture::NativeCapture, operational::*};
+use gateway_migration_test_support::fixture::{Directory, run};
+use gateway_migration_test_support::sqlite_store::SqliteStore;
 
 #[test]
 fn private_native_wire_refuses_unknown_actions_and_repeated_adoption() {

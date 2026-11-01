@@ -1,19 +1,17 @@
 //! Source banked-reset claim/submission and native-codex-mutations probe boundaries.
 use crate::support::*;
+use crate::{TestResult, fixture_json, fixture_row};
 use gateway_authority::{
-    full_pool_reset::*,
+    full_pool_reset::types::*,
     keys,
-    reset::{
-        AccountDayBudget, ResetClaim, ResetConfig, ResetMode, ResetRecord, ResetState, utc_day,
-    },
-    routing::{CohortProof, RouteSelection},
+    reset::utc_day,
+    reset_types::{AccountDayBudget, ResetClaim, ResetConfig, ResetMode, ResetRecord, ResetState},
+    routing_types::{CohortProof, RouteSelection},
 };
-use gateway_core::{
-    GatewayError,
-    identity::{PrincipalId, RequestContext, RequestId},
-    js_string::JsString16,
-    provider::CodexQuotaClass,
-};
+use gateway_core::error::GatewayError;
+use gateway_core::identity::{PrincipalId, RequestContext, RequestId};
+use gateway_core::js_string::JsString16;
+use gateway_core::provider::CodexQuotaClass;
 use serde_json::json;
 use std::cmp::Ordering;
 
@@ -125,20 +123,19 @@ fn budget_key(permit: &AutomaticResetPermit) -> gateway_core::state::RecordKey {
 }
 
 #[test]
-fn preexisting_reset_scan_never_claims_an_absent_ledger_or_budget() {
+fn preexisting_reset_scan_never_claims_an_absent_ledger_or_budget() -> TestResult {
     let (store, authority) = setup();
     let cohort = proof(&authority, NOW);
     assert!(matches!(
-        run(authority.reconcile_full_pool_reset(&cohort, &original())).unwrap(),
-        gateway_authority::reset::FullPoolResetReconciliation::NoExisting
+        run(authority.reconcile_full_pool_reset(&cohort, &original()))?,
+        gateway_authority::reset_types::FullPoolResetReconciliation::NoExisting
     ));
     for account in pool().accounts {
-        let invocation = gateway_authority::reset::reset_invocation(
+        let invocation = gateway_authority::reset_types::reset_invocation(
             &account.admin_account_hash.0,
             &account.credential_version.0,
             NOW + 60_000,
-        )
-        .unwrap();
+        )?;
         assert!(
             store
                 .row(&keys::reset_redemption(
@@ -151,11 +148,12 @@ fn preexisting_reset_scan_never_claims_an_absent_ledger_or_budget() {
             store
                 .row(&keys::reset_day(
                     &invocation.identity.account_id_hash,
-                    &utc_day(NOW).unwrap()
+                    &utc_day(NOW)?
                 ))
                 .is_none()
         );
     }
+    Ok(())
 }
 
 #[test]
@@ -179,23 +177,21 @@ fn full_pool_respects_the_existing_shared_account_day_budget() {
 }
 
 #[test]
-fn preexisting_verified_reset_needs_no_new_credit_inventory() {
+fn preexisting_verified_reset_needs_no_new_credit_inventory() -> TestResult {
     for stale in [false, true] {
         let (store, authority) = setup();
         let (permit, _) = ready(&authority, NOW);
         let claimed = claim(&authority, &permit);
-        let submitted =
-            run(authority.prepare_full_pool_reset_submission(&permit, &claimed)).unwrap();
+        let submitted = run(authority.prepare_full_pool_reset_submission(&permit, &claimed))?;
         run(authority.record_reset_outcome(
             &submitted,
             ResetState::Verified,
             Some("documented_reset"),
             None,
             NOW,
-        ))
-        .unwrap();
+        ))?;
         if stale {
-            let mut row = store.row(&keys::routing()).unwrap().value;
+            let mut row = fixture_row(&store, &keys::routing())?.value;
             let slot = &mut row["slots"][permit.binding().slot as usize];
             slot["generation"] = json!(permit.binding().routing_generation + 2);
             slot["banked_reset_generation_ambiguous"] = json!(true);
@@ -205,50 +201,49 @@ fn preexisting_verified_reset_needs_no_new_credit_inventory() {
         }
         // Deliberately no prepare/finish/inventory call after the physical outcome.
         let cohort = proof(&authority, NOW);
-        let gateway_authority::reset::FullPoolResetReconciliation::Recovered(account) =
-            run(authority.reconcile_full_pool_reset(&cohort, &original())).unwrap()
+        let gateway_authority::reset_types::FullPoolResetReconciliation::Recovered(account) =
+            run(authority.reconcile_full_pool_reset(&cohort, &original()))?
         else {
             panic!("known verified ledger must grant only a recovery probe")
         };
         assert!(!account.probe_required);
         assert!(account.probe.is_some());
-        run(authority.ensure_admission_current(&account, NOW)).unwrap();
+        run(authority.ensure_admission_current(&account, NOW))?;
     }
+    Ok(())
 }
 
 #[test]
-fn full_pool_spend_uses_one_existing_budget_and_unknown_never_resubmits() {
+fn full_pool_spend_uses_one_existing_budget_and_unknown_never_resubmits() -> TestResult {
     let (store, authority) = setup();
     let (permit, _) = ready(&authority, NOW);
     let claimed = claim(&authority, &permit);
-    let submitted = run(authority.prepare_full_pool_reset_submission(&permit, &claimed)).unwrap();
-    run(authority.renew_full_pool_reset_before_redeem(&permit, &submitted)).unwrap();
+    let submitted = run(authority.prepare_full_pool_reset_submission(&permit, &claimed))?;
+    run(authority.renew_full_pool_reset_before_redeem(&permit, &submitted))?;
     let unknown = run(authority.record_reset_outcome(
         &submitted,
         ResetState::Unknown,
         None,
         Some("transport_lost"),
         NOW,
-    ))
-    .unwrap();
+    ))?;
     assert!(matches!(
-        run(authority.reconcile_full_pool_reset(&proof(&authority, NOW), &original())).unwrap(),
-        gateway_authority::reset::FullPoolResetReconciliation::Blocked { .. }
+        run(authority.reconcile_full_pool_reset(&proof(&authority, NOW), &original()))?,
+        gateway_authority::reset_types::FullPoolResetReconciliation::Blocked { .. }
     ));
     assert!(run(authority.prepare_full_pool_reset_submission(&permit, &unknown)).is_err());
     assert!(run(authority.renew_full_pool_reset_before_redeem(&permit, &unknown)).is_err());
     store.clock(NOW + 30_001);
     let (current, _) = ready(&authority, NOW + 30_001);
-    let ResetClaim::Reconcile { record, .. } =
-        run(authority.claim_full_pool_reset(&current)).unwrap()
+    let ResetClaim::Reconcile { record, .. } = run(authority.claim_full_pool_reset(&current))?
     else {
         panic!("durable unknown permits reconciliation only")
     };
     assert_eq!(record.state, ResetState::Unknown);
     assert!(run(authority.renew_full_pool_reset_before_redeem(&current, &record)).is_err());
-    let budget: AccountDayBudget =
-        serde_json::from_value(store.row(&budget_key(&permit)).unwrap().value).unwrap();
+    let budget: AccountDayBudget = fixture_json(&store, &budget_key(&permit))?;
     assert_eq!(budget.submission_count, 1);
+    Ok(())
 }
 
 #[test]

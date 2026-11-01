@@ -8,10 +8,10 @@ use base64::{
     Engine, alphabet,
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig, general_purpose::STANDARD},
 };
-use gateway_auth::{AuthMethod, crypto::Secret};
-use gateway_core::js_string::JsString16;
+use gateway_auth::{crypto::Secret, types::AuthMethod};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
+    js_string::JsString16,
     lifecycle::SemanticTerminal,
     query::QueryStore,
     state::{RecordKey, RecordMutation, StoredRecord},

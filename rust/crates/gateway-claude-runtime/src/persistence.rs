@@ -5,12 +5,12 @@ use crate::{
 };
 use gateway_admin_runtime::claude::{self, AccountBinding, RosterRead};
 use gateway_auth::{
-    AuthHost,
     crypto::uuid_from_random,
     store::{check, commit, key},
+    types::AuthHost,
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     model::ModelId,
     state::{AuthorityStore, RecordKey, RecordMutation, RevisionCheck},
 };

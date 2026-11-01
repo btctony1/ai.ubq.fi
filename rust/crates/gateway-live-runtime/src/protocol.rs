@@ -1,9 +1,7 @@
-use std::collections::BTreeMap;
-
-use gateway_auth::{AuthMethod, AuthPrincipal};
-use gateway_core::{GatewayError, js_string::JsString16, source_json::SourceJson};
-
 use crate::types::*;
+use gateway_auth::types::{AuthMethod, AuthPrincipal};
+use gateway_core::{error::GatewayError, js_string::JsString16, source_json::SourceJson};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LiveRoute {

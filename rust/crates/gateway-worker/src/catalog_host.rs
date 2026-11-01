@@ -1,26 +1,24 @@
 //! Fixed catalog reads bound to credential-owner publications and source revisions.
-use std::{collections::BTreeMap, rc::Rc};
-
-use gateway_auth::provider_credentials::{codex_source_pool_key, read_codex_source_pool};
-use gateway_catalog_runtime::{
-    CatalogFetch, CatalogFetchResponse, CatalogHost, CatalogProvider, CodexAccount,
-    CredentialPublication, ProviderBinding,
-};
-use gateway_core::{
-    GatewayError,
-    state::{AuthorityStore, RevisionCheck},
-};
-use worker::{Env, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Url};
-
 use crate::{
     authority::RemoteAuthorityStore,
-    host::{PlatformHost, provider_secret, response_bytes, setting},
+    host::{PlatformHost, provider_secret, response_bytes},
     storage::now_ms,
     transport::{
         outbound::{PinnedDestination, send_http},
         random,
     },
 };
+use gateway_auth::provider_credentials::{codex_source_pool_key, read_codex_source_pool};
+use gateway_catalog_runtime::host::{
+    CatalogFetch, CatalogFetchResponse, CatalogHost, CatalogProvider, CodexAccount,
+    CredentialPublication, ProviderBinding,
+};
+use gateway_core::{
+    error::GatewayError,
+    state::{AuthorityStore, RevisionCheck},
+};
+use std::{collections::BTreeMap, rc::Rc};
+use worker::{Env, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Url};
 
 #[derive(Clone)]
 pub struct Host {
@@ -64,7 +62,7 @@ fn binding(provider: &str, secret: &str) -> ProviderBinding {
         _ => None,
     } {
         return ProviderBinding {
-            identity: gateway_publication::control_publication::configured_paid_binding(
+            identity: gateway_publication_policy::control_publication::configured_paid_binding(
                 provider,
                 &gateway_auth::crypto::Secret::new(secret.to_owned()),
             ),
@@ -148,7 +146,7 @@ impl CatalogHost for Host {
             ..Default::default()
         };
         if let Some(normalized) = normalized.as_ref() {
-            let pool: gateway_authority::routing::SubscriptionPool =
+            let pool: gateway_authority::routing_types::SubscriptionPool =
                 serde_json::from_value(normalized.json_value()?.clone())
                     .map_err(|_| unavailable("Codex routing pool is invalid."))?;
             let source = snapshot
@@ -191,7 +189,9 @@ impl CatalogHost for Host {
                     .insert(provider, binding(&name, &secret));
             }
         }
-        if let Some(claude) = crate::claude_host::publication(&self.store, &self.platform).await? {
+        if let Some(claude) =
+            crate::claude_host::catalog::publication(&self.store, &self.platform).await?
+        {
             publication
                 .providers
                 .insert(CatalogProvider::ClaudeCode, claude.binding);
@@ -208,93 +208,17 @@ impl CatalogHost for Host {
                 ..
             }
         ) {
-            return crate::claude_host::fetch_catalog(&self.store, &self.platform, request).await;
+            return crate::claude_host::catalog::fetch_catalog(
+                &self.store,
+                &self.platform,
+                request,
+            )
+            .await;
         }
         let timeout = request.remaining_timeout_ms(now_ms()?)?;
         let body_limit = request.max_body_bytes();
         let mut headers = BTreeMap::from([("Accept".into(), "application/json".into())]);
-        let (url, manual_redirects) = match request {
-            CatalogFetch::AnonymousSurplus => (
-                "https://api.surplusintelligence.ai/v1/models".to_owned(),
-                true,
-            ),
-            CatalogFetch::Codex {
-                account,
-                client_version,
-                if_none_match,
-            } => {
-                let source = read_codex_source_pool(&self.store, now_ms()?)
-                    .await?
-                    .ok_or_else(|| unavailable("Codex source credentials are unavailable."))?;
-                let current = source
-                    .pool
-                    .accounts
-                    .into_iter()
-                    .find(|row| {
-                        row.account_id == account.account_id
-                            && row.identity().credential_version.0 == account.credential_fingerprint
-                    })
-                    .ok_or_else(|| unavailable("Codex credential publication changed."))?;
-                headers.insert(
-                    "Authorization".into(),
-                    format!("Bearer {}", current.access_token.expose()),
-                );
-                headers.insert("ChatGPT-Account-ID".into(), current.account_id);
-                headers.insert("originator".into(), "codex_cli_rs".into());
-                headers.insert(
-                    "user-agent".into(),
-                    format!("codex_cli_rs/{client_version} (ai.ubq.fi)"),
-                );
-                if let Some(etag) = if_none_match {
-                    headers.insert("If-None-Match".into(), etag);
-                }
-                let base = setting(&self.env, "CODEX_BASE_URL")
-                    .unwrap_or_else(|| "https://chatgpt.com/backend-api/codex".into());
-                let base = base.trim().trim_end_matches('/');
-                let mut target = Url::parse(&format!("{base}/models"))
-                    .map_err(|_| unavailable("Codex model URL is invalid."))?;
-                if base.ends_with("/codex") {
-                    target
-                        .query_pairs_mut()
-                        .append_pair("client_version", &client_version);
-                }
-                (target.to_string(), true)
-            }
-            CatalogFetch::Provider {
-                provider,
-                binding: expected,
-                after_id,
-                ..
-            } => {
-                if provider == CatalogProvider::ClaudeCode {
-                    return Err(unavailable(
-                        "The source Claude publication adapter is not yet integrated.",
-                    ));
-                }
-                if after_id.is_some() {
-                    return Err(unavailable(
-                        "Only Claude catalog pagination accepts a cursor.",
-                    ));
-                }
-                let publication = self.publication().await?;
-                if publication.binding(provider).as_ref() != Some(&expected) {
-                    return Err(unavailable("Provider catalog credentials changed."));
-                }
-                if matches!(provider, CatalogProvider::Lithos | CatalogProvider::Openlux) {
-                    let secret = secrets(&self.env).remove(provider.id()).ok_or_else(|| {
-                        unavailable("Provider discovery credentials are unavailable.")
-                    })?;
-                    headers.insert("Authorization".into(), format!("Bearer {secret}"));
-                }
-                (
-                    provider
-                        .models_url()
-                        .ok_or_else(|| unavailable("This provider has no discovery endpoint."))?
-                        .to_owned(),
-                    provider == CatalogProvider::Surplus,
-                )
-            }
-        };
+        let (url, manual_redirects) = self.fetch_target(request, &mut headers).await?;
         let cancellation = self.platform.cancellation.child()?;
         let _deadline = timeout
             .map(|milliseconds| cancellation.set_timeout_ms(milliseconds as i32))
@@ -351,6 +275,96 @@ impl CatalogHost for Host {
         // Bounded cloned eligibility observation is separate from the main body.
         observed.single_account_observation_complete = false;
         Ok(observed)
+    }
+}
+
+impl Host {
+    async fn fetch_target(
+        &self,
+        request: CatalogFetch,
+        headers: &mut BTreeMap<String, String>,
+    ) -> Result<(String, bool), GatewayError> {
+        Ok(match request {
+            CatalogFetch::AnonymousSurplus => (
+                "https://api.surplusintelligence.ai/v1/models".to_owned(),
+                true,
+            ),
+            CatalogFetch::Codex {
+                account,
+                client_version,
+                if_none_match,
+            } => {
+                let source = read_codex_source_pool(&self.store, now_ms()?)
+                    .await?
+                    .ok_or_else(|| unavailable("Codex source credentials are unavailable."))?;
+                let current = source
+                    .pool
+                    .accounts
+                    .into_iter()
+                    .find(|row| {
+                        row.account_id == account.account_id
+                            && row.identity().credential_version.0 == account.credential_fingerprint
+                    })
+                    .ok_or_else(|| unavailable("Codex credential publication changed."))?;
+                headers.insert(
+                    "Authorization".into(),
+                    format!("Bearer {}", current.access_token.expose()),
+                );
+                headers.insert("ChatGPT-Account-ID".into(), current.account_id);
+                headers.insert("originator".into(), "codex_cli_rs".into());
+                headers.insert(
+                    "user-agent".into(),
+                    format!("codex_cli_rs/{client_version} (ai.ubq.fi)"),
+                );
+                if let Some(etag) = if_none_match {
+                    headers.insert("If-None-Match".into(), etag);
+                }
+                let base = "https://chatgpt.com/backend-api/codex";
+                let base = base.trim().trim_end_matches('/');
+                let mut target = Url::parse(&format!("{base}/models"))
+                    .map_err(|_| unavailable("Codex model URL is invalid."))?;
+                if base.ends_with("/codex") {
+                    target
+                        .query_pairs_mut()
+                        .append_pair("client_version", &client_version);
+                }
+                (target.to_string(), true)
+            }
+            CatalogFetch::Provider {
+                provider,
+                binding: expected,
+                after_id,
+                ..
+            } => {
+                if provider == CatalogProvider::ClaudeCode {
+                    return Err(unavailable(
+                        "The source Claude publication adapter is not yet integrated.",
+                    ));
+                }
+                if after_id.is_some() {
+                    return Err(unavailable(
+                        "Only Claude catalog pagination accepts a cursor.",
+                    ));
+                }
+                let publication = self.publication().await?;
+                if publication.binding(provider).as_ref() != Some(&expected) {
+                    return Err(unavailable("Provider catalog credentials changed."));
+                }
+                if matches!(provider, CatalogProvider::Lithos | CatalogProvider::Openlux) {
+                    let secret = secrets(&self.env).remove(provider.id()).ok_or_else(|| {
+                        unavailable("Provider discovery credentials are unavailable.")
+                    })?;
+                    headers.insert("Authorization".into(), format!("Bearer {secret}"));
+                }
+                (
+                    provider
+                        .models_url()
+                        .ok_or_else(|| unavailable("This provider has no discovery endpoint."))?
+                        .to_owned(),
+                    provider == CatalogProvider::Surplus,
+                )
+            }
+        })
     }
 }
 

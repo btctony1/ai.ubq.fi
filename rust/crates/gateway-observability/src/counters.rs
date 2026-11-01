@@ -1,10 +1,8 @@
 //! KV U64 values retain their explicit portable-value encoding.
 use crate::{store, types::ObservabilityHost};
-use gateway_core::{
-    GatewayError,
-    state::{AuthorityStore, RecordKey, RecordMutation, RevisionCheck, StoredRecord},
-    value::PortableValue,
-};
+use gateway_core::error::GatewayError;
+use gateway_core::state::{AuthorityStore, RecordKey, RecordMutation, RevisionCheck, StoredRecord};
+use gateway_core::value::PortableValue;
 
 pub(crate) fn read(row: Option<&StoredRecord>, at: i64) -> Result<Option<u64>, GatewayError> {
     let Some(row) = row.filter(|r| !r.expires_at_ms.is_some_and(|e| e <= at)) else {

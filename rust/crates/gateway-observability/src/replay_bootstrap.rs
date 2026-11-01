@@ -1,11 +1,10 @@
 //! Bounded resumable source accounting bootstrap. Shared state contains owner ids only.
-use crate::{ObservabilityRuntime, types::ObservabilityHost};
 use crate::{
-    replay_model as model, replay_retention_schema as schema, replay_values::read_json_record,
-    store,
+    ObservabilityRuntime, replay_model as model, replay_retention_schema as schema,
+    replay_values::read_json_record, store, types::ObservabilityHost,
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::{QueryRequest, QuerySelector, QueryStore},
     state::RecordMutation,
 };

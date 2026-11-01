@@ -1,17 +1,15 @@
 //! Source catalog runtime over one strong authority and credential-owner publication.
-use std::rc::Rc;
-
-use gateway_catalog_runtime::{CatalogHost, CatalogRuntime, admin::AdminCatalogResponse};
-use gateway_core::GatewayError;
-use gateway_core::source_json::SourceJson;
-use gateway_schema::{
-    catalog::CatalogInput, catalog_cache::CatalogResponse, source_request::SourceRequestError,
-};
-use worker::{Context, Env, Request};
-
 use crate::{
     authority::RemoteAuthorityStore, catalog_host::Host, host::PlatformHost, storage::now_ms,
 };
+use gateway_catalog_runtime::{CatalogRuntime, admin::AdminCatalogResponse, host::CatalogHost};
+use gateway_core::{error::GatewayError, source_json::SourceJson};
+use gateway_schema::{
+    catalog::CatalogInput, catalog_cache::CatalogResponse,
+    source_request::error::SourceRequestError,
+};
+use std::rc::Rc;
+use worker::{Context, Env, Request};
 
 pub const DIRECT_PROVIDERS: &[(&str, &str)] = &[
     ("deepseek", "DEEPSEEK_API_KEY"),
@@ -35,7 +33,7 @@ pub async fn public_response(
     env: &Env,
     platform: &PlatformHost,
     context: Rc<Context>,
-) -> Result<gateway_auth::AuthResponse, GatewayError> {
+) -> Result<gateway_auth::types::AuthResponse, GatewayError> {
     let host = Host {
         store: store.clone(),
         env: env.clone(),
@@ -49,14 +47,17 @@ pub async fn public_response(
 
 pub(crate) fn into_auth_response(
     response: Result<AdminCatalogResponse, SourceRequestError>,
-) -> gateway_auth::AuthResponse {
+) -> gateway_auth::types::AuthResponse {
     match response {
         Ok(response) => {
-            let mut wire = gateway_auth::AuthResponse::source_json(response.status, response.body);
+            let mut wire =
+                gateway_auth::types::AuthResponse::source_json(response.status, response.body);
             wire.headers.extend(response.headers);
             wire
         }
-        Err(error) => gateway_auth::AuthResponse::source_json(error.status, error.body().clone()),
+        Err(error) => {
+            gateway_auth::types::AuthResponse::source_json(error.status, error.body().clone())
+        }
     }
 }
 

@@ -1,10 +1,8 @@
 //! Source ba5ef05e provider/health.ts and paid-fallback/health.ts.
 use crate::{ObservabilityRuntime, completion::Completion, store, types::*};
-use gateway_core::{
-    GatewayError,
-    query::QueryStore,
-    state::{AuthorityStore, RecordKey},
-};
+use gateway_core::error::GatewayError;
+use gateway_core::query::QueryStore;
+use gateway_core::state::{AuthorityStore, RecordKey};
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 

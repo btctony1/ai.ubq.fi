@@ -1,6 +1,6 @@
 //! Actual loopback TLS + MAC + same authority store, not a reply-reader mock.
 use super::*;
-use crate::native_control::import::RemoteImportAuthority;
+use crate::native_control::import::remote::RemoteImportAuthority;
 use gateway_auth::native::*;
 use rustls::{ServerConfig, ServerConnection, StreamOwned, pki_types::*};
 use std::{

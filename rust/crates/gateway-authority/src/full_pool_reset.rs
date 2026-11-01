@@ -2,24 +2,23 @@
 mod audit;
 mod facts;
 mod selection;
-mod types;
+pub mod types;
 
 use crate::{
-    Authority, TokenSource, keys,
-    reset::{ResetConfig, ResetMode},
-    routing::CohortProof,
-    store::Transaction,
+    keys,
+    reset_types::{ResetConfig, ResetMode},
+    routing_types::CohortProof,
+    store::{Authority, TokenSource, Transaction},
 };
 use gateway_core::{
-    GatewayError, identity::RequestContext, source_json::SourceJson, state::AuthorityStore,
+    error::GatewayError, identity::RequestContext, source_json::SourceJson, state::AuthorityStore,
     value::ValueEncoding,
 };
-pub use types::{
-    AutomaticResetPermit, FullPoolEvaluation, FullPoolFence, FullPoolPreparation,
-    FullPoolResetPlan, FullPoolShadowDecision, SourceCreditCollation, SourceResetCredit,
+use types::{
+    AutomaticResetPermit, Facts, FullPoolEvaluation, FullPoolFence, FullPoolPreparation,
+    FullPoolResetPlan, FullPoolShadowDecision, Member, SourceCreditCollation, SourceResetCredit,
     SourceResetInventory,
 };
-use types::{Facts, Member};
 
 fn invalid() -> GatewayError {
     GatewayError::unavailable(
@@ -259,7 +258,7 @@ pub(crate) async fn capture_reconciliation_candidates<S: AuthorityStore, I: Toke
     tx: &mut Transaction<'_, S, I>,
     proof: &CohortProof,
     original: &RequestContext,
-) -> Result<Vec<crate::reset::ResetCandidate>, GatewayError> {
+) -> Result<Vec<crate::reset_types::ResetCandidate>, GatewayError> {
     Ok(facts::capture_reconciliation(tx, proof, original)
         .await?
         .members

@@ -1,6 +1,6 @@
 //! Bounded visible rollout reads for an already selected thread only.
 use crate::supervisor::{KnownThread, resolve_rollout_path};
-use crate::supervisor_inventory::text;
+use gateway_native_supervisor_read::inventory::text;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -19,7 +19,7 @@ pub struct SupervisorLogEvent {
 pub fn parse_rollout_tail(input: &str) -> Vec<SupervisorLogEvent> {
     let mut events = std::collections::VecDeque::new();
     for line in input.lines() {
-        let line = line.trim_matches(crate::redaction::source_whitespace);
+        let line = line.trim_matches(gateway_core::redaction::source_whitespace);
         let Ok(record) = serde_json::from_str::<Value>(line) else {
             continue;
         };
@@ -54,20 +54,17 @@ pub fn parse_rollout_tail(input: &str) -> Vec<SupervisorLogEvent> {
                 let content = payload
                     .get("content")
                     .and_then(Value::as_array)
-                    .map(|parts| {
-                        parts
-                            .iter()
-                            .filter(|p| {
-                                p.get("type").and_then(Value::as_str).is_some_and(|t| {
-                                    matches!(t, "output_text" | "input_text" | "text")
-                                })
-                            })
-                            .filter_map(|p| p.get("text").and_then(Value::as_str))
-                            .filter(|s| !s.is_empty())
-                            .collect::<Vec<_>>()
-                            .join("\n")
+                    .into_iter()
+                    .flatten()
+                    .filter(|p| {
+                        p.get("type")
+                            .and_then(Value::as_str)
+                            .is_some_and(|t| matches!(t, "output_text" | "input_text" | "text"))
                     })
-                    .unwrap_or_default();
+                    .filter_map(|p| p.get("text").and_then(Value::as_str))
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 if content.is_empty() {
                     continue;
                 }

@@ -1,11 +1,10 @@
 //! Small runtime catalog projection; source model/effort controls never pass through Value.
-use crate::source_request::SourceRequestError;
 use crate::{
     model_control as c, prompt_cache::compact_capabilities_source, reasoning::ModelReasoning,
-    snapshot::ModelSnapshot,
+    snapshot::ModelSnapshot, source_request::error::SourceRequestError,
 };
 use gateway_core::{
-    GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson,
+    error::GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson,
     source_serialization as source,
 };
 fn error(message: impl Into<String>) -> GatewayError {

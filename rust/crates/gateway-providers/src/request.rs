@@ -1,7 +1,8 @@
 //! Exact provider-bound request construction. The caller supplies account/discovery capabilities.
 use crate::types::*;
-use gateway_core::{GatewayError, provider::UpstreamProvider};
-use gateway_core::{model::ModelId, source_json::SourceJson};
+use gateway_core::{
+    error::GatewayError, model::ModelId, provider::UpstreamProvider, source_json::SourceJson,
+};
 use serde_json::Value;
 pub const LITHOS_MODELS: [&str; 8] = [
     "deepseek-ai/DeepSeek-V4.1-Flash",

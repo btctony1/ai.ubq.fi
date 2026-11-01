@@ -5,7 +5,7 @@ use crate::{
     routing_host,
     transport::stream::FinishHook,
 };
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 use gateway_routing_runtime::{
     session::RoutingSession,
     types::{AttemptUsage, PreparedAttempt},
@@ -21,7 +21,7 @@ pub(crate) struct Lifecycle {
     pub(crate) session: Rc<Session>,
     pub(crate) currentness: crate::inference_currentness::CurrentnessGuard,
     pub(crate) attempt: PreparedAttempt,
-    pub(crate) principal: gateway_auth::AuthPrincipal,
+    pub(crate) principal: gateway_auth::types::AuthPrincipal,
     pub(crate) provider_request_id: Option<String>,
     pub(crate) status: u16,
     pub(crate) store: RemoteAuthorityStore,

@@ -1,12 +1,13 @@
 //! Fixed native owner-effect injection. The shared authority implementation
 //! owns action preparation, current-fact checks, claims and reconciliation.
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{future::Future, time::Instant};
-
 use gateway_auth::{
-    GatewayError,
     native_auth::{AuthenticatedNativeOwner, NativeAuthHeaders},
     native_control::{NativeControlEnvelope, NativeControlResponse},
+};
+use gateway_core::error::GatewayError;
+use std::{
+    future::Future,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 pub struct NativeControlContext<'a> {

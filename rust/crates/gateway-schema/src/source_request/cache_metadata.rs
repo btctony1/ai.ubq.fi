@@ -1,5 +1,5 @@
 //! Lossless prompt-cache metadata policy shared by source and actual-scalar entrypoints.
-use super::value::{Value, json, normalized_string, unknown_key};
+use super::value::{Value, normalized_string, unknown_key};
 use crate::prompt_cache::SCOPE_PROFILE;
 use gateway_core::{
     js_string::JsString16, source_json::SourceJson, source_serialization as source,

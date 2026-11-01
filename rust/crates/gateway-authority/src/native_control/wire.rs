@@ -1,11 +1,11 @@
 //! Finite private reverse carrier. These DTOs contain selectors and observations, not capabilities.
 use super::{NativeRenewalFence, NativeRenewalMode};
 use gateway_auth::{
-    GatewayError,
     crypto::{base64url, decode_base64url},
     native_auth::NativeAuthHeaders,
     native_control::NATIVE_CONTROL_MAX_BYTES,
 };
+use gateway_core::error::GatewayError;
 use serde::{Deserialize, Serialize};
 
 pub const NATIVE_RENEWAL_AUTHORITY_PATH: &str = "/uos/native/renewal-authority";

@@ -1,13 +1,18 @@
 //! First-class image, Voyage and System One protocol adapters; persistence remains external.
-use crate::types::*;
+use crate::{
+    source_tools::ToolMap,
+    types::{ClientSurface, DecodePlan, Headers, PrepareOptions, PreparedRequest, ResponseDecode},
+};
 use gateway_core::{
-    GatewayError, js_string::JsString16, model::ModelId, provider::UpstreamProvider,
+    error::GatewayError, js_string::JsString16, model::ModelId, provider::UpstreamProvider,
     source_json::SourceJson, source_serialization as source,
 };
-use gateway_schema::source_request::{SourceRequestError, source_value::Value};
+use gateway_schema::source_request::{error::SourceRequestError, value::Value};
+use image::{ImagePlan, ParsedImageRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as ScalarValue;
 macro_rules! json { ({$($key:literal:$value:expr),*$(,)?})=>{Value::object(vec![$((JsString16::from_utf8($key),Value::from_serializable(&$value).expect("generated source field"))),*])}; ($value:expr)=>{Value::from_serializable(&$value).expect("generated source value")}; }
+pub mod image;
 
 fn js_whitespace(c: char) -> bool {
     matches!(c, '\u{0009}'..='\u{000d}' | ' ' | '\u{00a0}' | '\u{1680}'
@@ -396,7 +401,6 @@ fn prepare_embeddings_view(
         ResponseDecode::Voyage,
     ))
 }
-pub use crate::source_embeddings::decode_embeddings;
 pub fn base64_encode(bytes: &[u8]) -> String {
     const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut result = String::new();
@@ -427,9 +431,6 @@ pub struct MultipartFile {
     pub bytes: Vec<u8>,
 }
 
-#[path = "extras_image.rs"]
-mod image;
-pub use image::{ImagePlan, ParsedImageRequest, prepare_parsed_image};
 fn key_is(key: &JsString16, name: &str) -> bool {
     key.as_units().iter().copied().eq(name.encode_utf16())
 }

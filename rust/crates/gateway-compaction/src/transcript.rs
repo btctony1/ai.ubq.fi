@@ -1,8 +1,8 @@
 //! Codex item mapping and source verbatim/bounded-provenance renderer.
 use crate::{
     engine::truncated_result,
-    model::*,
-    text::{self, Text, text},
+    model::{Action, Decision, Json, Message, Role, ToolCall, ToolResult, ToolUse},
+    text::{self, Text},
     types::{CompactionFailure, CompactionStats},
 };
 use gateway_core::{js_string::JsString16, source_json::SourceJson};

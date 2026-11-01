@@ -2,7 +2,7 @@
 use super::{Binding, unavailable};
 use gateway_admin_runtime::capabilities::PricingSnapshot;
 use gateway_core::{
-    GatewayError, identity::MAX_SAFE_INTEGER, js_string::JsString16, model::ModelId,
+    error::GatewayError, identity::MAX_SAFE_INTEGER, js_string::JsString16, model::ModelId,
     source_json::SourceJson, source_serialization as source,
 };
 use std::collections::{BTreeMap, BTreeSet};

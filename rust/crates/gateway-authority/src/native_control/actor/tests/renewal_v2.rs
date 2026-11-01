@@ -1,28 +1,34 @@
 use super::*;
+use crate::native_control::managed::NativeManagedPublicationDisposition;
+use crate::native_control::owners::RegisteredRenewalOwners;
+use crate::native_control::{custody::validate_native_control_custody, facts, rows};
 use crate::{
     native_control::{
-        NativeRenewalAuthority, NativeRenewalCancellation, NativeRenewalContext,
-        NativeRenewalControl, NativeRenewalMode, RegisteredRenewalOwner,
+        NativeRenewalCancellation, NativeRenewalContext, NativeRenewalControl, NativeRenewalMode,
+        receiver::NativeRenewalAuthority, receiver::RegisteredRenewalOwner,
     },
     paid_control::{PaidControlConfig, PaidControlOwner, PaidSourceCheck},
-    routing::{LiveRouteSelection, PoolAccount, SubscriptionPool},
+    routing::LiveRouteSelection,
+    routing_types::{PoolAccount, SubscriptionPool},
 };
-use gateway_auth::{
-    native::NATIVE_CONTROL_PATH,
-    native_auth::{
-        NativeAuthHeaders, NativeAuthenticator, NativeCapability, NativeNonceAuthority,
-        NativeTransportIdentity,
-    },
-    native_control::{NativeControlEnvelope, NativeControlRequest},
-    provider_credentials::{
-        CodexNativeOwner, CodexSourceAccount, CodexSourcePool, MANAGED_NATIVE_SOURCE_VERSION,
-        ManagedNativeSource, codex_source_pool_key,
-    },
+use gateway_auth::native::NATIVE_CONTROL_PATH;
+use gateway_auth::native_auth::{
+    NativeAuthHeaders, NativeAuthenticator, NativeCapability, NativeNonceAuthority,
+    NativeTransportIdentity,
 };
+use gateway_auth::native_control::{NativeControlEnvelope, NativeControlRequest};
+use gateway_auth::provider_credentials::{
+    CodexNativeOwner, CodexSourceAccount, CodexSourcePool, MANAGED_NATIVE_SOURCE_VERSION,
+    ManagedNativeSource, codex_source_pool_key,
+};
+use gateway_core::identity::PoolVersionstamp;
+use gateway_core::js_string::JsString16;
+use gateway_core::tuple_key::{ScalarKeyPart, TupleKey};
 use gateway_core::{
-    identity::PoolVersionstamp,
-    js_string::JsString16,
-    tuple_key::{ScalarKeyPart, TupleKey},
+    model::ModelId,
+    source_control::{decode_source_control_record, encode_source_control_record},
+    source_json::SourceJson,
+    value::ValueEncoding,
 };
 use std::collections::BTreeSet;
 
@@ -285,7 +291,7 @@ fn live_renewal_v2_mints_from_actual_actor_without_inference_state_and_preserves
 }
 
 #[test]
-fn one_physical_generation_cannot_refresh_twice_across_live_contexts() {
+fn one_physical_generation_cannot_refresh_twice_across_live_contexts() -> TestResult {
     run(async {
         let store = Store::default();
         let id = identity();
@@ -302,97 +308,88 @@ fn one_physical_generation_cannot_refresh_twice_across_live_contexts() {
             &request(&token),
             &context("passkey-user:user-fixture", None),
         )
-        .await
-        .unwrap();
+        .await?;
         let LiveRouteSelection::Eligible(selected) =
-            auth.select_live_account(None, 1_000_000).await.unwrap()
+            auth.select_live_account(None, 1_000_000).await?
         else {
             panic!()
         };
         let registered = RegisteredRenewalOwner::configured(
             "native-owner".into(),
             "/tmp/ai-rust-wasm-20261018/synthetic-home".into(),
-        )
-        .unwrap();
+        )?;
         let alive = Alive;
         let service = NativeRenewalAuthority::configured(&auth, &id, &registered, &cfg, &alive);
         let create = service
             .prepare_live_create_renewal(&actor, &selected)
-            .await
-            .unwrap();
+            .await?;
         let frame = body(create.action_ref(), "create-operation");
         let proof = owner_proof(&id, &frame, 1).await;
         let mut claim = service
             .claim(&proof, create.action_ref(), "create-operation", &frame)
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(claim.mode(), NativeRenewalMode::RenewOnce);
         assert_eq!(
-            service.start(&mut claim).await.unwrap(),
+            service.start(&mut claim).await?,
             NativeRenewalMode::RenewOnce
         );
         assert_eq!(
-            service.start(&mut claim).await.unwrap(),
+            service.start(&mut claim).await?,
             NativeRenewalMode::ReconcileOnly
         );
         let prefix = crate::native_control::rows::prefix().0;
         for (key, record) in store
             .rows
             .lock()
-            .unwrap()
+            .map_err(|error| error.to_string())?
             .iter()
             .filter(|(key, _)| key.starts_with(&prefix))
         {
-            crate::native_control::validate_native_control_custody(&RecordKey(key.clone()), record)
-                .unwrap();
+            validate_native_control_custody(&RecordKey(key.clone()), record)?;
         }
         let action_key = crate::native_control::rows::key("action", create.action_ref());
         let mut stale = store
             .rows
             .lock()
-            .unwrap()
+            .map_err(|error| error.to_string())?
             .get(&action_key.0)
-            .unwrap()
-            .json_value()
-            .unwrap()
+            .ok_or("missing value")?
+            .json_value()?
             .clone();
         stale["fence"]["v"] = json!(1);
         assert!(
-            crate::native_control::validate_native_control_custody(
+            validate_native_control_custody(
                 &action_key,
                 &StoredRecord::json("stale-version", stale, None)
             )
             .is_err()
         );
-        let effect_key = crate::native_control::rows::generation_key(create.fence()).unwrap();
+        let effect_key = crate::native_control::rows::generation_key(create.fence())?;
         let effect = store
             .rows
             .lock()
-            .unwrap()
+            .map_err(|error| error.to_string())?
             .get(&effect_key.0)
-            .unwrap()
+            .ok_or("missing value")?
             .clone();
         let mut expiring = effect.clone();
         expiring.expires_at_ms = Some(2_000_000);
-        assert!(
-            crate::native_control::validate_native_control_custody(&effect_key, &expiring).is_err()
-        );
+        assert!(validate_native_control_custody(&effect_key, &expiring).is_err());
         let mapped = service
             .prepare_live_mapped_renewal(&actor, "renew-call")
-            .await
-            .unwrap();
+            .await?;
         let frame = body(mapped.action_ref(), "mapped-operation");
         let proof = owner_proof(&id, &frame, 2).await;
         let mut claim = service
             .claim(&proof, mapped.action_ref(), "mapped-operation", &frame)
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(claim.mode(), NativeRenewalMode::ReconcileOnly);
         assert_eq!(
-            service.start(&mut claim).await.unwrap(),
+            service.start(&mut claim).await?,
             NativeRenewalMode::ReconcileOnly
         );
-    });
+        Ok(())
+    })
 }
 
 #[test]
@@ -442,51 +439,55 @@ fn live_mapped_renewal_rejects_changed_mapping_before_owner_start() {
     });
 }
 
+fn seed_opaque_source(store: &Store) -> TestResult {
+    let raw = store
+        .rows
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get(&codex_source_pool_key().0)
+        .ok_or("missing value")?
+        .json_value()?
+        .clone();
+    let mut source = gateway_auth::provider_credentials::parse_codex_source_pool(&raw)?
+        .ok_or("missing value")?;
+    source.accounts[0].access_token = Secret::new("OPAQUE_SYNTHETIC_ACCESS".into());
+    source.accounts[0].updated_at_ms = 0.0;
+    let identity_old = source.accounts[0].identity();
+    source.accounts[0]
+        .native_owner
+        .as_mut()
+        .ok_or("missing value")?
+        .generation_hash = identity_old.native_generation_hash;
+    store.seed(
+        codex_source_pool_key(),
+        "opaque-source",
+        source.private_source_value(),
+    );
+    store.seed(
+        keys::pool(),
+        "opaque-normalized",
+        SubscriptionPool {
+            v: 1,
+            pool_versionstamp: PoolVersionstamp("opaque-source".into()),
+            accounts: vec![PoolAccount {
+                account_id_hash: identity_old.routing_account_hash,
+                admin_account_hash: identity_old.administrative_account_hash,
+                credential_version: identity_old.credential_version,
+                enabled: true,
+            }],
+        },
+    );
+    Ok(())
+}
+
 #[test]
-fn opaque_old_access_adopts_only_current_usable_publication_without_a_fabricated_expiry() {
+fn opaque_old_access_adopts_only_current_usable_publication_without_a_fabricated_expiry()
+-> TestResult {
     run(async {
         let store = Store::default();
         let id = identity();
         seed_owned(&store, &id);
-        let raw = store
-            .rows
-            .lock()
-            .unwrap()
-            .get(&codex_source_pool_key().0)
-            .unwrap()
-            .json_value()
-            .unwrap()
-            .clone();
-        let mut source = gateway_auth::provider_credentials::parse_codex_source_pool(&raw)
-            .unwrap()
-            .unwrap();
-        source.accounts[0].access_token = Secret::new("OPAQUE_SYNTHETIC_ACCESS".into());
-        source.accounts[0].updated_at_ms = 0.0;
-        let identity_old = source.accounts[0].identity();
-        source.accounts[0]
-            .native_owner
-            .as_mut()
-            .unwrap()
-            .generation_hash = identity_old.native_generation_hash;
-        store.seed(
-            codex_source_pool_key(),
-            "opaque-source",
-            source.private_source_value(),
-        );
-        store.seed(
-            keys::pool(),
-            "opaque-normalized",
-            SubscriptionPool {
-                v: 1,
-                pool_versionstamp: PoolVersionstamp("opaque-source".into()),
-                accounts: vec![PoolAccount {
-                    account_id_hash: identity_old.routing_account_hash,
-                    admin_account_hash: identity_old.administrative_account_hash,
-                    credential_version: identity_old.credential_version,
-                    enabled: true,
-                }],
-            },
-        );
+        seed_opaque_source(&store)?;
         let token = session_setup(&store, true, true);
         let auth =
             Authority::with_clock(store.clone(), Sequence(AtomicUsize::new(1)), store.clone());
@@ -499,27 +500,23 @@ fn opaque_old_access_adopts_only_current_usable_publication_without_a_fabricated
             &request(&token),
             &context("passkey-user:user-fixture", None),
         )
-        .await
-        .unwrap();
+        .await?;
         let owner = RegisteredRenewalOwner::configured(
             "native-owner".into(),
             "/tmp/ai-rust-wasm-20261018/synthetic-home".into(),
-        )
-        .unwrap();
+        )?;
         let alive = Alive;
         let service = NativeRenewalAuthority::configured(&auth, &id, &owner, &cfg, &alive);
         let action = service
             .prepare_live_mapped_renewal(&actor, "renew-call")
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(action.fence().access_expires_at_ms, None);
         let frame = body(action.action_ref(), "opaque-operation");
         let proof = owner_proof(&id, &frame, 10).await;
         let mut claim = service
             .claim(&proof, action.action_ref(), "opaque-operation", &frame)
-            .await
-            .unwrap();
-        service.start(&mut claim).await.unwrap();
+            .await?;
+        service.start(&mut claim).await?;
         let access = format!(
             "e30.{}.synthetic",
             gateway_auth::crypto::base64url(br#"{"exp":3000}"#)
@@ -533,7 +530,7 @@ fn opaque_old_access_adopts_only_current_usable_publication_without_a_fabricated
         let wire = json!({"operation":"managed_access_publish","v":2,"action_ref":action.action_ref(),"operation_id":"opaque-operation","native_owner_id":fence.native_owner_id,"owner_revision":fence.owner_revision,"source_revision":fence.source_revision,"normalized_revision":fence.normalized_revision,"publication_revision":"opaque-publication","account_id_hash":fence.account_id_hash,"previous_native_source_generation":fence.source_native_generation,"native_source_generation":"c".repeat(64),"access_generation":identity_new.native_generation_hash,"document":{"account_id":"renew-account","access_token":access,"native_refreshed_at":null}});
         let mut stale = wire.clone();
         stale["source_revision"] = json!("stale-source");
-        let bytes = serde_json::to_vec(&stale).unwrap();
+        let bytes = serde_json::to_vec(&stale)?;
         assert!(
             service
                 .publish_managed(&publication_proof(&id, &bytes, 11).await, &bytes)
@@ -542,41 +539,40 @@ fn opaque_old_access_adopts_only_current_usable_publication_without_a_fabricated
         );
         let mut invalid = wire.clone();
         invalid["document"]["access_token"] = json!("NOT_A_USABLE_NEW_JWT");
-        let bytes = serde_json::to_vec(&invalid).unwrap();
+        let bytes = serde_json::to_vec(&invalid)?;
         assert!(
             service
                 .publish_managed(&publication_proof(&id, &bytes, 12).await, &bytes)
                 .await
                 .is_err()
         );
-        let bytes = serde_json::to_vec(&wire).unwrap();
+        let bytes = serde_json::to_vec(&wire)?;
         let published = service
             .publish_managed(&publication_proof(&id, &bytes, 13).await, &bytes)
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(
             published.disposition,
-            crate::native_control::NativeManagedPublicationDisposition::Applied
+            NativeManagedPublicationDisposition::Applied
         );
         let accepted = service
             .verify_action_publication(&action, "opaque-operation", "opaque-publication")
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(accepted.access_expires_at_ms, Some(3_000_000));
         assert_eq!(accepted.source_revision, "opaque-publication");
         let replay = service
             .publish_managed(&publication_proof(&id, &bytes, 14).await, &bytes)
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(
             replay.disposition,
-            crate::native_control::NativeManagedPublicationDisposition::AlreadyCurrent
+            NativeManagedPublicationDisposition::AlreadyCurrent
         );
-    });
+        Ok(())
+    })
 }
 
 #[test]
-fn fixed_registry_selects_the_second_mapped_owner_without_home_or_environment_guessing() {
+fn fixed_registry_selects_the_second_mapped_owner_without_home_or_environment_guessing()
+-> TestResult {
     run(async {
         let store = Store::default();
         let id = identity();
@@ -584,19 +580,17 @@ fn fixed_registry_selects_the_second_mapped_owner_without_home_or_environment_gu
         let raw = store
             .rows
             .lock()
-            .unwrap()
+            .map_err(|error| error.to_string())?
             .get(&codex_source_pool_key().0)
-            .unwrap()
-            .json_value()
-            .unwrap()
+            .ok_or("missing value")?
+            .json_value()?
             .clone();
-        let mut source = gateway_auth::provider_credentials::parse_codex_source_pool(&raw)
-            .unwrap()
-            .unwrap();
+        let mut source = gateway_auth::provider_credentials::parse_codex_source_pool(&raw)?
+            .ok_or("missing value")?;
         let mut second = source.accounts[0].clone();
         second.account_id = "renew-account-two".into();
         let identity_two = second.identity();
-        let native = second.native_owner.as_mut().unwrap();
+        let native = second.native_owner.as_mut().ok_or("missing value")?;
         native.codex_home = "/tmp/ai-rust-wasm-20261018/synthetic-home-two".into();
         native.generation_hash = identity_two.native_generation_hash;
         source.accounts.push(second);
@@ -640,74 +634,114 @@ fn fixed_registry_selects_the_second_mapped_owner_without_home_or_environment_gu
             &request(&token),
             &context("passkey-user:user-fixture", None),
         )
-        .await
-        .unwrap();
-        let registry = crate::native_control::RegisteredRenewalOwners::configured(vec![
+        .await?;
+        let registry = RegisteredRenewalOwners::configured(vec![
             RegisteredRenewalOwner::configured(
                 "native-one".into(),
                 "/tmp/ai-rust-wasm-20261018/synthetic-home".into(),
-            )
-            .unwrap(),
+            )?,
             RegisteredRenewalOwner::configured(
                 "native-two".into(),
                 "/tmp/ai-rust-wasm-20261018/synthetic-home-two".into(),
-            )
-            .unwrap(),
-        ])
-        .unwrap();
+            )?,
+        ])?;
         let selected = registry
             .for_live_mapped(&auth, &actor, &cfg, "renew-call")
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(selected.native_owner_id(), "native-two");
         let alive = Alive;
         let service = NativeRenewalAuthority::configured(&auth, &id, selected, &cfg, &alive);
         let action = service
             .prepare_live_mapped_renewal(&actor, "renew-call")
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(
             registry
                 .for_action(&auth, action.action_ref())
-                .await
-                .unwrap()
+                .await?
                 .native_owner_id(),
             "native-two"
         );
-        let only_first = crate::native_control::RegisteredRenewalOwners::configured(vec![
-            RegisteredRenewalOwner::configured(
+        let only_first =
+            RegisteredRenewalOwners::configured(vec![RegisteredRenewalOwner::configured(
                 "native-one".into(),
                 "/tmp/ai-rust-wasm-20261018/synthetic-home".into(),
-            )
-            .unwrap(),
-        ])
-        .unwrap();
+            )?])?;
         assert!(
             only_first
                 .for_live_mapped(&auth, &actor, &cfg, "renew-call")
                 .await
                 .is_err()
         );
-        assert!(crate::native_control::RegisteredRenewalOwners::configured(Vec::new()).is_err());
+        assert!(RegisteredRenewalOwners::configured(Vec::new()).is_err());
         assert!(
-            crate::native_control::RegisteredRenewalOwners::configured(vec![
-                RegisteredRenewalOwner::configured("duplicate".into(), "/tmp/one".into()).unwrap(),
-                RegisteredRenewalOwner::configured("duplicate".into(), "/tmp/two".into()).unwrap()
+            RegisteredRenewalOwners::configured(vec![
+                RegisteredRenewalOwner::configured("duplicate".into(), "/tmp/one".into())?,
+                RegisteredRenewalOwner::configured("duplicate".into(), "/tmp/two".into())?
             ])
             .is_err()
         );
-    });
+        Ok(())
+    })
+}
+
+fn source_custody_case(template: &rows::ActionRow, case: usize, units: Vec<u16>) -> TestResult {
+    // A data-only custody fixture is never passed off as an admitted
+    // Journal or a minted native control/refresh permission.
+    let mut row = template.clone();
+    row.fence.context = NativeRenewalContext::Inference {
+        attempt_id: "source-custody-attempt".into(),
+        original_admission_digest: "f".repeat(64),
+        model: ModelId::from_source(JsString16::from_units(units)),
+        slot: 0,
+    };
+    let context_document = SourceJson::from_serializable(&row.fence.context)?;
+    let _: ModelId = gateway_core::source_serialization::member(&context_document, "model")
+        .ok_or("missing value")?
+        .deserialize()?;
+    let _: NativeRenewalContext = serde_json::from_str(context_document.as_str())
+        .map_err(|error| format!("source custody case {case} context decode: {error}"))?;
+    row.action_ref = facts::digest(&(
+        "uos-native-renewal-action-v2",
+        &row.fence.original_request_id,
+        &row.fence.context,
+        &row.fence.source_native_generation,
+    ))?;
+    let key = rows::key("action", &row.action_ref);
+    let document = SourceJson::from_serializable(&row)?;
+    let record = encode_source_control_record("opaque-custody-revision", &document, None)?;
+    assert_eq!(
+        record.value_encoding,
+        if document.deserialize::<Value>().is_ok() {
+            ValueEncoding::Json
+        } else {
+            ValueEncoding::ProfileV2
+        }
+    );
+    let reopened: StoredRecord = serde_json::from_slice(&serde_json::to_vec(&record)?)?;
+    let roundtrip: rows::ActionRow = decode_source_control_record(&reopened)?
+        .deserialize()
+        .map_err(|error| format!("source custody case {case} row decode: {error}"))?;
+    assert_eq!(roundtrip.fence, row.fence);
+    assert_eq!(reopened.revision, "opaque-custody-revision");
+    assert_eq!(reopened.expires_at_ms, None);
+    validate_native_control_custody(&key, &record)
+        .map_err(|error| format!("source custody case {case}: {error:?}"))?;
+    let mut expired = reopened.clone();
+    expired.expires_at_ms = Some(1_000_001);
+    assert!(validate_native_control_custody(&key, &expired).is_err());
+    let mut incompatible = reopened;
+    incompatible.value_encoding = ValueEncoding::ProfileV1;
+    assert!(validate_native_control_custody(&key, &incompatible).is_err());
+    let mut corrupt = row;
+    corrupt.fence.principal = "replaced-principal".into();
+    let record =
+        encode_source_control_record("changed", &SourceJson::from_serializable(&corrupt)?, None)?;
+    assert!(validate_native_control_custody(&key, &record).is_err());
+    Ok(())
 }
 
 #[test]
-fn native_action_source_custody_is_lossless_data_not_an_operation_capability() {
-    use crate::native_control::{facts, rows, validate_native_control_custody};
-    use gateway_core::{
-        model::ModelId,
-        source_control::{decode_source_control_record, encode_source_control_record},
-        source_json::SourceJson,
-        value::ValueEncoding,
-    };
+fn native_action_source_custody_is_lossless_data_not_an_operation_capability() -> TestResult {
     run(async {
         let store = Store::default();
         let id = identity();
@@ -724,32 +758,25 @@ fn native_action_source_custody_is_lossless_data_not_an_operation_capability() {
             &request(&token),
             &context("passkey-user:user-fixture", None),
         )
-        .await
-        .unwrap();
+        .await?;
         let registered = RegisteredRenewalOwner::configured(
             "native-owner".into(),
             "/tmp/ai-rust-wasm-20261018/synthetic-home".into(),
-        )
-        .unwrap();
+        )?;
         let alive = Alive;
         let service = NativeRenewalAuthority::configured(&auth, &id, &registered, &cfg, &alive);
         let action = service
             .prepare_live_mapped_renewal(&actor, "renew-call")
-            .await
-            .unwrap();
+            .await?;
         let record = store
             .rows
             .lock()
-            .unwrap()
+            .map_err(|error| error.to_string())?
             .get(&rows::key("action", action.action_ref()).0)
-            .unwrap()
+            .ok_or("missing value")?
             .clone();
-        validate_native_control_custody(&rows::key("action", action.action_ref()), &record)
-            .expect("actual prepared action must satisfy its source custody schema");
-        let template: rows::ActionRow = decode_source_control_record(&record)
-            .unwrap()
-            .deserialize()
-            .unwrap();
+        validate_native_control_custody(&rows::key("action", action.action_ref()), &record)?;
+        let template: rows::ActionRow = decode_source_control_record(&record)?.deserialize()?;
         for (case, units) in [
             "fixture-model".encode_utf16().collect(),
             vec![0xd800],
@@ -763,69 +790,7 @@ fn native_action_source_custody_is_lossless_data_not_an_operation_capability() {
         .into_iter()
         .enumerate()
         {
-            // A data-only custody fixture is never passed off as an admitted
-            // Journal or a minted native control/refresh permission.
-            let mut row = template.clone();
-            row.fence.context = NativeRenewalContext::Inference {
-                attempt_id: "source-custody-attempt".into(),
-                original_admission_digest: "f".repeat(64),
-                model: ModelId::from_source(JsString16::from_units(units)),
-                slot: 0,
-            };
-            let context_document = SourceJson::from_serializable(&row.fence.context).unwrap();
-            let _: ModelId = gateway_core::source_serialization::member(&context_document, "model")
-                .unwrap()
-                .deserialize()
-                .expect("the actual context model token must decode losslessly");
-            let _: NativeRenewalContext = serde_json::from_str(context_document.as_str())
-                .unwrap_or_else(|error| {
-                    panic!("source custody case {case} context decode: {error}")
-                });
-            row.action_ref = facts::digest(&(
-                "uos-native-renewal-action-v2",
-                &row.fence.original_request_id,
-                &row.fence.context,
-                &row.fence.source_native_generation,
-            ))
-            .unwrap();
-            let key = rows::key("action", &row.action_ref);
-            let document = SourceJson::from_serializable(&row).unwrap();
-            let record =
-                encode_source_control_record("opaque-custody-revision", &document, None).unwrap();
-            assert_eq!(
-                record.value_encoding,
-                if document.deserialize::<Value>().is_ok() {
-                    ValueEncoding::Json
-                } else {
-                    ValueEncoding::ProfileV2
-                }
-            );
-            let reopened: StoredRecord =
-                serde_json::from_slice(&serde_json::to_vec(&record).unwrap()).unwrap();
-            let roundtrip: rows::ActionRow = decode_source_control_record(&reopened)
-                .unwrap()
-                .deserialize()
-                .unwrap_or_else(|error| panic!("source custody case {case} row decode: {error}"));
-            assert_eq!(roundtrip.fence, row.fence);
-            assert_eq!(reopened.revision, "opaque-custody-revision");
-            assert_eq!(reopened.expires_at_ms, None);
-            validate_native_control_custody(&key, &record)
-                .unwrap_or_else(|error| panic!("source custody case {case}: {error:?}"));
-            let mut expired = reopened.clone();
-            expired.expires_at_ms = Some(1_000_001);
-            assert!(validate_native_control_custody(&key, &expired).is_err());
-            let mut incompatible = reopened;
-            incompatible.value_encoding = ValueEncoding::ProfileV1;
-            assert!(validate_native_control_custody(&key, &incompatible).is_err());
-            let mut corrupt = row;
-            corrupt.fence.principal = "replaced-principal".into();
-            let record = encode_source_control_record(
-                "changed",
-                &SourceJson::from_serializable(&corrupt).unwrap(),
-                None,
-            )
-            .unwrap();
-            assert!(validate_native_control_custody(&key, &record).is_err());
+            source_custody_case(&template, case, units)?;
         }
         let scalar = NativeRenewalContext::Inference {
             attempt_id: "scalar-attempt".into(),
@@ -834,11 +799,12 @@ fn native_action_source_custody_is_lossless_data_not_an_operation_capability() {
             slot: 1,
         };
         let frozen = br#"{"kind":"inference","attempt_id":"scalar-attempt","original_admission_digest":"scalar-digest","model":"fixture-model","slot":1}"#;
-        assert_eq!(serde_json::to_vec(&scalar).unwrap(), frozen);
+        assert_eq!(serde_json::to_vec(&scalar)?, frozen);
         assert_eq!(
-            facts::digest(&scalar).unwrap(),
+            facts::digest(&scalar)?,
             gateway_auth::crypto::sha256_hex(frozen)
         );
         assert_eq!(host.fetches.load(Ordering::SeqCst), 0);
-    });
+        Ok(())
+    })
 }

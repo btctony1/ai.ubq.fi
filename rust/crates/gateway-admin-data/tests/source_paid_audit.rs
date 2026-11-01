@@ -1,5 +1,6 @@
 use gateway_admin_data::migration::{ObservedRow, audit};
 use gateway_core::{
+    error::GatewayError,
     js_string::JsString16,
     source_control::{
         decode_source_control_record, encode_source_control_record, source_json_tree,
@@ -53,14 +54,15 @@ fn inspect(rows: &[ObservedRow]) -> audit::Audit {
 }
 
 #[test]
-fn named_paid_source_audit_retains_utf16_model_effort_and_exact_counter_inventory() {
+fn named_paid_source_audit_retains_utf16_model_effort_and_exact_counter_inventory()
+-> Result<(), Box<dyn std::error::Error>> {
     for (model, effort) in [
         (r#""\ud800""#, r#""\udc00""#),
         (r#""\ufffd""#, r#""arbitrary-effort""#),
         (r#""\ud83d\ude00""#, r#""\\ud800""#),
     ] {
         let document = request(model, effort);
-        assert!(audit::valid_source_paid_request(&document));
+        assert!(audit::paid::valid_source_paid_request(&document));
         let rows = inventory(&document);
         let original = rows
             .iter()
@@ -71,12 +73,11 @@ fn named_paid_source_audit_retains_utf16_model_effort_and_exact_counter_inventor
         assert_eq!(findings.counts["paid_fallback_v3_requests"], 1);
         assert_eq!(findings.counts["paid_fallback_v3_windows"], 1);
         assert_eq!(findings.counts["paid_fallback_v3_pending"], 1);
-        let current = decode_source_control_record(&rows[1].record).unwrap();
+        let current = decode_source_control_record(&rows[1].record)?;
         for field in ["model", "reasoning"] {
-            assert_eq!(
-                source_json_tree(&source::member(&current, field).unwrap()).unwrap(),
-                source_json_tree(&source::member(&document, field).unwrap()).unwrap()
-            );
+            let actual = source::member(&current, field).ok_or("missing current field")?;
+            let expected = source::member(&document, field).ok_or("missing original field")?;
+            assert_eq!(source_json_tree(&actual)?, source_json_tree(&expected)?);
         }
         assert_eq!(
             rows.iter()
@@ -85,10 +86,12 @@ fn named_paid_source_audit_retains_utf16_model_effort_and_exact_counter_inventor
             original
         );
     }
+    Ok(())
 }
 
 #[test]
-fn source_paid_audit_keeps_pending_aggregate_and_malformed_control_refusals() {
+fn source_paid_audit_keeps_pending_aggregate_and_malformed_control_refusals()
+-> Result<(), GatewayError> {
     let document = request(r#""\ud800""#, r#""none""#);
     let mut rows = inventory(&document);
     rows.pop();
@@ -111,23 +114,19 @@ fn source_paid_audit_keeps_pending_aggregate_and_malformed_control_refusals() {
         ("123", r#""none""#),
     ] {
         let malformed = request(model, effort);
-        assert!(!audit::valid_source_paid_request(&malformed));
+        assert!(!audit::paid::valid_source_paid_request(&malformed));
         assert!(inspect(&inventory(&malformed)).errors.iter().any(|error| {
             error
                 .try_utf8()
                 .is_ok_and(|text| text.contains("request is malformed"))
         }));
     }
-    let mut missing = document.object_entries().unwrap();
-    missing.retain(|(key, _)| {
-        key.as_units()
-            .iter()
-            .copied()
-            .ne("reasoning".encode_utf16())
-    });
-    assert!(!audit::valid_source_paid_request(
-        &source::object_keys(missing).unwrap()
+    let mut missing = document.object_entries()?;
+    missing.retain(|(key, _)| key != &JsString16::from_utf8("reasoning"));
+    assert!(!audit::paid::valid_source_paid_request(
+        &source::object_keys(missing)?
     ));
+    Ok(())
 }
 
 #[test]
@@ -162,8 +161,8 @@ struct Replay<'a>(&'a [ObservedRow]);
 impl audit::AuditInventory for Replay<'_> {
     fn visit(
         &self,
-        callback: &mut dyn FnMut(&ObservedRow) -> Result<(), gateway_core::GatewayError>,
-    ) -> Result<(), gateway_core::GatewayError> {
+        callback: &mut dyn FnMut(&ObservedRow) -> Result<(), GatewayError>,
+    ) -> Result<(), GatewayError> {
         for row in self.0 {
             let decoded = row.clone();
             callback(&decoded)?;
@@ -176,9 +175,9 @@ fn inspect_paid(
     known: &BTreeSet<String>,
     unlimited: &BTreeSet<String>,
     now: i64,
-) -> Result<audit::Audit, gateway_core::GatewayError> {
-    let result = audit::inspect_paid(rows, known, unlimited, now);
-    let replay = audit::inspect_paid_inventory(&Replay(rows), known, unlimited, now);
+) -> Result<audit::Audit, GatewayError> {
+    let result = audit::paid::inspect_paid(rows, known, unlimited, now);
+    let replay = audit::paid::inspect_paid_inventory(&Replay(rows), known, unlimited, now);
     assert_eq!(format!("{result:?}"), format!("{replay:?}"));
     result
 }

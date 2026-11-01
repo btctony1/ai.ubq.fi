@@ -1,8 +1,9 @@
-#[path = "support/source_projection.rs"]
 mod source_fixture;
-use gateway_admin_data::projection::{project_quota, project_quota_source};
+
+use gateway_admin_data::projection::{project_quota, source::project_quota_source};
 use gateway_core::{
-    GatewayError, js_string::JsString16, source_json::SourceJson, source_serialization as source,
+    error::GatewayError, js_string::JsString16, source_json::SourceJson,
+    source_serialization as source,
 };
 use gateway_schema::aliases::SourceStringCollator;
 use serde_json::Value;

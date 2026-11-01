@@ -1,5 +1,5 @@
 use super::{MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, PREOPEN_MAX_FRAMES, failure};
-use gateway_auth::GatewayError;
+use gateway_core::error::GatewayError;
 use std::{
     collections::VecDeque,
     io::{Read, Write},

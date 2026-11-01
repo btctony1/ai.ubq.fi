@@ -9,22 +9,17 @@ use crate::{
     storage::now_ms,
     transport::outbound::{PinnedDestination, send_http},
 };
-use gateway_auth::{
-    AuthConfig, AuthMethod, AuthRequest, AuthService,
-    provider_credentials::{CodexSourceAccount, read_codex_source_pool},
+use gateway_auth::provider_credentials::{CodexSourceAccount, read_codex_source_pool};
+use gateway_auth::resolve::AuthService;
+use gateway_auth::types::{AuthConfig, AuthMethod, AuthRequest};
+use gateway_authority::full_pool_reset::types::{
+    AutomaticResetPermit, FullPoolEvaluation, FullPoolPreparation, SourceResetInventory,
 };
-use gateway_authority::{
-    Authority,
-    full_pool_reset::{
-        AutomaticResetPermit, FullPoolEvaluation, FullPoolPreparation, SourceResetInventory,
-    },
-    reset::{FullPoolResetReconciliation, ResetClaim, ResetState},
-    routing::{AdmittedAccount, CohortProof},
-};
-use gateway_core::{
-    GatewayError,
-    identity::{AccountBinding, RequestContext},
-};
+use gateway_authority::reset_types::{FullPoolResetReconciliation, ResetClaim, ResetState};
+use gateway_authority::routing_types::{AdmittedAccount, CohortProof};
+use gateway_authority::store::Authority;
+use gateway_core::error::GatewayError;
+use gateway_core::identity::{AccountBinding, RequestContext};
 use gateway_routing_runtime::types::CodexRecovery;
 use std::cell::RefCell;
 use worker::Method;

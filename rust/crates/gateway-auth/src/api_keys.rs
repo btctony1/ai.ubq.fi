@@ -1,11 +1,11 @@
-use gateway_core::{GatewayError, state::AuthorityStore};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-
 use crate::{
     crypto::{Secret, sha256_base64url},
-    store, unauthorized,
+    store,
+    types::unauthorized,
 };
+use gateway_core::{error::GatewayError, state::AuthorityStore};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 pub const NO_LIMIT: i64 = -1;
 pub const WEEK_MS: i64 = 604_800_000;

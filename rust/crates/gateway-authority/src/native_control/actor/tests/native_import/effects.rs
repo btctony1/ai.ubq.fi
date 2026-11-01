@@ -1,6 +1,7 @@
 //! Actual admin/CAS effect tests. No native filesystem/provider callback is used.
 use super::*;
-use crate::native_control::import::{AuthenticatedNativeImport, NativeImportMode};
+use crate::native_control::custody::validate_native_control_custody;
+use crate::native_control::import::{AuthenticatedNativeImport, effects::NativeImportMode};
 use std::sync::atomic::AtomicBool;
 #[derive(Default)]
 struct EffectTokens(AtomicUsize);
@@ -65,7 +66,7 @@ fn registered() -> RegisteredRenewalOwner {
     .unwrap()
 }
 #[test]
-fn original_import_v2_single_start_replay_unknown_and_no_forged_terminal() {
+fn original_import_v2_single_start_replay_unknown_and_no_forged_terminal() -> TestResult {
     run(async {
         let store = Store::default();
         let id = identity();
@@ -77,58 +78,36 @@ fn original_import_v2_single_start_replay_unknown_and_no_forged_terminal() {
         let control =
             NativeRenewalAuthority::configured(&authority, &id, &registered, &cfg, &cancellation);
         let proof = proof(&control, &store, &id, &cfg, &hash, 20).await;
-        let mut first = control.claim_import(&proof).await.unwrap();
+        let mut first = control.claim_import(&proof).await?;
         assert_eq!(first.mode(), NativeImportMode::ImportOnce);
-        let mut replay = control.claim_import(&proof).await.unwrap();
+        let mut replay = control.claim_import(&proof).await?;
         assert_eq!(replay.mode(), NativeImportMode::ReconcileOnly);
-        assert!(
-            control
-                .start_import(&mut replay, &proof)
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(control.start_import(&mut replay, &proof).await?.is_none());
         let start = control
             .start_import(&mut first, &proof)
-            .await
-            .unwrap()
-            .unwrap();
+            .await?
+            .ok_or("missing value")?;
         assert_eq!(start.binding(), first.binding());
-        start.require_body(b"SYNTHETIC_BODY", 1_000_000).unwrap();
+        start.require_body(b"SYNTHETIC_BODY", 1_000_000)?;
         assert!(start.require_body(b"OTHER_BODY", 1_000_000).is_err());
-        assert!(
-            control
-                .start_import(&mut first, &proof)
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(control.start_import(&mut first, &proof).await?.is_none());
         cancellation.0.store(true, Ordering::SeqCst);
-        control.unknown_import(&first).await.unwrap();
+        control.unknown_import(&first).await?;
         cancellation.0.store(false, Ordering::SeqCst);
-        control.recheck_import_claim(&first).await.unwrap();
-        let mut replay = control.claim_import(&proof).await.unwrap();
+        control.recheck_import_claim(&first).await?;
+        let mut replay = control.claim_import(&proof).await?;
         assert_eq!(replay.mode(), NativeImportMode::ReconcileOnly);
-        assert!(
-            control
-                .start_import(&mut replay, &proof)
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(control.start_import(&mut replay, &proof).await?.is_none());
+        let operation_key =
+            crate::native_control::rows::key("operation", &proof.metadata().operation_id);
         let forged = {
-            let rows = store.rows.lock().unwrap();
-            let operation = rows
-                .get(
-                    &crate::native_control::rows::key("operation", &proof.metadata().operation_id)
-                        .0,
-                )
-                .unwrap();
+            let rows = store.rows.lock().map_err(|error| error.to_string())?;
+            let operation = rows.get(&operation_key.0).ok_or("missing value")?;
             assert_eq!(operation.value["phase"], "unknown");
             assert!(operation.value["terminal"].is_null());
             let action = rows
                 .get(&crate::native_control::rows::key("action", &proof.metadata().action_ref).0)
-                .unwrap();
+                .ok_or("missing value")?;
             assert_eq!(action.value["v"], 2);
             assert_ne!(
                 action.value["facts"]["source_native_generation"],
@@ -139,45 +118,35 @@ fn original_import_v2_single_start_replay_unknown_and_no_forged_terminal() {
                 "native-owner",
                 &hash,
                 sha256_hex(b"physical-native-generation"),
-            ))
-            .unwrap();
+            ))?;
             let generation_key = crate::native_control::rows::key("generation", &generation_id);
-            let generation = rows.get(&generation_key.0).unwrap();
+            let generation = rows.get(&generation_key.0).ok_or("missing value")?;
             assert_eq!(
                 generation.value["operation_id"],
                 proof.metadata().operation_id
             );
             for (key, record) in [
-                (
-                    crate::native_control::rows::key("operation", &proof.metadata().operation_id),
-                    operation,
-                ),
+                (operation_key.clone(), operation),
                 (generation_key, generation),
             ] {
-                crate::native_control::validate_native_control_custody(&key, record).unwrap();
+                validate_native_control_custody(&key, record)?;
                 assert!(
-                    !serde_json::to_string(&record.value)
-                        .unwrap()
-                        .contains(&sha256_hex(b"SYNTHETIC_BODY"))
+                    !serde_json::to_string(&record.value)?.contains(&sha256_hex(b"SYNTHETIC_BODY"))
                 );
             }
             let mut forged = operation.clone();
             forged.value["phase"] = json!("published");
-            assert!(
-                crate::native_control::validate_native_control_custody(
-                    &crate::native_control::rows::key("operation", &proof.metadata().operation_id),
-                    &forged
-                )
-                .is_err()
-            );
+            assert!(validate_native_control_custody(&operation_key, &forged).is_err());
             forged
         };
-        store.rows.lock().unwrap().insert(
-            crate::native_control::rows::key("operation", &proof.metadata().operation_id).0,
-            forged,
-        );
+        store
+            .rows
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(operation_key.0, forged);
         assert!(control.claim_import(&proof).await.is_err());
-    });
+        Ok(())
+    })
 }
 #[test]
 fn cancellation_before_effect_and_current_actor_source_races_never_start() {
@@ -258,7 +227,7 @@ fn cancellation_before_effect_and_current_actor_source_races_never_start() {
     });
 }
 #[test]
-fn legacy_import_v1_custody_is_lossless_but_cannot_acquire_effects() {
+fn legacy_import_v1_custody_is_lossless_but_cannot_acquire_effects() -> TestResult {
     run(async {
         let store = Store::default();
         let id = identity();
@@ -271,11 +240,13 @@ fn legacy_import_v1_custody_is_lossless_but_cannot_acquire_effects() {
         let proof = proof(&control, &store, &id, &cfg, &hash, 22).await;
         let key = crate::native_control::rows::key("action", &proof.metadata().action_ref);
         {
-            let mut rows = store.rows.lock().unwrap();
-            let action = rows.get_mut(&key.0).unwrap();
+            let mut rows = store.rows.lock().map_err(|error| error.to_string())?;
+            let action = rows.get_mut(&key.0).ok_or("missing value")?;
             action.value["v"] = json!(1);
-            let facts = action.value["facts"].as_object_mut().unwrap();
-            let access = facts.remove("access_generation").unwrap();
+            let facts = action.value["facts"]
+                .as_object_mut()
+                .ok_or("missing value")?;
+            let access = facts.remove("access_generation").ok_or("missing value")?;
             facts.insert("native_generation".into(), access);
             for field in [
                 "source_native_generation",
@@ -288,12 +259,24 @@ fn legacy_import_v1_custody_is_lossless_but_cannot_acquire_effects() {
             ] {
                 facts.remove(field);
             }
-            crate::native_control::validate_native_control_custody(&key, action).unwrap();
+            validate_native_control_custody(&key, action)?;
         }
         assert!(control.claim_import(&proof).await.is_err());
         let admission = header(&id, proof.metadata(), b"SYNTHETIC_BODY", 23).await;
         assert!(control.admit_import(admission).await.is_err());
-        assert!(!store.rows.lock().unwrap().keys().any(|key| key
-            == &crate::native_control::rows::key("operation", &proof.metadata().operation_id).0));
-    });
+        assert!(
+            !store
+                .rows
+                .lock()
+                .map_err(|error| error.to_string())?
+                .keys()
+                .any(|key| key
+                    == &crate::native_control::rows::key(
+                        "operation",
+                        &proof.metadata().operation_id
+                    )
+                    .0)
+        );
+        Ok(())
+    })
 }

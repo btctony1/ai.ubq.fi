@@ -1,11 +1,17 @@
 #![cfg(not(target_arch = "wasm32"))]
-mod oracle;
+use gateway_claude_runtime_test_support::fixture::{
+    Host, KEY, MODEL, NOW, Store, account, apply, error_evidence, exhausted, fixture_effort, head,
+    raw, run, seed, selected,
+};
 mod support;
+use crate::support::{TestResult, required};
 use gateway_admin_runtime::claude::{self, AccountUpdate};
-use gateway_claude_runtime::*;
-use gateway_providers::Headers;
+use gateway_claude_runtime::host::{OutcomeDecision, PoolSelection, SelectionInput};
+use gateway_claude_runtime::persistence::{clear_guards, quota_key};
+use gateway_claude_runtime::pool::ClaudePoolSession;
+use gateway_claude_runtime::quota;
+use gateway_providers::types::Headers;
 use serde_json::{Value, json};
-use support::*;
 
 #[test]
 fn authoritative_refusal_rotates_durable_active_and_all_current_accounts_prove_paid() {
@@ -239,7 +245,8 @@ fn guard_clear_rotates_evidence_and_rejects_late_headers_in_real_quota_cas() {
     assert!(host.health.borrow().is_empty());
 }
 #[test]
-fn credential_replacement_rejects_old_quota_and_health_without_touching_other_account() {
+fn credential_replacement_rejects_old_quota_and_health_without_touching_other_account() -> TestResult
+{
     let store = Store::new();
     let a = account(1);
     let b = account(2);
@@ -249,9 +256,9 @@ fn credential_replacement_rejects_old_quota_and_health_without_touching_other_ac
     let raw = raw();
     let first = selected(&session, &store, &host, &raw);
     let mut credential = a.credential.clone();
-    credential.secret = std::sync::Arc::new(claude::ClaudeSourceSecret::from_source(
-        "fixture-new-secret".into(),
-    ));
+    credential.secret = std::sync::Arc::new(
+        claude::source_secret::ClaudeSourceSecret::from_source("fixture-new-secret".into()),
+    );
     run(claude::update_account(
         &store,
         &host,
@@ -264,13 +271,13 @@ fn credential_replacement_rejects_old_quota_and_health_without_touching_other_ac
             activate: false,
             expected: Some(a.clone()),
         },
-    ))
-    .unwrap();
+    ))?;
     let _ = apply(&session, &store, &host, &first, 401, exhausted(NOW), NOW);
     assert!(store.quota(&a).is_none());
     assert!(host.accepted.borrow().is_empty());
     assert!(host.health.borrow().is_empty());
     assert_eq!(store.roster().accounts[1], b);
+    Ok(())
 }
 #[test]
 fn optional_history_and_health_failure_do_not_undo_accepted_quota_or_proof() {
@@ -704,14 +711,15 @@ fn real_claude_selection_and_quota_cas_retain_opaque_model_units() {
 }
 
 #[test]
-fn source_binding_snapshot_named_rotation_and_clear_preserve_units_without_scalar_grant() {
+fn source_binding_snapshot_named_rotation_and_clear_preserve_units_without_scalar_grant()
+-> TestResult {
     use gateway_core::{
         js_string::JsString16, source_serialization as source, value::ValueEncoding,
     };
     use std::sync::Arc;
     let store = Store::new();
     let mut a = account(1);
-    a.credential.secret = Arc::new(claude::ClaudeSourceSecret::from_source(
+    a.credential.secret = Arc::new(claude::source_secret::ClaudeSourceSecret::from_source(
         JsString16::from_units(vec![115, 0xd800, 107]),
     ));
     a.credential.hint = JsString16::from_units(vec![104, 0xdc00]);
@@ -729,27 +737,21 @@ fn source_binding_snapshot_named_rotation_and_clear_preserve_units_without_scala
     a.credential_fingerprint = claude::fingerprint(&a.credential, a.workspace.as_ref());
     let b = account(2);
     let config = seed(&store, vec![a.clone(), b.clone()]);
-    let original = store.get(&claude::account_store_key()).unwrap();
+    let original = required(store.get(&claude::account_store_key()))?;
     assert_eq!(original.value_encoding, ValueEncoding::ProfileV2);
     let host = Host::new(&store);
     let session = ClaudePoolSession::new(config);
     let raw = raw();
     let first = selected(&session, &store, &host, &raw);
     assert_eq!(first.binding(), &a);
-    assert!(
-        first
-            .binding()
-            .credential
-            .secret
-            .try_scalar_secret()
-            .is_err()
-    );
+    let source_secret = &first.binding().credential.secret;
+    assert!(source_secret.try_scalar_secret().is_err());
     assert!(Arc::ptr_eq(
         &first.binding().credential.secret,
         &first.clone().binding().credential.secret
     ));
     assert!(store.quota(&a).is_none());
-    assert_eq!(store.get(&claude::account_store_key()).unwrap(), original);
+    assert_eq!(required(store.get(&claude::account_store_key()))?, original);
     assert!(matches!(
         apply(&session, &store, &host, &first, 429, exhausted(NOW), NOW),
         OutcomeDecision::Retry
@@ -758,15 +760,15 @@ fn source_binding_snapshot_named_rotation_and_clear_preserve_units_without_scala
     assert_eq!(rotated.active_account_id, Some(b.account_id));
     assert_eq!(rotated.accounts[0], a);
     let events = host.accepted.borrow();
-    let event = events.first().unwrap();
+    let event = required(events.first())?;
     let document = event.source_value();
     assert_eq!(
-        source::string(&source::member(&document, "workspace_id").unwrap()),
+        source::string(&required(source::member(&document, "workspace_id"))?),
         a.workspace.as_ref().map(|workspace| workspace.id.clone())
     );
     drop(events);
-    let cleared = run(clear_guards(&store, &host, &a)).unwrap().unwrap();
-    assert!(cleared.pool_proofs.unwrap().is_empty());
+    let cleared = required(run(clear_guards(&store, &host, &a))?)?;
+    assert!(required(cleared.pool_proofs)?.is_empty());
     let current = store.roster();
     assert_eq!(current.accounts[0].credential, a.credential);
     assert_eq!(current.accounts[0].workspace, a.workspace);
@@ -775,12 +777,10 @@ fn source_binding_snapshot_named_rotation_and_clear_preserve_units_without_scala
         a.evidence_generation
     );
     assert_eq!(
-        store
-            .get(&claude::account_store_key())
-            .unwrap()
-            .value_encoding,
+        required(store.get(&claude::account_store_key()))?.value_encoding,
         ValueEncoding::ProfileV2
     );
+    Ok(())
 }
 
 #[test]
@@ -827,7 +827,7 @@ fn source_workspace_discovery_retains_raw_json_units_and_default_selection() {
 }
 
 #[test]
-fn source_capability_options_preserve_actual_same_binding_scalar_auth() {
+fn source_capability_options_preserve_actual_same_binding_scalar_auth() -> TestResult {
     let store = Store::new();
     let a = account(1);
     let config = seed(&store, vec![a]);
@@ -836,16 +836,17 @@ fn source_capability_options_preserve_actual_same_binding_scalar_auth() {
     let raw = raw();
     let first = selected(&session, &store, &host, &raw);
     let binding = first.binding();
-    let secret = binding.credential.secret.try_scalar_secret().unwrap();
-    let base = gateway_providers::PrepareOptions {
-        auth: gateway_providers::AuthMaterial {
+    let secret = binding.credential.secret.try_scalar_secret()?;
+    let base = gateway_providers::types::PrepareOptions {
+        auth: gateway_providers::types::AuthMaterial {
             secret: secret.expose().into(),
             api_key: binding.credential.kind == claude::CredentialKind::ApiKey,
             account_id: Some(binding.account_id.clone()),
             workspace_id: binding
                 .workspace
                 .as_ref()
-                .map(|workspace| workspace.id.try_utf8().unwrap()),
+                .map(|workspace| workspace.id.try_utf8())
+                .transpose()?,
         },
         ..Default::default()
     };
@@ -857,6 +858,7 @@ fn source_capability_options_preserve_actual_same_binding_scalar_auth() {
     );
     assert_eq!(prepared.auth.workspace_id, None);
     assert!(!prepared.supports_native_effort);
+    Ok(())
 }
 
 #[test]

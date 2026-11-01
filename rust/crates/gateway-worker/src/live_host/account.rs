@@ -1,15 +1,14 @@
 //! Nonserializable current credential handle. The real host alone constructs it after selection
 //! or a mapped-account owner operation; clients cannot supply these source and routing fences.
-use gateway_auth::provider_credentials::{CodexSourceAccount, read_codex_source_pool};
-use gateway_authority::{Authority, routing::LiveAccountSelection};
-use gateway_core::GatewayError;
-use gateway_live_runtime::types::LiveAccount;
-
 use crate::{
     authority::RemoteAuthorityStore,
     host::{PlatformClock, PlatformTokens},
     storage::now_ms,
 };
+use gateway_auth::provider_credentials::{CodexSourceAccount, read_codex_source_pool};
+use gateway_authority::{routing::LiveAccountSelection, store::Authority};
+use gateway_core::error::GatewayError;
+use gateway_live_runtime::types::LiveAccount;
 
 pub struct CurrentLiveAccount {
     pub(super) source: CodexSourceAccount,

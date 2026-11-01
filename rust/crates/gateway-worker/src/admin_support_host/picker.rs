@@ -1,4 +1,4 @@
-use gateway_core::{GatewayError, source_json::SourceJson, source_serialization as source};
+use gateway_core::{error::GatewayError, source_json::SourceJson, source_serialization as source};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 

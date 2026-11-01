@@ -1,18 +1,23 @@
 //! Native receipt-bound sanitized command. Neither DATA nor HTTP200 is completion.
 use super::{
-    DurableNativeImport, ExistingAccountImportStore, LiveImportCustody, durability,
+    ExistingAccountImportStore,
+    durability::{self, DurableNativeImport},
+    live_custody::LiveImportCustody,
     validation::{CatalogValidation, ValidatedNativeImport},
 };
 use crate::{import_custody_protocol::unavailable, native_import::NativeImportContext};
 use gateway_auth::{
     crypto::{Secret, sha256_hex},
+    native_import::publication::{
+        NativeImportPublication,
+        command::{ImportAccessDocument, ImportCatalogData, ImportPublicationCommandData},
+    },
     provider_credentials::codex_credential_identity,
 };
 use gateway_authority::native_control::import::{
-    AuthenticatedImportTerminal, AuthenticatedNativeImport, ImportAccessDocument,
-    ImportCatalogData, ImportPublicationCommandData, NativeImportPublication,
+    AuthenticatedNativeImport, remote::AuthenticatedImportTerminal,
 };
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 
 /// Native-only producer; no JSON/receipt-DATA/Boolean constructor.
 pub(super) struct PreparedImportPublication<'a> {

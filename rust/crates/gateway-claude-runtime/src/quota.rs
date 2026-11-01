@@ -1,7 +1,7 @@
 //! Source Claude quota truth. Health/history remain optional post-acceptance subscribers.
 use gateway_admin_runtime::claude::AccountBinding;
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     model::ModelId,
     source_control::{encode_source_control_record, source_json_tree},

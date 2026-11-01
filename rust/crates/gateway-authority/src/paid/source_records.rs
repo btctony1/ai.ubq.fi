@@ -3,7 +3,7 @@
 use super::{PaidAttempt, PaidRollup, provider_label, validate_attempt};
 use crate::{invalid, keys, text, validate_time};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     source_control::decode_source_control_record,
     state::{RecordKey, StoredRecord},
     tuple_key::{DecodedKeyPart, TupleKey},

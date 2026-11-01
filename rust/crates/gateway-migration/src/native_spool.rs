@@ -1,4 +1,5 @@
 //! Native-private immutable row frames. Never a database/runtime or wire codec.
+use crate::native_capture::NativeEntry;
 use crate::*;
 use serde::de::DeserializeOwned;
 use std::{

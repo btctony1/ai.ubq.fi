@@ -2,13 +2,14 @@
 //! No second Journal DTO, stored format, lease extension or routing dependency.
 use super::{PaidRoutingReceipt, control_error, source_key};
 use crate::{
-    Authority, TokenSource, keys,
-    paid::{PaidAttempt, PaidRequest, PaidReservation},
-    quota::{ApiReservation, ApiUsageRequest, ApiUsageState, KernelReservation},
-    store::Transaction,
+    kernel::KernelReservation,
+    keys,
+    paid_types::{PaidAttempt, PaidRequest, PaidReservation},
+    quota::{ApiReservation, ApiUsageRequest, ApiUsageState},
+    store::{Authority, TokenSource, Transaction},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     identity::RequestContext,
     local_work::{LocalWorkPhase, journal_local_work},
     source_json::SourceJson,

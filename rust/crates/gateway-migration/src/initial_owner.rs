@@ -1,14 +1,20 @@
 //! Finite private initial-owner consumer. Physical custody is a local attestation,
 //! never reconstructed from captured records or reread by this portable module.
-use crate::*;
+use crate::{
+    decode,
+    engine::{AdoptionReceipt, PreparedAdoption},
+    json,
+};
 use gateway_authority::initial_control_owner::{
     InitialAdoptionAccountFacts, InitialAdoptionFacts, InitialControlOwnerReceipt,
     PreparedInitialControlOwner,
 };
-use gateway_core::{
-    query::{QueryRequest, QueryStore},
-    state::{AtomicTransition, AuthorityStore, CommitOutcome},
-};
+use gateway_core::error::GatewayError;
+use gateway_core::query::{QueryRequest, QueryStore};
+use gateway_core::state::RecordKey;
+use gateway_core::state::StoredRecord;
+use gateway_core::state::{AtomicTransition, AuthorityStore, CommitOutcome};
+use serde::Serialize;
 use std::cell::Cell;
 
 #[derive(Debug, Serialize)]
@@ -61,7 +67,8 @@ fn actual_facts(prepared: &PreparedAdoption) -> Result<InitialAdoptionFacts, Gat
     let (source, normalized) = pool_records(prepared)?;
     let pool = gateway_auth::provider_credentials::parse_codex_source_pool(source.json_value()?)?
         .ok_or_else(refused)?;
-    let routing: gateway_authority::routing::SubscriptionPool = decode(normalized.json_value()?)?;
+    let routing: gateway_authority::routing_types::SubscriptionPool =
+        decode(normalized.json_value()?)?;
     if routing.v != 1
         || routing.pool_versionstamp.0 != source.revision
         || routing.accounts.len() != pool.accounts.len()
@@ -196,7 +203,7 @@ pub(crate) async fn adopt<S: QueryStore>(
         now_ms,
         committed: Cell::new(false),
     };
-    let adoption = crate::adopt_empty(&fenced, prepared).await?;
+    let adoption = crate::engine::adopt_empty(&fenced, prepared).await?;
     matching_fences(store, prepared, owner, &facts, now_ms).await?;
     Ok(InitialControlOwnerAdoptionReceipt::Installed {
         adoption,

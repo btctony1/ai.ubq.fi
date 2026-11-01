@@ -1,7 +1,7 @@
 //! Source-observed discovery only; no guessed model capabilities or reasoning tiers.
 use crate::host::{CatalogProvider, unavailable};
 use gateway_core::{
-    GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson,
+    error::GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson,
     source_serialization as source,
 };
 use gateway_schema::{reasoning::js_trim_source, util::js_trim};

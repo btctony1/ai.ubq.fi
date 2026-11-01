@@ -1,10 +1,17 @@
-use gateway_admin::{AdminHost, AdminInput, AdminOperation, source_input as input};
+use gateway_admin::{
+    operations::{AdminHost, AdminInput},
+    routes::AdminOperation,
+    source_input as input,
+};
 use gateway_admin_runtime::{
     AdminRuntime, RuntimeConfig, capabilities::RuntimeCapabilities, claude_access, parse,
 };
-use gateway_auth::{upstream::*, *};
+use gateway_auth::{
+    types::{AuthHost, AuthMethod, AuthPrincipal, AuthResponse},
+    upstream::*,
+};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     model::ModelId,
     query::*,

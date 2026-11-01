@@ -1,24 +1,28 @@
 //! Paid ledger v3: exposure, terminal evidence and correlated billing are independent.
-use gateway_core::GatewayError;
-use gateway_core::identity::{ApiKeyId, MicrocreditLimit, PaidAttemptId};
-use gateway_core::lifecycle::{BillingState, DispatchState, PaidTerminalState};
-use gateway_core::provider::PaidProvider;
-use gateway_core::state::AuthorityStore;
-
-use crate::paid_control::PaidRoutingReceipt;
-use crate::quota::ApiKeyPolicy;
-use crate::routing::validate_cohort;
-use crate::store::Transaction;
 use crate::{
-    Authority, DAY_MS, PAID_RETENTION_MS, TokenSource, add, invalid, keys, nonnegative, positive,
-    quota_error, retention, text, unavailable,
+    DAY_MS, PAID_RETENTION_MS, add, invalid, keys, nonnegative,
+    paid_control::PaidRoutingReceipt,
+    paid_types::{
+        PaidAdmission, PaidAttempt, PaidAuthorization, PaidCorrelation, PaidRequest,
+        PaidReservation, PaidRollup, PaidUsage, PaidWindow, PendingPaid, ReconciliationGate,
+        ReconciliationLease,
+    },
+    positive,
+    quota::ApiKeyPolicy,
+    quota_error, retention,
+    routing::validate_cohort,
+    store::{Authority, TokenSource, Transaction},
+    text, unavailable,
 };
-
-pub use crate::paid_types::*;
-mod source_usage;
-pub use source_usage::surplus_usage_from_source;
-mod source_records;
-pub use source_records::{decode_paid_attempt_record, decode_paid_rollup_record};
+use gateway_core::{
+    error::GatewayError,
+    identity::{ApiKeyId, MicrocreditLimit, PaidAttemptId},
+    lifecycle::{BillingState, DispatchState, PaidTerminalState},
+    provider::PaidProvider,
+    state::AuthorityStore,
+};
+pub mod source_records;
+pub mod source_usage;
 
 fn pending_id(key: &ApiKeyId, attempt: &PaidAttemptId) -> String {
     serde_json::json!([key.0, attempt.0]).to_string()

@@ -14,6 +14,8 @@ const ALIASES = new Map([
   ["#kv", "src/storage/kv.ts"],
 ]);
 const UNTRACKED_ROOTS = ["src/", "scripts/", "tests/", "ops/", "benchmarks/", "tools/", "static/", "rust/"];
+const PRIVATE_COPY_CONTROLLER = "tests/private-bun-copy-confinement.test.ts";
+const PRIVATE_COPY_PRODUCT = "tools/cloudflare/private-bun-copy.ts";
 const WORKER_RUNTIME_TEST = "tests/native-authority-workerd.test.ts";
 const WORKER_RUNTIME_INPUT = /^(?:tests\/fixtures\/native-authority\/|tools\/worker-test-runtime\/|scripts\/prepare-worker-test-runtime\.ts$)/;
 const WORKER_RUNTIME_FIXTURES = ["tests/fixtures/native-authority/fixture-worker.mjs", "tests/fixtures/native-authority/bun-client.ts"];
@@ -105,7 +107,14 @@ export const isTestPath = (path: string): boolean => TEST_FILE.test(path);
 /** Rust has its own compiler/test graph; never feed it to the Bun import scanner. */
 export const isRustPath = (path: string): boolean => path.startsWith("rust/") && !isDocumentationPath(path);
 export const isRustGatePath = (path: string): boolean => isRustPath(path) || /^scripts\/rust-verify(?:\.test)?\.ts$/.test(path);
-export const RUST_NATIVE_ONLY_PACKAGES = ["gateway-native"] as const;
+export const RUST_NATIVE_ONLY_PACKAGES = [
+  "gateway-native",
+  "gateway-native-supervisor-read",
+  "gateway-quality",
+  "gateway-quality-syntax",
+  "gateway-claude-runtime-test-support",
+  "gateway-migration-test-support",
+] as const;
 const WORKFLOW_CONTRACT_PATH = ".github/workflows/deno-deploy.yml";
 
 export const classifyChangedPaths = (paths: readonly string[]): ChangeScope => {
@@ -174,11 +183,19 @@ export const selectAffectedTestFiles = (changedPaths: readonly string[], candida
     candidateTests.includes(WORKER_RUNTIME_TEST) &&
     workerRuntimeTestExists(root) &&
     ([...changed].some((path) => WORKER_RUNTIME_INPUT.test(path)) || WORKER_RUNTIME_FIXTURES.some((path) => testTouchesChangedPath(path, changed, root)));
+  const privateCopyChanged =
+    candidateTests.includes(PRIVATE_COPY_CONTROLLER) &&
+    existsSync(resolve(root, PRIVATE_COPY_CONTROLLER)) &&
+    testTouchesChangedPath(PRIVATE_COPY_PRODUCT, changed, root);
   return uniqueSorted(
     candidateTests
       .map(normalizePath)
       .filter(
-        (testPath) => changed.has(testPath) || testTouchesChangedPath(testPath, changed, root) || (testPath === WORKER_RUNTIME_TEST && workerInputsChanged)
+        (testPath) =>
+          changed.has(testPath) ||
+          testTouchesChangedPath(testPath, changed, root) ||
+          (testPath === WORKER_RUNTIME_TEST && workerInputsChanged) ||
+          (testPath === PRIVATE_COPY_CONTROLLER && privateCopyChanged)
       )
   );
 };
@@ -225,14 +242,30 @@ export const detectTestSelection = (): TestSelection => {
   return { ...scope, affectedTests, runAll: false, reason: dependencyScoped ? "selected" : "config" };
 };
 
+const manualDispatchInputs = (environment: NodeJS.ProcessEnv): Record<string, unknown> => {
+  if (environment.GITHUB_EVENT_NAME !== "workflow_dispatch" || !environment.GITHUB_EVENT_PATH) return {};
+  try {
+    const event: unknown = JSON.parse(readFileSync(environment.GITHUB_EVENT_PATH, "utf8"));
+    if (event === null || typeof event !== "object" || Array.isArray(event)) return {};
+    const inputs = (event as Record<string, unknown>).inputs;
+    return inputs !== null && typeof inputs === "object" && !Array.isArray(inputs) ? (inputs as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+};
+
 export const ciScopeForSelection = (selection: TestSelection, root = ROOT, environment: NodeJS.ProcessEnv = process.env): CiScope => {
   // Sentinel compares head failures with same-name base checks. Exercise every
   // real job for its heads, development baselines and CI-policy changes without
   // changing the dependency-scoped test selection.
   const changesCiPolicy = selection.paths.some((path) => path === ".github/workflows/deno-deploy.yml" || path === "scripts/test-scope.ts");
+  // Reserved GITHUB_BASE_REF cannot be overridden on manual runs. These event
+  // inputs select check coverage only; they do not authenticate a PR or author.
+  const dispatch = manualDispatchInputs(environment);
   const completeCheckSet =
     environment.GITHUB_EVENT_NAME === "merge_group" ||
     (environment.GITHUB_EVENT_NAME === "push" && environment.GITHUB_REF === "refs/heads/development") ||
+    (dispatch.base_ref === "development" && dispatch.sentinel_pr_author === "ubiquity-sentinel[bot]") ||
     (environment.GITHUB_EVENT_NAME === "pull_request" &&
       (environment.GITHUB_BASE_REF === "queue-canary" ||
         (environment.GITHUB_BASE_REF === "development" && (environment.GITHUB_PR_AUTHOR === "ubiquity-sentinel[bot]" || changesCiPolicy))));

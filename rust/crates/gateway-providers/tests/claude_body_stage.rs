@@ -3,8 +3,11 @@ use gateway_core::{
     source_serialization as source,
 };
 use gateway_providers::{
-    AuthMaterial, ClaudeBodyOptions, ClaudeCredentialKind, ClientSurface, PrepareOptions,
-    PreparedClaudeBody, prepare_source_request,
+    source_request::prepare_source_request,
+    types::{
+        AuthMaterial, ClaudeBodyOptions, ClaudeCredentialKind, ClientSurface, PrepareOptions,
+        PreparedClaudeBody,
+    },
 };
 use serde_json::json;
 fn parse(text: &str) -> SourceJson {

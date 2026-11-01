@@ -2,7 +2,7 @@
 use crate::{ObservabilityRuntime, counters, store, types::ObservabilityHost};
 use gateway_auth::crypto::sha256_hex;
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     query::QueryStore,
     state::{RecordKey, RecordMutation},

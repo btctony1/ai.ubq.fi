@@ -401,12 +401,12 @@ pub fn paid_entry(plan: &PaidRoutingPlan) -> PaidEntry {
         PaidEntry::CodexPrimary
     }
 }
-pub fn validate_flash_effort(raw: &Value) -> Result<(), gateway_core::GatewayError> {
+pub fn validate_flash_effort(raw: &Value) -> Result<(), gateway_core::error::GatewayError> {
     validate_source_flash_effort(&s::generated(raw)).map_err(s::scalar_error)
 }
 pub fn validate_source_flash_effort(
     raw: &SourceJson,
-) -> Result<(), gateway_schema::source_request::SourceRequestError> {
+) -> Result<(), gateway_schema::source_request::error::SourceRequestError> {
     let effort = source::string(&s::path(raw, &["reasoning", "effort"]))
         .filter(|value| !s::trim(value).as_units().is_empty())
         .or_else(|| {
@@ -422,19 +422,21 @@ pub fn validate_source_flash_effort(
                 .eq(level.encode_utf16())
         })
     {
-        return Err(gateway_schema::source_request::SourceRequestError::new(
-            400,
-            s::concat(&[
-                &JsString16::from_utf8(
-                    "The model 'ubiquity/deepseek-flash' supports reasoning efforts low, high, max; '",
-                ),
-                &effort,
-                &JsString16::from_utf8("' is not supported."),
-            ]),
-            "invalid_request_error",
-            Some("unsupported_reasoning_effort"),
-            Some(Some(JsString16::from_utf8("reasoning.effort"))),
-        ));
+        return Err(
+            gateway_schema::source_request::error::SourceRequestError::new(
+                400,
+                s::concat(&[
+                    &JsString16::from_utf8(
+                        "The model 'ubiquity/deepseek-flash' supports reasoning efforts low, high, max; '",
+                    ),
+                    &effort,
+                    &JsString16::from_utf8("' is not supported."),
+                ]),
+                "invalid_request_error",
+                Some("unsupported_reasoning_effort"),
+                Some(Some(JsString16::from_utf8("reasoning.effort"))),
+            ),
+        );
     }
     Ok(())
 }

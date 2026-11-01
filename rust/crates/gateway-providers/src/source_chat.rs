@@ -1,8 +1,9 @@
 //! Provider-owned Responses-to-Chat phases over immutable source fragments.
 use crate::{
     chat::{FORWARD_LIMIT, FORWARD_VERSION, bound_source},
-    source as s, source_tools,
-    types::*,
+    source as s,
+    source_tools::{self, ToolMap},
+    types::{ChatProfile, Elision},
 };
 use gateway_core::{
     js_string::JsString16, model::ModelId, source_json::SourceJson, source_serialization as json,
@@ -14,7 +15,7 @@ pub(crate) struct Projection {
     pub elisions: Vec<Elision>,
     pub warnings: Vec<String>,
 }
-fn error(message: &str, param: &str) -> gateway_schema::source_request::SourceRequestError {
+fn error(message: &str, param: &str) -> gateway_schema::source_request::error::SourceRequestError {
     s::invalid(JsString16::from_utf8(message), param)
 }
 fn bytes(text: &JsString16) -> usize {

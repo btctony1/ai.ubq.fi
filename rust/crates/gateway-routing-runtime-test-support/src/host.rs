@@ -1,12 +1,12 @@
 use crate::{seed::source_key, source_catalog::Collator, store::Store};
-use gateway_auth::{AuthPrincipal, crypto::Secret};
+use gateway_auth::{crypto::Secret, types::AuthPrincipal};
 use gateway_authority::{
     keys,
-    paid::{PaidReservation, PaidUsage},
-    routing::CohortProof,
+    paid_types::{PaidReservation, PaidUsage},
+    routing_types::CohortProof,
 };
-use gateway_core::{GatewayError, state::AuthorityStore};
-use gateway_providers::{AuthMaterial, PrepareOptions};
+use gateway_core::{error::GatewayError, state::AuthorityStore};
+use gateway_providers::types::{AuthMaterial, PrepareOptions};
 use gateway_routing_runtime::types::{
     ClaudeOutcome, ClaudeSelection, CodexRecovery, CredentialFence, CredentialRequest,
     PublishedCredential, RefreshOutcome, ResponseHead, RoutingHost, WaitOutcome, direct_credential,

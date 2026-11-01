@@ -3,10 +3,10 @@ use crate::{
     capabilities::{Context, RuntimeCapabilities},
     parse, store,
 };
-use gateway_admin::AdminInput;
-use gateway_auth::{AuthHost, AuthResponse, invalid};
+use gateway_admin::operations::AdminInput;
+use gateway_auth::types::{AuthHost, AuthResponse, invalid};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::QueryStore,
     state::StoredRecord,
     value::{PortableValue, ValueEncoding},

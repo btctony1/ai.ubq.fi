@@ -2,7 +2,7 @@
 use gateway_core::{
     js_string::JsString16, source_json::SourceJson, source_serialization as source,
 };
-use gateway_providers::{
+use gateway_providers::types::{
     ClaudeBodyOptions, ClaudeCredentialKind, ClientSurface, OrdinaryPhaseOptions,
     OrdinaryPreparationContext, PreparedClaudeBody, PreparedClaudeOrdinary,
 };

@@ -1,11 +1,12 @@
-use gateway_core::state::{
-    AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,
-    StoredRecord,
+use gateway_core::{
+    error::GatewayError,
+    state::{
+        AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,
+        StoredRecord,
+    },
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
-
-use crate::GatewayError;
 
 /// All call sites construct first-party arrays of strings and finite JSON numbers.
 /// Identity/ordering belong exclusively to the shared source-compatible tuple codec.

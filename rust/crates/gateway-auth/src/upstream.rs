@@ -1,3 +1,8 @@
+use crate::{
+    crypto::{Secret, decode_base64url, sha256_base64url},
+    types::{AuthConfig, AuthRequest, invalid, unauthorized},
+};
+use gateway_core::error::GatewayError;
 use rsa::{
     RsaPublicKey,
     pkcs1v15::{Signature, VerifyingKey},
@@ -7,12 +12,6 @@ use rsa::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
-
-use crate::{
-    AuthConfig, AuthRequest, GatewayError,
-    crypto::{Secret, decode_base64url, sha256_base64url},
-    invalid, unauthorized,
-};
 
 #[derive(Clone, Debug)]
 pub enum AuthUpstreamRequest {

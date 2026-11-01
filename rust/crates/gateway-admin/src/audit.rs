@@ -1,11 +1,11 @@
-use gateway_auth::{AuthHost, AuthMethod, AuthPrincipal, crypto::uuid_from_random, store};
-use gateway_core::{
-    GatewayError,
-    js_string::JsString16,
-    source_json::SourceJson,
-    state::{RecordKey, RecordMutation, StoredRecord},
-    value::PortableValue,
-};
+use gateway_auth::crypto::uuid_from_random;
+use gateway_auth::store;
+use gateway_auth::types::{AuthHost, AuthMethod, AuthPrincipal};
+use gateway_core::error::GatewayError;
+use gateway_core::js_string::JsString16;
+use gateway_core::source_json::SourceJson;
+use gateway_core::state::{RecordKey, RecordMutation, StoredRecord};
+use gateway_core::value::PortableValue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -31,10 +31,13 @@ pub struct KeyChange {
 }
 
 pub fn actor(principal: &AuthPrincipal) -> ChangeActor {
+    let identity =
+        |id: &String, label: &String| ("passkey_user", Some(id.clone()), Some(label.clone()));
     let (kind, id, label) = match &principal.method {
         AuthMethod::PasskeySession {
             user_id, handle, ..
-        } => ("passkey_user", Some(user_id.clone()), Some(handle.clone())),
+        } => identity(user_id, handle),
+        AuthMethod::PassportSession { claims } => identity(&claims.sub, &claims.handle),
         AuthMethod::Disabled => ("local_admin", None, None),
         _ => ("shared_admin_credential", None, None),
     };

@@ -1,10 +1,8 @@
 //! Actual debug-only two-process native import fixtures. No v3 row rewriting,
 //! credential provider traffic, fake Start, raw-response issuer or live UID work.
-use super::foundation_tests::assert_owned_canonical_directory;
-use super::*;
+use super::{foundation_tests::assert_owned_canonical_directory, *};
 use crate::http_server::import_http_tests as base;
 use gateway_auth::{
-    AuthRequest,
     crypto::{Secret, base64url, sha256_hex},
     native::*,
     native_auth::{NativeAuthHeaders, NativeCapability, NativeTransportIdentity},
@@ -15,22 +13,25 @@ use gateway_auth::{
         ManagedNativeSource, codex_source_pool_key,
     },
     session_index,
+    types::AuthRequest,
 };
-use gateway_authority::{
-    Authority, keys,
-    native_control::{NativeRenewalAuthority, RegisteredRenewalOwner, actor},
-    paid_control::PaidControlOwner,
-    routing::{PoolAccount, SubscriptionPool},
+use gateway_authority::keys;
+use gateway_authority::native_control::{
+    actor,
+    receiver::{NativeRenewalAuthority, RegisteredRenewalOwner},
 };
-use gateway_core::{
-    identity::{PoolVersionstamp, PrincipalId, RequestContext, RequestId},
-    source_json::SourceJson,
-    state::AuthorityStore,
+use gateway_authority::paid_control::PaidControlOwner;
+use gateway_authority::routing_types::{PoolAccount, SubscriptionPool};
+use gateway_authority::store::Authority;
+use gateway_core::error::GatewayError;
+use gateway_core::identity::{PoolVersionstamp, PrincipalId, RequestContext, RequestId};
+use gateway_core::source_json::SourceJson;
+use gateway_core::state::AuthorityStore;
+use gateway_publication_policy::control_publication::{
+    ConfiguredPaidInputs, PreparedConfigurationPublication,
 };
-use gateway_publication::{
-    control_publication::{ConfiguredPaidInputs, PreparedConfigurationPublication},
-    transport::{OwnedNativeAuthHeaders, PublicationReceiver, PublicationRequest},
-};
+use gateway_publication_policy::protocol::{OwnedNativeAuthHeaders, PublicationRequest};
+use gateway_publication_transport::transport::PublicationReceiver;
 use rustls::{ServerConfig, ServerConnection, StreamOwned, pki_types::*};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -52,8 +53,8 @@ use std::{
 };
 
 struct FlowTokens;
-impl gateway_authority::TokenSource for FlowTokens {
-    fn next_token(&self) -> Result<String, gateway_core::GatewayError> {
+impl gateway_authority::store::TokenSource for FlowTokens {
+    fn next_token(&self) -> Result<String, GatewayError> {
         static NEXT: AtomicUsize = AtomicUsize::new(1);
         Ok(format!(
             "native-flow-token-{}",
@@ -68,7 +69,7 @@ impl gateway_core::query::QueryStore for base::Store {
     async fn query(
         &self,
         request: gateway_core::query::QueryRequest,
-    ) -> Result<gateway_core::query::QueryPage, gateway_core::GatewayError> {
+    ) -> Result<gateway_core::query::QueryPage, GatewayError> {
         use gateway_core::{
             query::{QueryEntry, QueryPage},
             state::RecordKey,
@@ -537,7 +538,7 @@ fn read_request(
                 .map(|v| v.parse().ok())
                 .unwrap_or(Some(0))?;
             if len
-                > gateway_authority::native_control::import::import_publication_max_bytes()
+                > gateway_auth::native_import::publication::command::import_publication_max_bytes()
                     .max(gateway_auth::native::NATIVE_MAX_BODY_BYTES)
             {
                 return None;

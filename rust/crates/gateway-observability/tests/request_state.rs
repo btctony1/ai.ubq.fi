@@ -1,5 +1,5 @@
 mod support;
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 use gateway_observability::{
     ObservabilityRuntime, ObservabilityState,
     host_types::*,

@@ -1,7 +1,7 @@
 //! Source analytics.ts and admin/error-log.ts. This is the existing request ledger.
 use crate::{ObservabilityRuntime, store, types::ObservabilityHost};
 use gateway_core::{
-    GatewayError, js_string::JsString16, lifecycle::DeliveryOutcome, query::QueryStore,
+    error::GatewayError, js_string::JsString16, lifecycle::DeliveryOutcome, query::QueryStore,
     source_json::SourceJson, source_serialization as source,
 };
 use serde::{Deserialize, Serialize};

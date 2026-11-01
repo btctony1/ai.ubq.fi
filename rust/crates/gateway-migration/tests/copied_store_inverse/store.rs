@@ -1,6 +1,6 @@
 //! Read-only adapter for the actual gateway-worker SQLite schema.
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     identity::MAX_SAFE_INTEGER,
     query::{QueryEntry, QueryPage, QueryRequest, QueryStore},
     state::{

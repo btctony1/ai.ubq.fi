@@ -3,14 +3,16 @@
 #[doc(hidden)]
 pub mod import_body;
 use crate::owner_control::NativeControlContext;
-pub use gateway_auth::native_import::{NativeImportKind, NativeImportMetadata, NativeImportTarget};
-pub use gateway_authority::native_control::import::AuthenticatedNativeImport;
+use gateway_auth::native_import::{NativeImportKind, NativeImportMetadata};
 use gateway_authority::{
-    TokenSource,
-    native_control::{NativeRenewalAuthority, NativeRenewalCancellation},
+    native_control::{
+        NativeRenewalCancellation, import::AuthenticatedNativeImport,
+        receiver::NativeRenewalAuthority,
+    },
+    store::TokenSource,
 };
 use gateway_core::{
-    GatewayError, js_string::JsString16, source_json::SourceJson, state::AuthorityStore,
+    error::GatewayError, js_string::JsString16, source_json::SourceJson, state::AuthorityStore,
 };
 use std::collections::BTreeMap;
 

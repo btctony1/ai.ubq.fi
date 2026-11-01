@@ -1,23 +1,21 @@
 //! Portable source credential parsing. Parsing establishes shape and identity
 //! preconditions, never upstream authorization or permission to refresh credentials.
-use std::collections::BTreeSet;
-
+use crate::{
+    crypto::{Secret, sha256_hex},
+    store,
+};
 use base64::{
     Engine, alphabet,
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
 };
 use gateway_core::{
+    error::GatewayError,
     identity::{CredentialVersion, RoutingAccountHash, SubscriptionSelectionHash},
     state::{AuthorityStore, RecordKey},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-
-use crate::{
-    GatewayError,
-    crypto::{Secret, sha256_hex},
-    store,
-};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CodexNativeOwner {

@@ -1,15 +1,13 @@
 //! Raw adapter for the fixed private route; all publication policy is shared.
-use gateway_auth::native::NATIVE_MAX_BODY_BYTES;
-use gateway_core::GatewayError;
-use gateway_publication::transport::{
-    OwnedNativeAuthHeaders, PublicationReceiver, PublicationRequest,
-};
-use worker::{Env, Request, Response};
-
 use crate::{
     authority::RemoteAuthorityStore,
     transport::{HeaderLimits, body::request_bytes, bounded_headers},
 };
+use gateway_auth::native::NATIVE_MAX_BODY_BYTES;
+use gateway_core::error::GatewayError;
+use gateway_publication_policy::protocol::{OwnedNativeAuthHeaders, PublicationRequest};
+use gateway_publication_transport::transport::PublicationReceiver;
+use worker::{Env, Request, Response};
 
 pub async fn handle(
     mut request: Request,
@@ -47,7 +45,7 @@ pub async fn handle(
         .ok()
         .is_some_and(|value| value.operation == "codex_auth_import_publish")
     {
-        return crate::native_authority::import_publication(
+        return crate::native_authority::import_dispatch::publication(
             &request, env, native, &store, receiver, &raw_body,
         )
         .await;

@@ -1,6 +1,6 @@
 //! Finite validated embeddings decode controls; ordinary request text is never scalarized.
 use crate::{extras::base64_encode, types::*};
-use gateway_core::{GatewayError, source_json::SourceJson};
+use gateway_core::{error::GatewayError, source_json::SourceJson};
 use serde_json::{Value, json};
 pub fn decode_embeddings(value: &Value, plan: &DecodePlan) -> Result<SourceJson, GatewayError> {
     // Preparation validated this named profile; decode needs only these finite controls.

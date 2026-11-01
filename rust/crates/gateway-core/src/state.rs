@@ -5,7 +5,7 @@ use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 
-use crate::GatewayError;
+use crate::error::GatewayError;
 
 pub const PORTABLE_STATE_VERSION: u32 = 1;
 

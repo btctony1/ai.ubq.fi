@@ -1,13 +1,13 @@
 //! Kernel/actual Child/epoch only. This module never opens or decodes credential documents.
 use super::{
-    OwnedRuntime,
     actor_channel::{ImportChildCommand, OwnedImportChildChannel},
+    owner_runtime::OwnedRuntime,
 };
 use crate::import_custody_protocol::{Header, unavailable};
 use gateway_authority::native_control::import::{
-    VerifiedCurrentImportStarted, VerifiedCurrentImportTerminal,
+    custody_session::VerifiedCurrentImportStarted, remote::VerifiedCurrentImportTerminal,
 };
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 use std::time::{Duration, Instant};
 
 pub(crate) struct KernelSnapshot {
@@ -27,7 +27,7 @@ struct Session {
 /// Not a serializable lease or a renamed credential-bearing owner-settlement API.
 /// Its private constructor accepts actual already-owned Child custody, never a PID/Boolean.
 /// ```compile_fail
-/// use gateway_native::existing_account_import::CustodianRuntime;
+/// use gateway_native::existing_account_import::custodian_runtime::CustodianRuntime;
 /// let forged: CustodianRuntime = serde_json::from_str("{}").unwrap();
 /// ```
 pub struct CustodianRuntime {

@@ -1,5 +1,6 @@
 use gateway_core::{
-    GatewayError, js_string::JsString16, source_json::SourceJson, source_serialization as source,
+    error::GatewayError, js_string::JsString16, source_json::SourceJson,
+    source_serialization as source,
 };
 use gateway_schema::aliases::SourceStringCollator;
 use std::collections::BTreeMap;

@@ -1,10 +1,9 @@
 //! Operator selection, whitelist and non-secret per-account model eligibility hints.
-use crate::aliases::SourceStringCollator;
 use crate::{
-    aliases::{LEGACY_SYNTHETIC_MODEL, SYNTHETIC_MODEL},
-    util::*,
+    aliases::{LEGACY_SYNTHETIC_MODEL, SYNTHETIC_MODEL, SourceStringCollator},
+    util::{normalized_string, positive_integer, push_unique},
 };
-use gateway_core::{model::ModelId, source_json::SourceJson};
+use gateway_core::{error::GatewayError, model::ModelId, source_json::SourceJson};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -171,7 +170,7 @@ impl AccountModelsStore {
         model: &ModelId,
         at_ms: i64,
         collator: &dyn SourceStringCollator,
-    ) -> Result<Self, gateway_core::GatewayError> {
+    ) -> Result<Self, gateway_core::error::GatewayError> {
         use gateway_core::source_serialization as source;
         let mut next = self.clone();
         let entries = next.unsupported.entry(account.into()).or_default();
@@ -184,7 +183,12 @@ impl AccountModelsStore {
         )?;
         // Object.entries enumerates numeric keys first, even after inserting a new numeric-looking model.
         let mut ordered = source::entries(&raw)
-            .expect("model object")
+            .ok_or_else(|| {
+                GatewayError::unavailable(
+                    "Invalid source JSON serialization.",
+                    "source_json_serialization_invalid",
+                )
+            })?
             .into_iter()
             .map(|(key, _)| {
                 let model = ModelId::from_source(key);
@@ -193,15 +197,10 @@ impl AccountModelsStore {
             })
             .collect::<Vec<_>>();
         ordered.retain(|(_, at)| at_ms - *at <= 7 * 24 * 60 * 60_000);
-        let mut ordered =
-            crate::aliases::sort_source(ordered, &|a: &(ModelId, i64), b: &(ModelId, i64)| {
-                let by_time = b.1.cmp(&a.1);
-                if by_time == std::cmp::Ordering::Equal {
-                    collator.compare(a.0.as_js_string(), b.0.as_js_string())
-                } else {
-                    Ok(by_time)
-                }
-            })?;
+        let mut ordered = crate::aliases::sort_source(ordered, &|a, b| match b.1.cmp(&a.1) {
+            std::cmp::Ordering::Equal => collator.compare(a.0.as_js_string(), b.0.as_js_string()),
+            order => Ok(order),
+        })?;
         ordered.truncate(32);
         *entries = ordered.into_iter().collect();
         Ok(next)

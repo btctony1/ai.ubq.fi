@@ -1,6 +1,6 @@
 //! Independent paid attempt, semantic terminal and billing record contracts.
 use crate::claude::ClaudeCohortProof;
-use crate::routing::CohortProof;
+use crate::routing_types::CohortProof;
 use gateway_core::identity::{ApiKeyId, PaidAttemptId, RequestId};
 use gateway_core::{js_string::JsString16, model::ModelId};
 pub mod model_map;

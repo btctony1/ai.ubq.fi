@@ -1,13 +1,15 @@
 //! Bounded redacted context only. No provider/network inference capability.
 use crate::{
-    redaction::{redact, redact_parts},
     supervisor::KnownThread,
-    supervisor_inventory::{epoch_ms, text},
     supervisor_rollout::{SupervisorLogEvent, read_rollout_tail},
     transport::{SupervisorMethod, SupervisorTransport},
     unix::UnixSupervisor,
 };
-use gateway_core::GatewayError;
+use gateway_core::{
+    error::GatewayError,
+    redaction::{redact, redact_parts},
+};
+use gateway_native_supervisor_read::inventory::{epoch_ms, text};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -226,7 +228,7 @@ pub fn append_rollout_tail(
     let mut dropped = 0;
     for (event, result) in filtered.into_iter().zip(texts) {
         let clipped = bounded(&result.text, if event.kind == "tool" { 400 } else { 1200 });
-        let content = clipped.trim_matches(crate::redaction::source_whitespace);
+        let content = clipped.trim_matches(gateway_core::redaction::source_whitespace);
         if content.is_empty() || !known.insert(content.into()) {
             dropped += 1;
             continue;

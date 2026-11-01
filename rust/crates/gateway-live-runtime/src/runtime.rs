@@ -1,11 +1,10 @@
-use gateway_auth::AuthPrincipal;
-use gateway_core::state::AuthorityStore;
-
 use crate::{
     mapping::{LiveRuntime, Retirement, mapping_missing},
     protocol::{call_id_from_location, create_headers, encode_call_id, parse_create, principal_id},
     types::*,
 };
+use gateway_auth::types::AuthPrincipal;
+use gateway_core::{error::GatewayError, state::AuthorityStore};
 
 /// Minted only after authenticated mapping and current-account resolution. No serialization.
 pub struct PreparedSideband<S, A> {
@@ -59,10 +58,10 @@ impl<S: AuthorityStore> LiveRuntime<S> {
         };
         let mut attempted = Vec::new();
         let mut captured = None;
-        for attempt in 0..2 {
+        loop {
             let account = match host.select_account(model.as_ref(), &attempted, cancel).await {
                 Ok(account) if !attempted.iter().any(|id| id == account.account_id()) => account,
-                Ok(_) => return captured.unwrap_or_else(|| response_error(host, gateway_core::GatewayError::unavailable("Codex routing state exposed no account for this realtime call; retry the request.", "codex_auth_missing"))),
+                Ok(_) => return captured.unwrap_or_else(|| response_error(host, GatewayError::unavailable("Codex routing state exposed no account for this realtime call; retry the request.", "codex_auth_missing"))),
                 Err(response) => return captured.unwrap_or(response),
             };
             attempted.push(account.account_id().to_owned());
@@ -82,7 +81,7 @@ impl<S: AuthorityStore> LiveRuntime<S> {
                 return response_error(host, error);
             }
             host.response_health(&account, &upstream).await;
-            if !credential_failure || attempt == 1 {
+            if !credential_failure || attempted.len() == 2 {
                 return self
                     .relay(
                         upstream,
@@ -95,7 +94,6 @@ impl<S: AuthorityStore> LiveRuntime<S> {
             host.await_routing_transition().await;
             captured = Some(host.capture_retry(upstream, cancel).await);
         }
-        captured.expect("two attempts either returned a response or captured the first failure")
     }
 
     async fn relay<B>(
@@ -141,7 +139,7 @@ impl<S: AuthorityStore> LiveRuntime<S> {
         if mapping.principal_id.as_deref() != Some(&principal_id(principal)) {
             return Err(response_error(
                 host,
-                gateway_core::GatewayError::new(
+                GatewayError::new(
                     403,
                     "The realtime call was not created by this gateway principal.",
                     Some("forbidden"),

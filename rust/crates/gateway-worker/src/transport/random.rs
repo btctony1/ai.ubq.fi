@@ -1,6 +1,8 @@
-use gateway_core::GatewayError;
-use worker::js_sys::{Function, Reflect, Uint8Array};
-use worker::wasm_bindgen::{JsCast, JsValue};
+use gateway_core::error::GatewayError;
+use worker::{
+    js_sys::{Function, Reflect, Uint8Array},
+    wasm_bindgen::{JsCast, JsValue},
+};
 
 pub fn random_bytes(length: usize) -> Result<Vec<u8>, GatewayError> {
     // getRandomValues has a platform-enforced 65,536-byte request limit.

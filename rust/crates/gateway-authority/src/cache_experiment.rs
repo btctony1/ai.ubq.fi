@@ -2,14 +2,12 @@
 //! A campaign is not inference admission, account election or another paid ledger.
 pub mod model;
 mod promotion;
-mod run;
+pub mod run;
 mod state;
 mod target;
-mod transport;
-pub use model::{Cycle, Evidence, Reason, Sample, Scope, State, TargetBinding, Usage};
-pub use run::{ExperimentIo, ReadSample, request_body};
+pub mod transport;
+use model::{Sample, TargetBinding};
 use serde::{Deserialize, Serialize};
-pub use transport::CacheDispatch;
 
 /// Prepared immediately before the immutable-release telemetry gate. Never caller JSON.
 pub struct PreparedTarget {
@@ -71,12 +69,12 @@ impl RefreshPermit {
 /// source revision, while these immutable campaign and account-membership facts remain.
 pub(crate) async fn validate_refresh_context<
     S: gateway_core::state::AuthorityStore,
-    I: crate::TokenSource,
+    I: crate::store::TokenSource,
 >(
     tx: &mut crate::store::Transaction<'_, S, I>,
     context: &RefreshContext,
     now: i64,
-) -> Result<(), gateway_core::GatewayError> {
+) -> Result<(), gateway_core::error::GatewayError> {
     use model::{failed, sample_signal};
     context.target.validate()?;
     if context.v != 1

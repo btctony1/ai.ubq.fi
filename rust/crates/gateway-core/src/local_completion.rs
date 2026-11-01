@@ -1,6 +1,6 @@
 //! Finite data-only local-completion patch. This never constructs a live runtime handle.
 use crate::{
-    GatewayError,
+    error::GatewayError,
     identity::{MAX_SAFE_INTEGER, RequestContext},
     js_string::JsString16,
     lifecycle::DeliveryOutcome,

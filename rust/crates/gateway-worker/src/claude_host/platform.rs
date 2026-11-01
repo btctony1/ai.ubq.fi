@@ -5,15 +5,15 @@ use crate::{
 };
 use gateway_admin_runtime::claude::{self, AccountBinding, Bootstrap, CredentialKind};
 use gateway_auth::{
-    AuthHost,
+    types::AuthHost,
     upstream::{AuthUpstreamRequest, AuthUpstreamResponse},
     webauthn::{CosePublicKey, SignatureInput, WebAuthnCrypto},
 };
-use gateway_catalog_runtime::ProviderBinding;
-use gateway_claude_runtime::{
+use gateway_catalog_runtime::host::ProviderBinding;
+use gateway_claude_runtime::host::{
     AcceptedObservation, ClaudePoolHost, HealthObservation, WorkspaceResponse,
 };
-use gateway_core::{GatewayError, state::RevisionCheck};
+use gateway_core::{error::GatewayError, state::RevisionCheck};
 use gateway_observability::{
     ObservabilityRuntime,
     types::{HealthEvent, HealthProvider, HealthTarget},
@@ -219,10 +219,10 @@ pub(super) struct ConstructionFailure;
 
 pub(super) fn credential_kind(
     credential: &claude::Credential,
-) -> gateway_providers::ClaudeCredentialKind {
+) -> gateway_providers::types::ClaudeCredentialKind {
     match credential.kind {
-        CredentialKind::Oauth => gateway_providers::ClaudeCredentialKind::Oauth,
-        CredentialKind::ApiKey => gateway_providers::ClaudeCredentialKind::ApiKey,
+        CredentialKind::Oauth => gateway_providers::types::ClaudeCredentialKind::Oauth,
+        CredentialKind::ApiKey => gateway_providers::types::ClaudeCredentialKind::ApiKey,
     }
 }
 
@@ -313,7 +313,7 @@ fn trim_workspace(
 
 pub(super) fn physical_request(
     binding: &AccountBinding,
-    body: &gateway_providers::PreparedClaudeBody,
+    body: &gateway_providers::types::PreparedClaudeBody,
 ) -> Result<crate::transport::outbound::ConstructedRequest, ConstructionFailure> {
     if body.kind() != credential_kind(&binding.credential) {
         return Err(ConstructionFailure);
@@ -338,12 +338,13 @@ pub(super) fn physical_request(
 mod physical_tests {
     use gateway_core::js_string::JsString16;
     #[test]
-    fn actual_prepared_body_kind_rejects_wrong_binding_before_any_host_header() {
+    fn actual_prepared_body_kind_rejects_wrong_binding_before_any_host_header()
+    -> Result<(), Box<dyn std::error::Error>> {
         use gateway_admin_runtime::claude::{
-            AccountBinding, ClaudeSourceSecret, Credential, CredentialKind,
+            AccountBinding, Credential, CredentialKind, source_secret::ClaudeSourceSecret,
         };
         use gateway_core::source_json::SourceJson;
-        use gateway_providers::{
+        use gateway_providers::types::{
             ClaudeBodyOptions, ClaudeCredentialKind, ClientSurface, PreparedClaudeBody,
         };
         let binding = AccountBinding {
@@ -365,13 +366,14 @@ mod physical_tests {
         };
         let body = PreparedClaudeBody::prepare(
             ClientSurface::Responses,
-            &SourceJson::parse(r#"{"model":"claude-fixture","input":"hello"}"#).unwrap(),
+            &SourceJson::parse(r#"{"model":"claude-fixture","input":"hello"}"#)?,
             &"claude-fixture".into(),
             &ClaudeBodyOptions::new(ClaudeCredentialKind::ApiKey),
         )
-        .unwrap();
+        .map_err(|error| error.diagnostic().clone())?;
         // This executes the real closed helper guard; calling host Headers on native would panic.
         assert!(super::physical_request(&binding, &body).is_err());
+        Ok(())
     }
     #[test]
     fn workspace_source_trim_retains_lone_units_until_late_field_projection() {

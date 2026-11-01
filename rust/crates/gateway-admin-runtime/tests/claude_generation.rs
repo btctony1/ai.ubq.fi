@@ -1,5 +1,5 @@
 use gateway_admin_runtime::{
-    claude::{ClaudeSourceSecret, Credential, CredentialKind},
+    claude::{Credential, CredentialKind, source_secret::ClaudeSourceSecret},
     claude_generation::{StateChange, StateGeneration},
 };
 use gateway_auth::crypto::sha256_hex;

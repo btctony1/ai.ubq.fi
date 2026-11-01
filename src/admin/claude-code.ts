@@ -16,14 +16,14 @@ import {
   parseClaudeCodeWorkspaceId,
   partialClaudeCodeCredentialHint,
 } from "../provider/claude-code-credentials.ts";
-import { claudeCodeCredentialKind, type ClaudeCodeEnvLookup } from "../provider/claude-code.ts";
+import { claudeCodeCredentialKind, type ClaudeCodeEnvLookup, type ClaudeCodeFetch } from "../provider/claude-code.ts";
 import {
   cacheValidatedClaudeCodeModels,
   ClaudeCodeModelsError,
   discoverClaudeCodeModels,
   type ClaudeCodeModelsSnapshot,
 } from "../provider/claude-code-models.ts";
-import { clearClaudeCodeQuotaGuards } from "../provider/claude-code-quota.ts";
+import { clearClaudeCodeQuotaGuards, loadClaudeCodeQuotaState } from "../provider/claude-code-quota.ts";
 import { getPassiveProviderHealthSnapshot } from "../health.ts";
 import {
   resolveClaudeCodeAccount,
@@ -197,6 +197,42 @@ export const handleAdminClaudeCodeAuthSet = async (req: Request, options: Readon
     account_id: account.account_id,
     validation: { status: validation.status, detail: validation.detail },
     hint: credential.secret ? partialClaudeCodeCredentialHint(secret) : null,
+  });
+};
+
+type ClaudeUsageRefreshOptions = Readonly<{ env?: ClaudeCodeEnvLookup; fetcher?: ClaudeCodeFetch; now?: () => number }>;
+type ClaudeUsageRefreshTarget = Readonly<{ kind: "response"; response: Response }> | Readonly<{ kind: "refresh"; account: ClaudeCodeAccountBinding }>;
+
+const resolveClaudeUsageRefreshTarget = async (req: Request, kv: Kv, options: ClaudeUsageRefreshOptions): Promise<ClaudeUsageRefreshTarget> => {
+  const body = await readJsonBody(req);
+  if (!isRecord(body) || typeof body.account_id !== "string")
+    return { kind: "response", response: openaiError(400, "account_id is required", "invalid_request_error") };
+  if (body.account_cohort_id !== undefined && typeof body.account_cohort_id !== "string")
+    return { kind: "response", response: openaiError(400, "account_cohort_id must be a string", "invalid_request_error") };
+  const account = await resolveClaudeCodeAccount(kv, options.env, { accountId: body.account_id });
+  if (!account) return { kind: "response", response: openaiError(404, "Claude account was not found", "not_found") };
+  if (body.account_cohort_id !== undefined && body.account_cohort_id !== account.account_cohort_id)
+    return { kind: "response", response: openaiError(409, "Claude account generation changed", "claude_code_account_changed") };
+  return { kind: "refresh", account };
+};
+
+/**
+ * Compatibility read for clients with the former refresh action. Meter evidence
+ * comes only from ordinary inference response headers; this route never probes.
+ */
+export const handleAdminClaudeCodeQuotaRefresh = async (req: Request, options: ClaudeUsageRefreshOptions = {}): Promise<Response> => {
+  const kv = await getKv();
+  if (!kv) return openaiError(503, "Claude quota storage is unavailable", "server_error");
+  const target = await resolveClaudeUsageRefreshTarget(req, kv, options);
+  if (target.kind === "response") return target.response;
+  const quota = await loadClaudeCodeQuotaState(kv, target.account);
+  return json(200, {
+    data: await claudeSubscriptionBlock(),
+    refreshed: false,
+    reason: "response_headers",
+    observed_at_ms: quota?.response_headers?.observed_at_ms ?? null,
+    usage: null,
+    message: "Quota updates from response headers on ordinary Claude requests.",
   });
 };
 

@@ -9,12 +9,12 @@ use crate::{
         outbound::{self, DispatchAttempt, PinnedDestination},
     },
 };
-use gateway_core::{GatewayError, state::AuthorityStore, tuple_key::TupleKey};
-use gateway_extras_runtime::{
+use gateway_core::{error::GatewayError, state::AuthorityStore, tuple_key::TupleKey};
+use gateway_extras_runtime::types::{
     DispatchFailure, DispatchFailureOrigin, ExtrasDispatch, ExtrasHost, ExtrasProvider, ImageKind,
     PreparedCall, UpstreamResponse,
 };
-use gateway_providers::{AuthMaterial, PrepareOptions};
+use gateway_providers::types::{AuthMaterial, PrepareOptions};
 use gateway_routing_runtime::{
     extras::{AdmissionHandle, ChildScope, DispatchTicket},
     types::TransportState,

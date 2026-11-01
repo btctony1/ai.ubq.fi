@@ -1,8 +1,9 @@
 use gateway_admin_data::profile::{
-    CanonicalDates, SourceDateHost, from_source_profile, from_source_profile_with_host, to_profile,
-    to_source_profile,
+    CanonicalDates, SourceDateHost,
+    source::{from_source_profile, from_source_profile_with_host, to_source_profile},
+    to_profile,
 };
-use gateway_core::{GatewayError, source_json::SourceJson, value::PortableValue};
+use gateway_core::{error::GatewayError, source_json::SourceJson, value::PortableValue};
 use serde_json::{Value, json};
 
 struct OracleDate;

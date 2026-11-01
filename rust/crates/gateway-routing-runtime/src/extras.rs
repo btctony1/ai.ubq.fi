@@ -6,10 +6,14 @@ use crate::{
     types::*,
 };
 use futures_util::lock::Mutex;
-use gateway_authority::{Authority, AuthorityClock, TokenSource, quota::KernelTerminal};
+use gateway_authority::{
+    kernel::KernelTerminal,
+    store::{Authority, AuthorityClock, TokenSource},
+};
 use gateway_core::{
-    GatewayError, lifecycle::TransportObservation, model::ModelId, provider::UpstreamProvider,
-    query::QueryStore, source_json::SourceJson, source_serialization as source,
+    error::GatewayError, lifecycle::TransportObservation, model::ModelId,
+    provider::UpstreamProvider, query::QueryStore, source_json::SourceJson,
+    source_serialization as source,
 };
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
@@ -95,7 +99,7 @@ pub struct DispatchTicket {
 #[derive(Clone, Debug)]
 pub struct ImageChildAttempt {
     scope: ChildScope,
-    pub request: gateway_providers::PreparedRequest,
+    pub request: gateway_providers::types::PreparedRequest,
     pub credential: CredentialFence,
 }
 impl ImageChildAttempt {
@@ -188,58 +192,8 @@ impl<
                 .authority()
                 .select_account(&model, crate::policy::class(&model), self.clock.now_ms()?)
                 .await?;
-            let mut account = match selection {
-                gateway_authority::routing::RouteSelection::Eligible(account) => account,
-                gateway_authority::routing::RouteSelection::QuotaBlocked { proof, .. } => {
-                    let recovery = if proof.full_cohort_exhausted() {
-                        self.host.recover_codex(&proof, &model).await?
-                    } else {
-                        CodexRecovery::Declined
-                    };
-                    match recovery {
-                        CodexRecovery::Recovered(account) => {
-                            if account.requested_model != model
-                                || account.quota_class != crate::policy::class(&model)
-                                || account.probe_required
-                                || account.probe.is_none()
-                            {
-                                return Err(journal::unavailable("The elected image recovery admission does not match this child.").into());
-                            }
-                            self.authority()
-                                .ensure_admission_current(&account, self.clock.now_ms()?)
-                                .await?;
-                            account
-                        }
-                        CodexRecovery::Reselect => continue,
-                        CodexRecovery::Declined => return Err(GatewayError::new(
-                            429,
-                            "Codex subscriptions have no applicable capacity for this image child.",
-                            Some("codex_quota_blocked"),
-                        )
-                        .into()),
-                    }
-                }
-                gateway_authority::routing::RouteSelection::CredentialsInvalid { .. } => {
-                    return Err(GatewayError::new(
-                        401,
-                        "Codex subscription credentials are unavailable.",
-                        Some("codex_subscriptions_unavailable"),
-                    )
-                    .into());
-                }
-                gateway_authority::routing::RouteSelection::ModelUnavailable { .. } => {
-                    return Err(GatewayError::new(
-                        404,
-                        "The image child model is unavailable.",
-                        Some("model_not_found"),
-                    )
-                    .into());
-                }
-                _ => {
-                    return Err(
-                        journal::unavailable("Codex image-child routing is unavailable.").into(),
-                    );
-                }
+            let Some(mut account) = self.image_account(selection, &model).await? else {
+                continue;
             };
             if account.probe_required {
                 account = self
@@ -268,7 +222,7 @@ impl<
                 .await?;
             let mut input = self.input.clone();
             input.raw = body.clone();
-            input.surface = gateway_providers::ClientSurface::Responses;
+            input.surface = gateway_providers::types::ClientSurface::Responses;
             let request = crate::wire::prepare(
                 &input,
                 &child.nonce,
@@ -291,6 +245,70 @@ impl<
             });
         }
         Err(journal::unavailable("Image child selection did not settle.").into())
+    }
+    async fn image_account(
+        &self,
+        selection: gateway_authority::routing_types::RouteSelection,
+        model: &ModelId,
+    ) -> RoutingResult<Option<gateway_authority::routing_types::AdmittedAccount>> {
+        Ok(Some(match selection {
+            gateway_authority::routing_types::RouteSelection::Eligible(account) => account,
+            gateway_authority::routing_types::RouteSelection::QuotaBlocked { proof, .. } => {
+                let recovery = if proof.full_cohort_exhausted() {
+                    self.host.recover_codex(&proof, model).await?
+                } else {
+                    CodexRecovery::Declined
+                };
+                match recovery {
+                    CodexRecovery::Recovered(account) => {
+                        if &account.requested_model != model
+                            || account.quota_class != crate::policy::class(model)
+                            || account.probe_required
+                            || account.probe.is_none()
+                        {
+                            return Err(journal::unavailable(
+                                "The elected image recovery admission does not match this child.",
+                            )
+                            .into());
+                        }
+                        self.authority()
+                            .ensure_admission_current(&account, self.clock.now_ms()?)
+                            .await?;
+                        account
+                    }
+                    CodexRecovery::Reselect => return Ok(None),
+                    CodexRecovery::Declined => {
+                        return Err(GatewayError::new(
+                            429,
+                            "Codex subscriptions have no applicable capacity for this image child.",
+                            Some("codex_quota_blocked"),
+                        )
+                        .into());
+                    }
+                }
+            }
+            gateway_authority::routing_types::RouteSelection::CredentialsInvalid { .. } => {
+                return Err(GatewayError::new(
+                    401,
+                    "Codex subscription credentials are unavailable.",
+                    Some("codex_subscriptions_unavailable"),
+                )
+                .into());
+            }
+            gateway_authority::routing_types::RouteSelection::ModelUnavailable { .. } => {
+                return Err(GatewayError::new(
+                    404,
+                    "The image child model is unavailable.",
+                    Some("model_not_found"),
+                )
+                .into());
+            }
+            _ => {
+                return Err(
+                    journal::unavailable("Codex image-child routing is unavailable.").into(),
+                );
+            }
+        }))
     }
     pub async fn before_image_dispatch(
         &self,

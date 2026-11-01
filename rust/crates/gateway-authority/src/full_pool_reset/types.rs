@@ -1,12 +1,10 @@
 use crate::{
-    reset::{ResetCandidate, ResetConfig},
-    routing::CohortProof,
+    reset_types::{ResetCandidate, ResetConfig},
+    routing_types::CohortProof,
 };
-use gateway_core::{
-    GatewayError,
-    identity::{AccountBinding, RequestContext},
-    js_string::JsString16,
-};
+use gateway_core::error::GatewayError;
+use gateway_core::identity::{AccountBinding, RequestContext};
+use gateway_core::js_string::JsString16;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
@@ -104,7 +102,7 @@ impl FullPoolResetPlan {
 
 /// Minted only by live evaluation in the current complete source transaction; never reconstructed from wire.
 /// ```compile_fail
-/// use gateway_authority::full_pool_reset::AutomaticResetPermit;
+/// use gateway_authority::full_pool_reset::types::AutomaticResetPermit;
 /// let _: AutomaticResetPermit = serde_json::from_str("{}").unwrap();
 /// ```
 pub struct AutomaticResetPermit {
@@ -130,8 +128,8 @@ impl AutomaticResetPermit {
     pub fn original(&self) -> &RequestContext {
         &self.facts.original
     }
-    pub fn invocation(&self) -> Result<crate::reset::ResetInvocation, GatewayError> {
-        crate::reset::reset_invocation(
+    pub fn invocation(&self) -> Result<crate::reset_types::ResetInvocation, GatewayError> {
+        crate::reset_types::reset_invocation(
             self.decision
                 .selected_account_id_hash
                 .as_deref()

@@ -1,25 +1,32 @@
-use gateway_catalog_runtime::{admin::*, state, *};
-use gateway_core::{
-    GatewayError,
-    js_string::JsString16,
-    query::{QueryEntry, QueryPage, QueryRequest, QueryStore},
-    source_json::SourceJson,
-    state::{
-        AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, StoredRecord,
+use gateway_admin_test_support::ranked_collator::FixtureCollator;
+use gateway_catalog_runtime::{
+    CatalogRuntime,
+    admin::{AdminCatalogHost, AdminCatalogOperation, AdminCatalogResponse},
+    host::{
+        CatalogFetch, CatalogFetchResponse, CatalogHost, CatalogProvider, CodexAccount,
+        CredentialPublication, ProviderBinding,
     },
-    tuple_key::TupleKey,
+    state,
 };
+use gateway_core::error::GatewayError;
+use gateway_core::query::{QueryEntry, QueryPage, QueryRequest, QueryStore};
+use gateway_core::source_json::SourceJson;
+use gateway_core::state::{
+    AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, StoredRecord,
+};
+use gateway_core::tuple_key::TupleKey;
 use gateway_schema::{
     aliases::SourceStringCollator,
-    catalog::{ordinary_models as ordinary_models_source, public_catalog as public_catalog_source},
     catalog_store,
+    catalog_views::{
+        ordinary_models as ordinary_models_source, public_catalog as public_catalog_source,
+    },
     runtime_config::build_runtime_config as build_runtime_config_source,
     snapshot::{ModelSnapshot, SnapshotOverrides, normalize_snapshot as normalize_snapshot_source},
 };
 use serde_json::{Value, json};
 use std::{
     cell::{Cell, RefCell},
-    cmp::Ordering,
     collections::{BTreeMap, VecDeque},
     future::{Future, poll_fn},
     rc::Rc,
@@ -46,7 +53,7 @@ fn build_runtime_config(
     model: Option<&str>,
     effort: Option<&str>,
     now: i64,
-) -> Result<Value, gateway_schema::source_request::SourceRequestError> {
+) -> Result<Value, gateway_schema::source_request::error::SourceRequestError> {
     build_runtime_config_source(
         snapshot,
         model.map(Into::into).as_ref(),
@@ -69,27 +76,6 @@ fn scalar_response(response: AdminCatalogResponse) -> ScalarResponse {
     ScalarResponse {
         body: scalar(&response.body),
         headers: response.headers,
-    }
-}
-struct FixtureCollator {
-    order: Vec<String>,
-    failed: bool,
-}
-impl SourceStringCollator for FixtureCollator {
-    fn compare(&self, left: &JsString16, right: &JsString16) -> Result<Ordering, GatewayError> {
-        if self.failed {
-            return Err(GatewayError::unavailable(
-                "Locale comparator unavailable",
-                "fixture_collation",
-            ));
-        }
-        let rank = |value: &JsString16| {
-            self.order
-                .iter()
-                .position(|id| value.as_units().iter().copied().eq(id.encode_utf16()))
-                .expect("locale case absent from source oracle")
-        };
-        Ok(rank(left).cmp(&rank(right)))
     }
 }
 fn run<T>(future: impl Future<Output = T>) -> T {

@@ -1,5 +1,13 @@
 use super::*;
-use crate::{manual_reset::*, native_live::*, reset::*, routing::*};
+use crate::{
+    manual_reset::*,
+    native_live::wire::*,
+    native_live::*,
+    reset::*,
+    reset_types::*,
+    routing_codec::{normalize, parse_routing_state},
+    routing_types::*,
+};
 use gateway_auth::{
     native_auth::{
         NativeAuthHeaders, NativeCapability, NativeNonceAuthority, NativeTransportIdentity,
@@ -483,11 +491,11 @@ fn private_wire_and_source_intent_refuse_forged_fields_or_malformed_rows() {
 }
 
 #[test]
-fn admin_recheck_writes_only_routing_and_retains_ambiguous_reset_identity() {
+fn admin_recheck_writes_only_routing_and_retains_ambiguous_reset_identity() -> TestResult {
     run(async {
         let store = Store::default();
         let pool = source(&store, "SYNTHETIC_ACCESS", "source-one");
-        let mut state = normalize_routing_state(&pool, None, 1_000_000).unwrap();
+        let mut state = normalize(&pool, None, 1_000_000)?;
         let slot = &mut state.slots[0];
         slot.quota_blocked_until_ms = Some(9_000_000);
         slot.quota_blocked_classes = vec!["standard".into()];
@@ -518,12 +526,11 @@ fn admin_recheck_writes_only_routing_and_retains_ambiguous_reset_identity() {
             &request(&token),
             &context("passkey-user:user-fixture", None),
         )
-        .await
-        .unwrap();
-        assert!(auth.recheck_codex_slot(&actor, &cfg, 1).await.unwrap());
-        let rows = store.rows.lock().unwrap();
-        let next = parse_routing_state(rows.get(&keys::routing().0).unwrap().json_value().unwrap())
-            .unwrap();
+        .await?;
+        assert!(auth.recheck_codex_slot(&actor, &cfg, 1).await?);
+        let rows = store.rows.lock().map_err(|error| error.to_string())?;
+        let row = rows.get(&keys::routing().0).ok_or("missing routing row")?;
+        let next = parse_routing_state(row.json_value()?)?;
         let slot = &next.slots[0];
         assert_eq!(slot.quota_blocked_until_ms, Some(1_000_000));
         assert_eq!(slot.retained_reset_at_ms, Some(9_000_000));
@@ -532,5 +539,6 @@ fn admin_recheck_writes_only_routing_and_retains_ambiguous_reset_identity() {
         assert_eq!(slot.generation, state.slots[0].generation + 1);
         assert!(!rows.contains_key(&keys::active().0));
         assert_eq!(host.fetches.load(Ordering::SeqCst), 0);
-    });
+        Ok(())
+    })
 }

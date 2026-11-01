@@ -1,7 +1,9 @@
+import { chatResponsesProjectionFailure } from "../deepseek/context-admission-failure.ts";
 // LithosAI Chat and Responses handlers, extracted from src/openai.ts.
 
 import { LITHOS_RESPONSES_PROFILE, type OriginalToolName } from "../deepseek/responses.ts";
 import { logForwardedPayloadElisions, toDeepSeekResponsesChatBody } from "../deepseek/chat-projection.ts";
+import { logForwardedPayloadExemptions } from "../deepseek/forwarded-payload-policy.ts";
 import { type DeepSeekResponsesEcho, toDeepSeekResponsesPayload } from "../deepseek/responses-payload.ts";
 import {
   fetchLithosChatCompletions,
@@ -556,7 +558,8 @@ const dispatchLithosUpstreamResult = async (
   body: Record<string, unknown>,
   modelRaw: string,
   usageContext: UsageContext | undefined,
-  streamed: boolean
+  streamed: boolean,
+  refusalWaitPolicy?: LithosRefusalWaitPolicy
 ): Promise<LithosDispatchResult> => {
   const downstreamSignal = downstreamSignalFor(req, usageContext);
   const requestSignal = inferenceSignal(req, usageContext);
@@ -590,7 +593,7 @@ const dispatchLithosUpstreamResult = async (
       elapsedWaitMs: 0,
       waits: 0,
     },
-    streamed ? LITHOS_STREAMED_REFUSAL_WAIT_POLICY : LITHOS_BUFFERED_REFUSAL_WAIT_POLICY,
+    refusalWaitPolicy ?? (streamed ? LITHOS_STREAMED_REFUSAL_WAIT_POLICY : LITHOS_BUFFERED_REFUSAL_WAIT_POLICY),
     streamed
   );
 };
@@ -846,7 +849,8 @@ export const handleLithosResponses = async (
   req: Request,
   rawRecord: Record<string, unknown>,
   modelRaw: string,
-  usageContext?: UsageContext
+  usageContext?: UsageContext,
+  options: Readonly<{ refusalWaitPolicy?: LithosRefusalWaitPolicy }> = {}
 ): Promise<Response> => {
   const parsedStream = parseStreamField(rawRecord.stream);
   if (!parsedStream.ok) return openaiError(400, parsedStream.message, "invalid_request_error", { param: "stream" });
@@ -857,9 +861,15 @@ export const handleLithosResponses = async (
   if (!upstreamModel) return openaiError(400, `model '${modelRaw}' is not a LithosAI official model`, "invalid_request_error", { param: "model" });
 
   const translated = toDeepSeekResponsesChatBody(rawRecord, modelRaw, clientWantsStream, LITHOS_RESPONSES_PROFILE);
-  if (!translated.ok) return openaiError(400, translated.message, translated.code ?? "invalid_request_error", { param: translated.param });
+  if (!translated.ok) return chatResponsesProjectionFailure(req, rawRecord, translated, usageContext);
   const { body: chatBody, toolNames, customToolNames } = translated.value;
   if (translated.value.elisions.length) logForwardedPayloadElisions(translated.value.elisions);
+  if (translated.value.exemptions.length)
+    logForwardedPayloadExemptions(translated.value.exemptions, {
+      requestId: usageContext?.requestId,
+      model: modelRaw,
+      promptAdmission: translated.value.promptAdmission,
+    });
 
   const echo: DeepSeekResponsesEcho = {
     tools: rawRecord.tools,
@@ -887,7 +897,7 @@ export const handleLithosResponses = async (
   });
 
   const createdAtSeconds = Math.floor(Date.now() / 1000);
-  const dispatched = await dispatchLithosUpstreamResult(req, chatBody, modelRaw, usageContext, clientWantsStream);
+  const dispatched = await dispatchLithosUpstreamResult(req, chatBody, modelRaw, usageContext, clientWantsStream, options.refusalWaitPolicy);
   if ("pending" in dispatched) {
     // The streamed route opens its SSE response now and its keepalive frames
     // hold the client while the vendor's own window passes behind it. The

@@ -1,7 +1,10 @@
-use gateway_auth::AuthMethod;
+use gateway_auth::types::AuthMethod;
 use gateway_authority::{
-    Authority, AuthorityClock, REQUEST_LEASE_MS, keys,
-    quota::{ApiReservation, KernelPolicy, KernelReservation},
+    REQUEST_LEASE_MS,
+    kernel::{KernelPolicy, KernelReservation},
+    keys,
+    quota::ApiReservation,
+    store::{Authority, AuthorityClock},
 };
 use gateway_core::{
     lifecycle::{DeliveryOutcome, SemanticTerminal, TransportObservation},
@@ -20,6 +23,7 @@ use serde_json::json;
 use std::sync::atomic::Ordering;
 
 type Session = RoutingSession<Store, Store, Store, Host>;
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 fn journal_key(id: &str) -> RecordKey {
     TupleKey::from_scalar_parts(&[
         ScalarKeyPart::String("uos_ai"),
@@ -121,22 +125,22 @@ fn changed_original_context_digest_or_kernel_identity_never_becomes_a_snapshot()
     }
 }
 #[test]
-fn live_session_refuses_a_released_actual_kernel_despite_an_unchanged_journal() {
+fn live_session_refuses_a_released_actual_kernel_despite_an_unchanged_journal() -> TestResult {
     let store = Store::new();
     let session = begin_kernel(&store, "released", Host::new(&store));
     let before = store.value(journal_key("released"));
-    let kernel: KernelReservation = serde_json::from_value(before["kernel"].clone()).unwrap();
+    let kernel: KernelReservation = serde_json::from_value(before["kernel"].clone())?;
     run(
         Authority::with_clock(store.clone(), store.clone(), store.clone()).settle_kernel(
             &kernel,
-            gateway_authority::quota::KernelTerminal::Released,
+            gateway_authority::kernel::KernelTerminal::Released,
             "fixture",
             NOW,
         ),
-    )
-    .unwrap();
+    )?;
     assert!(run(session.currentness().checkpoint()).is_err());
     assert_eq!(store.value(journal_key("released")), before);
+    Ok(())
 }
 #[test]
 fn terminal_continuation_is_not_a_live_grant_and_unobserved_delivery_stays_independent() {

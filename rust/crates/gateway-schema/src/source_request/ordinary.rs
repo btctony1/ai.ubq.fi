@@ -1,6 +1,10 @@
 //! Neutral retained request data; named validation phases remain explicit at callers.
 use super::{
-    SourceChatInput, SourceField, SourceModelRequest, SourceRequestDocument, SourceRequestError,
+    SourceField, SourceModelRequest, SourceRequestDocument,
+    error::SourceRequestError,
+    fields::{parse_chat_stream_options, parse_max_completion_tokens},
+    normalized::SourceChatInput,
+    reasoning::parse_effort,
 };
 use crate::request::{RequestExtensions, RequestSurface};
 use gateway_core::{js_string::JsString16, source_json::SourceJson};
@@ -35,20 +39,18 @@ impl OrdinarySourceRequest {
         self.document.reasoning()
     }
     pub fn reasoning_effort(&self) -> Result<Option<JsString16>, SourceRequestError> {
-        super::parse_effort(
+        parse_effort(
             super::member(self.original_source(), "reasoning_effort")?.as_ref(),
             "reasoning_effort",
         )
     }
     pub fn max_completion_tokens(&self) -> Result<Option<i64>, SourceRequestError> {
-        super::parse_max_completion_tokens(
+        parse_max_completion_tokens(
             super::member(self.original_source(), "max_completion_tokens")?.as_ref(),
         )
     }
     pub fn chat_stream_options(&self) -> Result<bool, SourceRequestError> {
-        super::parse_chat_stream_options(
-            super::member(self.original_source(), "stream_options")?.as_ref(),
-        )
+        parse_chat_stream_options(super::member(self.original_source(), "stream_options")?.as_ref())
     }
     pub fn validate_fields(
         &self,

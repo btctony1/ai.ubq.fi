@@ -1,7 +1,7 @@
 use crate::input::NOW;
-use gateway_authority::{AuthorityClock, TokenSource};
+use gateway_authority::store::{AuthorityClock, TokenSource};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::{QueryEntry, QueryPage, QueryRequest, QueryStore},
     state::{
         AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, StoredRecord,

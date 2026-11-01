@@ -1,17 +1,21 @@
 #![cfg(not(target_arch = "wasm32"))]
-mod support;
-use gateway_admin_data::profile::{CanonicalDates, to_source_profile};
+use gateway_admin_data::profile::{CanonicalDates, source::to_source_profile};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::*,
     state::*,
     tuple_key::{DecodedKeyPart, TupleKey},
     value::PortableValue,
 };
-use gateway_migration::*;
+use gateway_migration::{
+    capture::{PrivateCapture, SourceEntry},
+    engine::{adopt_empty, prepare},
+    inverse::{ArtifactContext, export_latest, export_rollback_bundle},
+};
+use gateway_migration_test_support::fixture::{Directory, run};
+use gateway_migration_test_support::sqlite_store::SqliteStore;
 use serde_json::{Value, json};
 use std::path::Path;
-use support::{fixture::*, sqlite_store::*};
 
 const NOW: i64 = 1_800_000_000_002;
 const WRITER_SHA: &str = "9cf5f956995d832489fd694ebed17ab2f57712ea";

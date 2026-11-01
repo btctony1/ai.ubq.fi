@@ -1,3 +1,4 @@
+import { isLocalContextAdmissionFailure } from "./context-admission-failure.ts";
 // Request handler for the `ubiquity/deepseek-flash` synthetic model: resolve the
 // newest provider snapshots, dispatch each hop of the cost-first order, and
 // advance only on infrastructure or serving failures. The two paid hops
@@ -10,6 +11,7 @@
 import { openaiError } from "../http.ts";
 import { recordAttemptedProvider, type DeepSeekWaterfallFallbackReason, type UsageContext } from "../openai-telemetry.ts";
 import { handleLithosResponses } from "../provider/lithos-handlers.ts";
+import { LITHOS_IMMEDIATE_FAILOVER_WAIT_POLICY } from "../provider/lithos-rate-limits.ts";
 import { handleOpenRouterResponses } from "../provider/openrouter-handlers.ts";
 import { GATEWAY_PROVIDER_ID } from "../provider/presentation.ts";
 import { isProviderEnabled, loadProviderSelectionCached, type ProviderSelection } from "../provider/selection.ts";
@@ -67,6 +69,10 @@ export type DeepSeekWaterfallOptions = Readonly<{
 }>;
 
 const withAttemptedProviders = (response: Response, attempted: readonly string[]): Response => {
+  if (isLocalContextAdmissionFailure(response)) {
+    response.headers.set("x-uos-attempted-providers", attempted.join(","));
+    return response;
+  }
   const headers = new Headers(response.headers);
   headers.set("x-uos-attempted-providers", attempted.join(","));
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
@@ -114,7 +120,11 @@ const defaultDispatchFor = (paidTail: DeepSeekWaterfallPaidTail): DeepSeekWaterf
   return (input) => {
     if (input.provider === "surplus" || input.provider === "openlux") return dispatchPaidHop(paidTail, input);
     if (input.provider === "openrouter") return handleOpenRouterResponses(input.req, input.rawRecord, input.model, input.usageContext);
-    if (input.provider === "lithos") return handleLithosResponses(input.req, input.rawRecord, input.model, input.usageContext);
+    if (input.provider === "lithos") {
+      return handleLithosResponses(input.req, input.rawRecord, input.model, input.usageContext, {
+        refusalWaitPolicy: LITHOS_IMMEDIATE_FAILOVER_WAIT_POLICY,
+      });
+    }
     return handleDeepSeekResponses(input.req, input.rawRecord, input.model, input.usageContext);
   };
 };
@@ -180,6 +190,7 @@ const attemptHop = async (
 ): Promise<HopResult> => {
   try {
     const response = await dispatch({ provider, req, rawRecord: { ...rawRecord, model }, rawBody, model, usageContext });
+    if (isLocalContextAdmissionFailure(response)) return { delivered: true, response, failure: 0 };
     if (isDeepSeekWaterfallRetryStatus(response.status)) return { delivered: false, response, failure: response.status };
     const gated = await gateStreamingHop(response, req.signal);
     if (!gated.committed) return { delivered: false, response: streamFailureResponse(provider), failure: "stream" };

@@ -5,7 +5,7 @@ use std::future::Future;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GatewayError,
+    error::GatewayError,
     identity::{MAX_SAFE_INTEGER, UnixMillis},
     state::{AuthorityStore, RecordKey, StoredRecord},
     tuple_key::{TupleKey, decode_hex, encode_hex},

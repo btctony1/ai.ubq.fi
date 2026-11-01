@@ -1,7 +1,7 @@
 use super::{ObservedRow, check, key, put};
 use crate::{error, integer, text};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     state::{AtomicTransition, RevisionCheck},
     value::PortableValue,
 };

@@ -7,8 +7,10 @@ use gateway_auth::{
 };
 use gateway_authority::{
     cache_experiment::{
-        RefreshContext, Sample, TargetBinding, Usage,
-        model::{PROFILE, PROVIDER, SLOTS, STEPS, TELEMETRY_PROVIDER},
+        RefreshContext,
+        model::{
+            PROFILE, PROVIDER, SLOTS, STEPS, Sample, TELEMETRY_PROVIDER, TargetBinding, Usage,
+        },
     },
     native_control::NativeRenewalContext,
 };

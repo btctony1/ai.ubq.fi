@@ -1,16 +1,15 @@
 use super::{Facts, FullPoolFence, Member, declined, invalid};
 use crate::{
-    Authority, TokenSource, keys,
-    reset::{ResetCandidate, ResetConfig, ResetMode, reset_invocation},
-    routing::{CohortProof, read_view, validate_cohort},
-    store::Transaction,
+    keys,
+    reset_types::{ResetCandidate, ResetConfig, ResetMode, reset_invocation},
+    routing::{read_view, validate_cohort},
+    routing_types::CohortProof,
+    store::{Authority, TokenSource, Transaction},
 };
 use gateway_auth::provider_credentials::{codex_source_pool_key, parse_codex_source_pool};
-use gateway_core::{
-    GatewayError,
-    identity::{MAX_SAFE_INTEGER, RequestContext},
-    state::AuthorityStore,
-};
+use gateway_core::error::GatewayError;
+use gateway_core::identity::{MAX_SAFE_INTEGER, RequestContext};
+use gateway_core::state::AuthorityStore;
 use serde_json::{Value, json};
 
 fn marker_key() -> gateway_core::state::RecordKey {

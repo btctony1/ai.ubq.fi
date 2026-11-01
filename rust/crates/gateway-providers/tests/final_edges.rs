@@ -1,6 +1,6 @@
 //! Additional source boundaries: dc6be2c3 Cerebras and e706 Claude/Lithos/stream contracts.
 use gateway_core::provider::UpstreamProvider;
-use gateway_providers::*;
+use gateway_providers::{request::prepare_request, response::decode_response, types::*};
 use serde_json::{Value, json};
 fn opts() -> PrepareOptions {
     PrepareOptions {

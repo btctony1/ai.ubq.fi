@@ -1,22 +1,25 @@
 //! Controlled finite host callbacks validate durable orchestration, not live provider acceptance.
-pub mod support;
-use gateway_auth::{
-    crypto::Secret,
-    provider_credentials::{codex_source_pool_key, parse_codex_source_pool},
-};
+use gateway_auth::crypto::Secret;
+use gateway_auth::provider_credentials::{codex_source_pool_key, parse_codex_source_pool};
 use gateway_authority::cache_experiment::{
-    CacheDispatch, ExperimentIo, ReadSample, RefreshPermit, Sample, TargetBinding, Usage,
-    model::STEPS,
+    RefreshPermit,
+    model::{STEPS, Sample, TargetBinding, Usage},
+    run::{ExperimentIo, ReadSample},
+    transport::CacheDispatch,
 };
-use gateway_authority::routing::{PoolAccount, SubscriptionPool};
-use gateway_core::{
-    GatewayError,
-    identity::PoolVersionstamp,
-    tuple_key::{ScalarKeyPart::String as Text, TupleKey},
-};
+use gateway_authority::routing_types::{PoolAccount, SubscriptionPool};
+use gateway_core::error::GatewayError;
+use gateway_core::identity::PoolVersionstamp;
+use gateway_core::tuple_key::{ScalarKeyPart::String as Text, TupleKey};
+use gateway_routing_runtime_test_support::authority::{MemoryStore, TestAuthority, authority, run};
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
-use support::{MemoryStore, TestAuthority, authority, run};
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
+fn fixture_error(message: &str) -> GatewayError {
+    GatewayError::new(500, message, Some("invalid_test_fixture"))
+}
+
 fn key(parts: &[&str]) -> gateway_core::state::RecordKey {
     TupleKey::from_scalar_parts(&parts.iter().map(|s| Text(s)).collect::<Vec<_>>()).to_record_key()
 }
@@ -140,16 +143,23 @@ impl ExperimentIo for Io {
             .borrow_mut()
             .push((dispatch.slot(), body.into(), conversation.into()));
         if self.fail_recovery_probe {
-            let routing: gateway_authority::routing::RoutingState = serde_json::from_value(
+            let routing: gateway_authority::routing_types::RoutingState = serde_json::from_value(
                 self.store
                     .row(&gateway_authority::keys::routing())
-                    .unwrap()
+                    .ok_or_else(|| fixture_error("Recovery routing fixture is missing."))?
                     .value,
             )
-            .unwrap();
+            .map_err(|error| fixture_error(&format!("Invalid routing fixture: {error}")))?;
             assert_eq!(dispatch.binding().routing_generation, 7);
             assert_eq!(routing.slots[0].generation, 7);
-            assert_eq!(routing.slots[0].probe_lease.as_ref().unwrap().generation, 7);
+            assert_eq!(
+                routing.slots[0]
+                    .probe_lease
+                    .as_ref()
+                    .ok_or_else(|| fixture_error("Recovery probe lease is missing."))?
+                    .generation,
+                7
+            );
             return Err(gateway_authority::cache_experiment::model::failed(
                 "Controlled failed recovery probe.",
             ));
@@ -163,7 +173,11 @@ impl ExperimentIo for Io {
             total_tokens: 2572,
         };
         if self.rotate_on_first && self.calls.borrow().len() == 1 {
-            let mut source = self.store.row(&codex_source_pool_key()).unwrap().value;
+            let mut source = self
+                .store
+                .row(&codex_source_pool_key())
+                .ok_or_else(|| fixture_error("Source pool fixture is missing."))?
+                .value;
             source["accounts"][1]["access_token"] = json!("fixture-concurrent-rotation");
             seed_source(&self.store, &source, "pool-concurrent");
         }
@@ -189,14 +203,17 @@ impl ExperimentIo for Io {
         _response: &mut Sample,
     ) -> Result<(), GatewayError> {
         if self.quota_on_first && self.calls.borrow().len() == 1 {
-            let now = source_fixture()["now"].as_i64().unwrap();
+            let now = source_fixture()["now"]
+                .as_i64()
+                .ok_or_else(|| fixture_error("Source fixture timestamp is missing."))?;
             assert!(
                 authority(&self.store)
                     .record_cache_quota_block(
                         dispatch,
-                        gateway_authority::routing::QuotaBlock {
+                        gateway_authority::routing_types::QuotaBlock {
                             blocked_until_ms: now + 60_000,
-                            source: gateway_authority::routing::QuotaBlockSource::BodyResetsAt,
+                            source:
+                                gateway_authority::routing_types::QuotaBlockSource::BodyResetsAt,
                             legacy_fallback: false,
                             observed_at_ms: Some(now),
                             reset_at_ms: Some(now + 60_000),
@@ -631,12 +648,15 @@ fn losing_the_cycle_lease_after_one_sample_never_sends_another_request() {
     assert_eq!(store.row(&lease).unwrap().value["owner"], "foreign-cycle");
 }
 #[test]
-fn authoritative_quota_observation_stops_the_pinned_experiment_without_electing_a_sibling() {
+fn authoritative_quota_observation_stops_the_pinned_experiment_without_electing_a_sibling()
+-> TestResult {
     let (store, authority, now) = setup();
     let mut io = Io::new(&store);
     io.quota_on_first = true;
-    let prepared = run(authority.prepare_cache_experiment(&"1".repeat(40), now)).unwrap();
-    let error = run(authority.run_cache_experiment(prepared, &io, now)).unwrap_err();
+    let prepared = run(authority.prepare_cache_experiment(&"1".repeat(40), now))?;
+    let error = run(authority.run_cache_experiment(prepared, &io, now))
+        .err()
+        .ok_or("expected controlled rejection")?;
     assert_eq!(
         error.envelope.error.code.as_deref(),
         Some("prompt_cache_scope_experiment_failed")
@@ -644,25 +664,32 @@ fn authoritative_quota_observation_stops_the_pinned_experiment_without_electing_
     assert_eq!(io.calls.borrow().len(), 1);
     assert_eq!(io.discards.get(), 1);
     assert_eq!(io.refreshes.get(), 0);
-    let routing: gateway_authority::routing::RoutingState = serde_json::from_value(
+    let routing: gateway_authority::routing_types::RoutingState = serde_json::from_value(
         store
             .row(&gateway_authority::keys::routing())
-            .unwrap()
+            .ok_or("expected fixture row")?
             .value,
-    )
-    .unwrap();
+    )?;
     assert!(routing.slots[0].quota_blocked_until_ms.is_some());
     assert!(routing.slots[1].quota_blocked_until_ms.is_none());
     assert!(store.row(&gateway_authority::keys::active()).is_none());
+    Ok(())
 }
 #[test]
-fn failed_recovery_probe_keeps_source_generation_and_retains_ambiguous_reset_identity() {
-    use gateway_authority::routing::{QuotaBlock, QuotaBlockSource, RoutingSlot, RoutingState};
+fn failed_recovery_probe_keeps_source_generation_and_retains_ambiguous_reset_identity() -> TestResult
+{
+    use gateway_authority::routing_types::{
+        QuotaBlock, QuotaBlockSource, RoutingSlot, RoutingState,
+    };
     let (store, authority, now) = setup();
     let mut io = Io::new(&store);
     io.fail_recovery_probe = true;
-    let pool: SubscriptionPool =
-        serde_json::from_value(store.row(&gateway_authority::keys::pool()).unwrap().value).unwrap();
+    let pool: SubscriptionPool = serde_json::from_value(
+        store
+            .row(&gateway_authority::keys::pool())
+            .ok_or("expected fixture row")?
+            .value,
+    )?;
     let mut slots = pool
         .accounts
         .iter()
@@ -700,8 +727,10 @@ fn failed_recovery_probe_keeps_source_generation_and_retains_ambiguous_reset_ide
             slots,
         },
     );
-    let prepared = run(authority.prepare_cache_experiment(&"1".repeat(40), now)).unwrap();
-    let error = run(authority.run_cache_experiment(prepared, &io, now)).unwrap_err();
+    let prepared = run(authority.prepare_cache_experiment(&"1".repeat(40), now))?;
+    let error = run(authority.run_cache_experiment(prepared, &io, now))
+        .err()
+        .ok_or("expected controlled rejection")?;
     assert_eq!(
         error.envelope.error.code.as_deref(),
         Some("prompt_cache_scope_experiment_failed")
@@ -710,10 +739,9 @@ fn failed_recovery_probe_keeps_source_generation_and_retains_ambiguous_reset_ide
     let routing: RoutingState = serde_json::from_value(
         store
             .row(&gateway_authority::keys::routing())
-            .unwrap()
+            .ok_or("expected fixture row")?
             .value,
-    )
-    .unwrap();
+    )?;
     let slot = &routing.slots[0];
     assert_eq!(slot.generation, 7);
     assert!(slot.probe_lease.is_none());
@@ -722,6 +750,7 @@ fn failed_recovery_probe_keeps_source_generation_and_retains_ambiguous_reset_ide
     assert!(slot.reset_identity_stable);
     assert!(slot.reset_identity_ambiguous);
     assert!(!slot.recovery_pending);
+    Ok(())
 }
 #[test]
 fn intermediate_cycles_release_the_short_lease_without_extending_the_original_session() {

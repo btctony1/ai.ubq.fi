@@ -1,8 +1,8 @@
 //! Pure request data shared by planner-only and stateful integration fixtures.
 use super::{RoutingInput, fixture_json};
-use gateway_auth::{AuthMethod, AuthPrincipal};
+use gateway_auth::types::{AuthMethod, AuthPrincipal};
 use gateway_core::identity::{ApiKeyId, PrincipalId, RequestContext, RequestId};
-use gateway_providers::ClientSurface;
+use gateway_providers::types::ClientSurface;
 use gateway_schema::{
     catalog::{CatalogInput, ProviderCatalog},
     snapshot::ModelSnapshot,

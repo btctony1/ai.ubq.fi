@@ -1,20 +1,26 @@
 //! Explicit authenticated manual reset. Shares the existing redemption/day records.
 //! Provider usage/inventory/consume I/O belongs to the fixed admin host, outside transactions.
-use crate::native_control::actor::{self, NativeActorScope, NativeRenewalActor, StoredNativeActor};
-use crate::reset::{
-    self, AccountDayBudget, ResetClaim, ResetConfig, ResetInvocation, ResetMode, ResetRecord,
-    ResetState,
+use crate::{
+    capacity_rules, keys,
+    native_control::actor::{self, NativeActorScope, NativeRenewalActor, StoredNativeActor},
+    reset,
+    reset_types::{
+        self, AccountDayBudget, ResetClaim, ResetConfig, ResetInvocation, ResetMode, ResetRecord,
+        ResetState,
+    },
+    routing::{self, RoutingView},
+    routing_rules,
+    routing_types::{CapacityObservation, CapacityState},
+    store::{Authority, TokenSource, Transaction},
 };
-use crate::routing::{self, CapacityObservation, CapacityState, RoutingView};
-use crate::{Authority, TokenSource, keys, store::Transaction};
 use gateway_auth::{
-    AuthConfig,
     provider_credentials::{
         codex_access_expiry_ms, codex_source_pool_key, parse_codex_source_pool,
     },
+    types::AuthConfig,
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     identity::{AccountBinding, ActiveSelection, ActiveTransitionReason, MAX_SAFE_INTEGER},
     state::{AuthorityStore, RecordKey},
     tuple_key::{ScalarKeyPart, TupleKey},
@@ -107,7 +113,7 @@ impl ManualResetAction {
         &self.target
     }
     pub fn invocation(&self) -> Result<ResetInvocation, GatewayError> {
-        reset::reset_invocation(
+        reset_types::reset_invocation(
             &self.intent.account_id_hash,
             &self.intent.credential_version,
             self.intent.quota_reset_at_ms,
@@ -532,7 +538,7 @@ impl<S: AuthorityStore, I: TokenSource> Authority<S, I> {
                 return Err(error(409, "codex_reset_unverified"));
             }
             let mut models = Vec::new();
-            if routing::capacity_headroom_for_observation(usage, None).unwrap_or(0.0) > 0.0 {
+            if capacity_rules::capacity_headroom_for_observation(usage, None).unwrap_or(0.0) > 0.0 {
                 models.push(gateway_core::model::ModelId::from_scalar("standard"));
             }
             for limit in &usage.additional_rate_limits {
@@ -541,7 +547,7 @@ impl<S: AuthorityStore, I: TokenSource> Authority<S, I> {
                     routing::model_quota_class(&model),
                     gateway_core::provider::CodexQuotaClass::Standard
                         | gateway_core::provider::CodexQuotaClass::Unknown
-                ) && routing::capacity_headroom_for_observation(usage, Some(&model))
+                ) && capacity_rules::capacity_headroom_for_observation(usage, Some(&model))
                     .unwrap_or(0.0)
                     > 0.0
                 {
@@ -569,7 +575,7 @@ impl<S: AuthorityStore, I: TokenSource> Authority<S, I> {
                 return Err(error(409, "codex_reset_concurrent_update"));
             }
             for model in &models {
-                if let Some(next) = routing::apply_capacity_observation(
+                if let Some(next) = routing_rules::apply_capacity_observation(
                     &view.state,
                     &current_usage,
                     tx.now,

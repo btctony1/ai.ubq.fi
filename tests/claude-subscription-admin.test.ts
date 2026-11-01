@@ -6,6 +6,7 @@ import {
   handleAdminClaudeCodeAuthGet,
   handleAdminClaudeCodeAuthSet,
   handleAdminClaudeCodeQuotaClear,
+  handleAdminClaudeCodeQuotaRefresh,
   handleAdminClaudeCodeAccess,
   handleAdminClaudeCodeAccountActive,
 } from "../src/admin/claude-code.ts";
@@ -21,6 +22,7 @@ import { CLAUDE_CODE_CONFIG_COOLDOWN_MS, loadClaudeCodeQuotaState, recordClaudeC
 import { resetProviderHealthThrottleForTest } from "../src/provider/health.ts";
 import { resetProviderSelectionCacheForTest } from "../src/provider/selection.ts";
 import { CLAUDE_CODE_ACCOUNTS_KEY, loadClaudeCodeAccountStore, resolveClaudeCodeAccount } from "../src/provider/claude-code-accounts.ts";
+import { resetClaudeCodeModelsCacheForTest } from "../src/provider/claude-code-models.ts";
 import { loadClaudeCodeAccessPolicy } from "../src/provider/claude-code-access.ts";
 
 const keyOf = (key: KvKey): string => JSON.stringify(key);
@@ -34,6 +36,10 @@ class AdminKv {
       check: (..._entries: unknown[]) => operation,
       set: (key: KvKey, value: unknown) => {
         writes.push(() => this.values.set(keyOf(key), value));
+        return operation;
+      },
+      delete: (key: KvKey) => {
+        writes.push(() => this.values.delete(keyOf(key)));
         return operation;
       },
       commit: () => {
@@ -218,6 +224,90 @@ test("clearing account guards preserves observations and account removal remains
   });
 });
 
+test("the former Claude meter refresh is a passive read of accepted normal response headers", async () => {
+  await withAdminKv(async (kv) => {
+    resetClaudeCodeModelsCacheForTest();
+    await withStubbedAnthropic(modelsOk, async () => {
+      assert.equal((await handleAdminClaudeCodeAuthSet(jsonRequest({ credential: "sk-ant-oat-fixture-header-read" }))).status, 200);
+    });
+    const account = await resolveClaudeCodeAccount(kv as unknown as Kv);
+    assert(account);
+    const now = Date.now();
+    await recordClaudeCodeQuotaOutcome(kv as unknown as Kv, {
+      binding: account,
+      observation_source: "response_headers",
+      observation: {
+        windows: { "5h": { status: "allowed", utilization: 0.42, reset_at_ms: null, observed_at_ms: now } },
+        standard: {},
+        representative_claim: null,
+        observed_at_ms: now,
+      },
+      nowMs: now,
+    });
+    let calls = 0;
+    const response = await handleAdminClaudeCodeQuotaRefresh(
+      new Request("https://ai.ubq.fi/admin/providers/claude-code/quota/refresh", {
+        method: "POST",
+        body: JSON.stringify({ account_id: account.account_id, account_cohort_id: account.account_cohort_id }),
+      }),
+      {
+        now: () => now + 1_000,
+        fetcher: () => {
+          calls += 1;
+          return Promise.resolve(Response.json({}));
+        },
+      }
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.refreshed, false);
+    assert.equal(payload.reason, "response_headers");
+    assert.equal(payload.observed_at_ms, now);
+    assert.equal(payload.usage, null);
+    assert.equal(calls, 0);
+  });
+});
+
+test("a passive meter read does not refresh or display historical OAuth errors", async () => {
+  await withAdminKv(async (kv) => {
+    resetClaudeCodeModelsCacheForTest();
+    await withStubbedAnthropic(modelsOk, async () => {
+      assert.equal((await handleAdminClaudeCodeAuthSet(jsonRequest({ credential: "sk-ant-oat-fixture-old-usage" }))).status, 200);
+    });
+    const account = await resolveClaudeCodeAccount(kv as unknown as Kv);
+    assert(account);
+    const now = Date.now();
+    await recordClaudeCodeQuotaOutcome(kv as unknown as Kv, {
+      binding: account,
+      observation: null,
+      usage: { source: "oauth_usage", state: "scope_missing", status: 403, message: "historical profile error", attempted_at_ms: now, observed_at_ms: null },
+      nowMs: now,
+    });
+    const before = await loadClaudeCodeQuotaState(kv as unknown as Kv, account);
+    let calls = 0;
+    const response = await handleAdminClaudeCodeQuotaRefresh(
+      new Request("https://ai.ubq.fi/admin/providers/claude-code/quota/refresh", {
+        method: "POST",
+        body: JSON.stringify({ account_id: account.account_id, account_cohort_id: account.account_cohort_id }),
+      }),
+      {
+        now: () => now + 31_000,
+        fetcher: () => {
+          calls += 1;
+          return Promise.resolve(Response.json({}));
+        },
+      }
+    );
+    const payload = await response.json();
+    assert.equal(payload.refreshed, false);
+    assert.equal(payload.reason, "response_headers");
+    assert.equal(payload.observed_at_ms, null);
+    assert.equal(payload.usage, null);
+    assert.equal(calls, 0);
+    assert.deepEqual(await loadClaudeCodeQuotaState(kv as unknown as Kv, account), before);
+  });
+});
+
 test("the admin routes stay behind admin auth and expose the documented paths", async () => {
   const { default: handler } = await import("../src/handler/index.ts");
   const paths: [string, string][] = [
@@ -225,6 +315,7 @@ test("the admin routes stay behind admin auth and expose the documented paths", 
     ["POST", "/admin/providers/claude-code/auth"],
     ["DELETE", "/admin/providers/claude-code/auth"],
     ["POST", "/admin/providers/claude-code/quota/clear"],
+    ["POST", "/admin/providers/claude-code/quota/refresh"],
     ["GET", "/admin/providers/claude-code/access"],
     ["POST", "/admin/providers/claude-code/access"],
     ["POST", "/admin/providers/claude-code/accounts/active"],

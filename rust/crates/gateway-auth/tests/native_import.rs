@@ -1,9 +1,9 @@
 use gateway_auth::{
-    GatewayError,
     crypto::{base64url, sha256_hex},
     native_auth::*,
     native_import::*,
 };
+use gateway_core::error::GatewayError;
 use std::{
     collections::BTreeSet,
     future::Future,

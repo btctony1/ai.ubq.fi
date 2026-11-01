@@ -1,5 +1,5 @@
 //! Explicit tree value codec. Type metadata belongs to the record, never to guessed JSON shapes.
-use crate::{GatewayError, js_string::JsString16};
+use crate::{error::GatewayError, js_string::JsString16};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

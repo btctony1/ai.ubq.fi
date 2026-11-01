@@ -1,23 +1,17 @@
-use std::{
-    cell::{Cell, RefCell},
-    collections::BTreeMap,
-    future::Future,
-    task::{Context, Poll, Waker},
-};
-
 use gateway_auth::{
-    AuthConfig, AuthHost, AuthMethod, AuthRequest, AuthService,
     crypto::base64url,
     origin::same_origin_mutation,
     passport::{
         PASSPORT_COOKIE, PASSPORT_STATE_COOKIE, PassportClaims, PassportConfig, PassportService,
         reset_jwks_cache, verify_jwt,
     },
+    resolve::AuthService,
+    types::{AuthConfig, AuthHost, AuthMethod, AuthRequest},
     upstream::{AuthUpstreamRequest, AuthUpstreamResponse},
     webauthn::{CosePublicKey, SignatureInput, WebAuthnCrypto},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     state::{AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, StoredRecord},
 };
 use rsa::{
@@ -29,6 +23,12 @@ use rsa::{
 };
 use serde_json::{Value, json};
 use sha2::Sha256;
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    future::Future,
+    task::{Context, Poll, Waker},
+};
 
 const PRIVATE_PEM: &str = "-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC2KZoerxCpwvKR
@@ -511,7 +511,7 @@ fn jwks_transport_failure_and_non_success_status_are_unavailable() {
     );
 }
 
-fn assert_unauthorized(result: Result<gateway_auth::AuthPrincipal, GatewayError>) {
+fn assert_unauthorized(result: Result<gateway_auth::types::AuthPrincipal, GatewayError>) {
     let error = match result {
         Ok(_) => panic!("expected unauthorized"),
         Err(error) => error,

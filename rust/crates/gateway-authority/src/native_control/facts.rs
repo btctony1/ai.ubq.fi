@@ -1,30 +1,28 @@
 use super::{
     NativeRenewalFence,
-    rows::{Actor, fail, session_key},
+    actor::StoredNativeActor as Actor,
+    rows::{fail, session_key},
 };
 use crate::{
-    TokenSource, keys,
+    keys,
     paid_control::{PAID_CONTROL_CONFIG_VERSION, PaidControlConfig, PaidControlOwner},
     quota::{ApiKeyPolicy, ApiReservation, ApiUsageRequest, ApiUsageState},
-    routing::{AdmittedAccount, SubscriptionPool},
-    store::Transaction,
+    routing_types::{AdmittedAccount, SubscriptionPool},
+    store::{TokenSource, Transaction},
 };
-use gateway_auth::{
-    crypto::sha256_hex,
-    provider_credentials::{
-        codex_access_expiry_ms, codex_source_pool_key, parse_codex_source_pool,
-    },
+use gateway_auth::crypto::sha256_hex;
+use gateway_auth::provider_credentials::{
+    codex_access_expiry_ms, codex_source_pool_key, parse_codex_source_pool,
 };
-use gateway_core::{
-    GatewayError,
-    identity::RequestContext,
-    local_work::journal_local_work,
-    model::ModelId,
-    provider::UpstreamProvider,
-    source_json::SourceJson,
-    source_serialization as source,
-    state::{AuthorityStore, RevisionCheck},
-};
+use gateway_core::error::GatewayError;
+use gateway_core::identity::RequestContext;
+use gateway_core::local_work::journal_local_work;
+use gateway_core::model::ModelId;
+use gateway_core::provider::UpstreamProvider;
+use gateway_core::source_json::SourceJson;
+use gateway_core::source_serialization as source;
+use gateway_core::state::{AuthorityStore, RevisionCheck};
+use gateway_schema::catalog_store::runtime_config_key;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -98,19 +96,16 @@ pub(super) async fn read_control<S: AuthorityStore, I: TokenSource>(
     request_id: &str,
     expected_attempt: Option<&str>,
     identity: &gateway_auth::native_auth::NativeTransportIdentity,
-    current_config: &gateway_auth::AuthConfig,
+    current_config: &gateway_auth::types::AuthConfig,
 ) -> Result<ControlFacts, GatewayError> {
-    let owner_id = identity.owner_id();
-    let owner_epoch = identity.owner_epoch();
-    let key_fingerprint = identity.key_fingerprint();
     let owner: PaidControlOwner = tx
         .read(&keys::paid_control_owner())
         .await?
         .ok_or_else(fail)?;
     if owner.v != 1
-        || owner.owner_id != owner_id
-        || owner.owner_epoch != owner_epoch
-        || owner.key_fingerprint != key_fingerprint
+        || owner.owner_id != identity.owner_id()
+        || owner.owner_epoch != identity.owner_epoch()
+        || owner.key_fingerprint != identity.key_fingerprint()
     {
         return Err(fail());
     }
@@ -119,12 +114,12 @@ pub(super) async fn read_control<S: AuthorityStore, I: TokenSource>(
         .await?
         .ok_or_else(fail)?;
     if config.v != PAID_CONTROL_CONFIG_VERSION
-        || config.owner_id != owner_id
-        || config.owner_epoch != owner_epoch
+        || config.owner_id != identity.owner_id()
+        || config.owner_epoch != identity.owner_epoch()
     {
         return Err(fail());
     }
-    let runtime_key = runtime_key();
+    let runtime_key = runtime_config_key();
     tx.observe_revision(&runtime_key).await?;
     if config.source_checks.len() != 1
         || config.source_checks[0].key != runtime_key.0
@@ -177,41 +172,7 @@ pub(super) async fn read_control<S: AuthorityStore, I: TokenSource>(
     {
         return Err(fail());
     }
-    if let Some(key_id) = session.context.key_id.as_ref().map(|k| &k.0) {
-        if current_actor.principal != format!("api-key:{key_id}") {
-            return Err(fail());
-        }
-        if session.context.key_id.as_ref().map(|k| k.0.as_str()) != Some(key_id) {
-            return Err(fail());
-        }
-        let api = session.api.as_ref().ok_or_else(fail)?;
-        if api.key_id.0 != *key_id
-            || api.request_id != session.context.request_id
-            || api.route != session.context.route
-        {
-            return Err(fail());
-        }
-        let _: ApiKeyPolicy = tx.read(&keys::api_policy(key_id)).await?.ok_or_else(fail)?;
-        if !api.deferred {
-            let request: ApiUsageRequest = tx
-                .read(&keys::api_request(
-                    key_id,
-                    &api.policy_version,
-                    api.window_start_ms,
-                    &api.request_id.0,
-                ))
-                .await?
-                .ok_or_else(fail)?;
-            request.validate()?;
-            if request.key_id != api.key_id
-                || request.request_id != api.request_id
-                || request.route != api.route
-                || request.state == ApiUsageState::Released
-            {
-                return Err(fail());
-            }
-        }
-    }
+    validate_session_api(tx, &session, &current_actor.principal).await?;
     Ok(ControlFacts {
         admission,
         attempt_id: attempt_id.into(),
@@ -226,6 +187,47 @@ pub(super) async fn read_control<S: AuthorityStore, I: TokenSource>(
         ))?,
         checks_digest: checks_digest(&tx.checks())?,
     })
+}
+
+async fn validate_session_api<S: AuthorityStore, I: TokenSource>(
+    tx: &mut Transaction<'_, S, I>,
+    session: &Session,
+    principal: &str,
+) -> Result<(), GatewayError> {
+    let Some(key_id) = session.context.key_id.as_ref().map(|k| &k.0) else {
+        return Ok(());
+    };
+    if principal != format!("api-key:{key_id}") {
+        return Err(fail());
+    }
+    let api = session.api.as_ref().ok_or_else(fail)?;
+    if api.key_id.0 != *key_id
+        || api.request_id != session.context.request_id
+        || api.route != session.context.route
+    {
+        return Err(fail());
+    }
+    let _: ApiKeyPolicy = tx.read(&keys::api_policy(key_id)).await?.ok_or_else(fail)?;
+    if !api.deferred {
+        let request: ApiUsageRequest = tx
+            .read(&keys::api_request(
+                key_id,
+                &api.policy_version,
+                api.window_start_ms,
+                &api.request_id.0,
+            ))
+            .await?
+            .ok_or_else(fail)?;
+        request.validate()?;
+        if request.key_id != api.key_id
+            || request.request_id != api.request_id
+            || request.route != api.route
+            || request.state == ApiUsageState::Released
+        {
+            return Err(fail());
+        }
+    }
+    Ok(())
 }
 
 pub(super) struct ControlFacts {
@@ -244,8 +246,8 @@ pub(super) async fn read<S: AuthorityStore, I: TokenSource>(
     request_id: &str,
     expected_attempt: Option<&str>,
     identity: &gateway_auth::native_auth::NativeTransportIdentity,
-    current_config: &gateway_auth::AuthConfig,
-    registered: &super::RegisteredRenewalOwner,
+    current_config: &gateway_auth::types::AuthConfig,
+    registered: &super::receiver::RegisteredRenewalOwner,
 ) -> Result<Facts, GatewayError> {
     let control = read_control(
         tx,
@@ -328,13 +330,4 @@ pub(super) async fn read<S: AuthorityStore, I: TokenSource>(
             .map(|a| digest(&a.private_source_value()))
             .collect::<Result<_, _>>()?,
     })
-}
-
-fn runtime_key() -> gateway_core::state::RecordKey {
-    gateway_core::tuple_key::TupleKey::from_scalar_parts(&[
-        gateway_core::tuple_key::ScalarKeyPart::String("uos_ai"),
-        gateway_core::tuple_key::ScalarKeyPart::String("runtime_config"),
-        gateway_core::tuple_key::ScalarKeyPart::String("v2"),
-    ])
-    .to_record_key()
 }

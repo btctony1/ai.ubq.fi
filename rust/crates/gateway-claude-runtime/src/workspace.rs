@@ -1,8 +1,9 @@
-use crate::{ClaudePoolSession, host::*, persistence};
+use crate::host::{ClaudePoolHost, SelectedAccount, SelectionInput};
+use crate::{persistence, pool::ClaudePoolSession};
 use gateway_admin_runtime::claude::{self, AccountUpdate, Workspace};
 use gateway_core::{
-    GatewayError, js_string::JsString16, js_string_case::lowercase_source, source_json::SourceJson,
-    source_serialization as source, state::AuthorityStore,
+    error::GatewayError, js_string::JsString16, js_string_case::lowercase_source,
+    source_json::SourceJson, source_serialization as source, state::AuthorityStore,
 };
 use gateway_schema::reasoning::js_trim_source;
 

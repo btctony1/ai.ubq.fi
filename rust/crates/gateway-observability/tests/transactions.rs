@@ -1,6 +1,6 @@
 mod support;
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     lifecycle::DeliveryOutcome,
     query::{QueryPage, QueryRequest, QueryStore},
     state::{

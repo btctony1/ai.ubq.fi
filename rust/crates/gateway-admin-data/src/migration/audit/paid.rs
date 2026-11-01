@@ -2,10 +2,9 @@ use super::{
     Audit, AuditInventory, SliceInventory, api_id, positive, reference, safe,
     source_fields as source, under,
 };
-use crate::migration::ObservedRow;
-use crate::{integer, number, text};
+use crate::{integer, migration::ObservedRow, number, text};
 use gateway_core::{
-    GatewayError, source_control::decode_source_control_record, source_json::SourceJson,
+    error::GatewayError, source_control::decode_source_control_record, source_json::SourceJson,
     source_serialization,
 };
 use serde_json::Value;

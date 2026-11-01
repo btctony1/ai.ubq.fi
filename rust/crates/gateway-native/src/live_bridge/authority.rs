@@ -1,6 +1,5 @@
 use crate::private_https::PrivateHttps;
 use gateway_auth::{
-    GatewayError,
     crypto::base64url,
     native::{
         NATIVE_KEY_HEADER, NATIVE_MAC_HEADER, NATIVE_NONCE_HEADER, NATIVE_RESPONSE_MAC_HEADER,
@@ -9,10 +8,11 @@ use gateway_auth::{
     native_auth::NativeTransportIdentity,
     native_live::{NATIVE_LIVE_AUTHORITY_MAX_BYTES, NATIVE_LIVE_AUTHORITY_PATH},
 };
-use gateway_authority::native_live::{
+use gateway_authority::native_live::wire::{
     NativeLiveAccess, NativeLiveAuthorityRequest as Request,
     NativeLiveAuthorityResponse as Response, NativeLiveFence, NativeLiveRetirement,
 };
+use gateway_core::error::GatewayError;
 use std::{net::TcpStream, time::Instant};
 
 pub struct LiveAuthorization {

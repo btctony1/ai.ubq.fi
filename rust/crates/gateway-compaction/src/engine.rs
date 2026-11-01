@@ -1,8 +1,8 @@
 //! Source call decisions, request batching, local windows and projected transcript.
 use crate::{
-    model::*,
+    model::{Action, CompactResult, Decision, Message, Options, Reason, Resolved, ToolCall},
     state::{self, estimate_tokens, fit_state},
-    text::{self, Text, text},
+    text::{self, Text},
     types::{CompactionFailure, CompactionHost, CompactionStats, FailureKind, JEV_TIMEOUT_MS},
 };
 use futures_util::{StreamExt, TryStreamExt, future::try_join_all, stream};

@@ -1,4 +1,4 @@
-use gateway_authority::paid::PaidRollup;
+use gateway_authority::paid_types::PaidRollup;
 use serde_json::json;
 
 #[test]

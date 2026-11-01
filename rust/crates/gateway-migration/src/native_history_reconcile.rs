@@ -1,8 +1,10 @@
 //! Native-private candidate data only. No store, custody, publication or replay
 //! authority is created by reconciling these immutable stopped inventories.
 use crate::engine::Manifest;
+use crate::error::MigrationError;
+use crate::native_capture::{NativeCapture, NativeEntry};
 use crate::native_stage::Captured;
-use crate::{GatewayError, MigrationError, NativeCapture, NativeEntry, RecordKey, invalid};
+use crate::{GatewayError, RecordKey, invalid};
 use gateway_admin_data::migration::{ObservedRow, audit::AuditInventory};
 use gateway_core::tuple_key::TupleKey;
 use std::collections::{BTreeMap, BTreeSet};

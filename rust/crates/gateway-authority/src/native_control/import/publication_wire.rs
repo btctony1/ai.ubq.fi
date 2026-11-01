@@ -1,14 +1,16 @@
 //! Source snapshot normalization stays authority-owned; the exact wire DTOs
 //! and finite validators are shared with authentication without a reverse edge.
-use super::{ImportCatalogDisposition, unavailable};
+use super::unavailable;
 #[cfg(test)]
-use gateway_auth::native_import::publication::ACCESS_MAX_BYTES;
-use gateway_auth::native_import::publication::SNAPSHOT_MAX_BYTES;
-pub use gateway_auth::native_import::publication::{
-    ImportAccessDocument, ImportCatalogData, ImportPublicationCommandData,
+use gateway_auth::native_import::publication::command::{
+    ACCESS_MAX_BYTES, ImportAccessDocument, ImportPublicationCommandData,
     import_publication_max_bytes,
 };
-use gateway_core::{GatewayError, source_json::SourceJson};
+use gateway_auth::native_import::publication::{
+    command::{ImportCatalogData, SNAPSHOT_MAX_BYTES},
+    data::ImportCatalogDisposition,
+};
+use gateway_core::{error::GatewayError, source_json::SourceJson};
 
 pub fn prepare_import_catalog(
     snapshot: &SourceJson,

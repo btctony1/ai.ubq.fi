@@ -1,11 +1,15 @@
-#[path = "support/source_catalog.rs"]
 mod support;
 use gateway_core::{
-    GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson,
+    error::GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson,
     source_serialization as source,
 };
 use gateway_schema::{
-    aliases::SourceStringCollator, catalog::*, metadata::MetadataHint, selection::ModelWhitelist,
+    aliases::SourceStringCollator,
+    catalog::{CatalogInput, ProviderCatalog},
+    catalog_views::{build_catalog_snapshot, capabilities, ordinary_models, public_catalog},
+    metadata::MetadataHint,
+    native_catalog::native_catalog,
+    selection::ModelWhitelist,
     snapshot::ModelSnapshot,
 };
 use support::*;

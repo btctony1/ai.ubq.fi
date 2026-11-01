@@ -1,13 +1,13 @@
+use gateway_authority::kernel::{KernelPolicy, KernelWindow};
 use gateway_authority::keys;
-use gateway_authority::quota::{KernelPolicy, KernelWindow};
 use gateway_core::{
     js_string::JsString16,
     source_control::{decode_source_control_record, encode_source_control_record},
     source_json::SourceJson,
     source_serialization as source,
 };
+use gateway_routing_runtime_test_support::authority as support;
 use serde::Deserialize;
-pub mod support;
 
 #[derive(Deserialize)]
 struct Fixture {

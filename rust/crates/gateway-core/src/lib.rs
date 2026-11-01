@@ -21,5 +21,3 @@ pub mod source_usage;
 pub mod state;
 pub mod tuple_key;
 pub mod value;
-
-pub use error::GatewayError;

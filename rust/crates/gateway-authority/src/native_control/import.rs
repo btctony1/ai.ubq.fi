@@ -1,38 +1,27 @@
 //! One actual admin/source-bound import preparation. No body/digest is persisted.
 use super::{
-    NativeRenewalAuthority, NativeRenewalCancellation, OWNER_RENEWAL_MAX_MS,
+    NativeRenewalCancellation, OWNER_RENEWAL_MAX_MS,
     actor::{self, NativeActorScope, NativeRenewalActor, StoredNativeActor},
+    receiver::NativeRenewalAuthority,
     rows,
 };
-use crate::TokenSource;
+use crate::store::TokenSource;
 use gateway_auth::native_import::{
     NativeImportAdmission, NativeImportKind, NativeImportMetadata, NativeImportTarget,
     VerifiedNativeImportBody,
 };
-use gateway_core::{GatewayError, state::AuthorityStore};
+use gateway_core::{error::GatewayError, state::AuthorityStore};
 use serde::{Deserialize, Serialize};
 mod action;
-mod owner_selection;
 use action::ImportActionRow;
-pub(super) use owner_selection::read as owner_selection;
-mod publication;
-pub use publication::{
-    NativeImportPublication, NativeImportPublicationDisposition, PreparedNativeImportPublication,
-};
-mod publication_current;
+pub(super) mod custody;
+pub mod custody_session;
+pub mod effects;
+pub(super) mod owner_selection;
+pub mod publication;
+pub(crate) mod publication_current;
 mod publication_source;
-pub(in crate::native_control) use publication_current::VerifiedImportActorRevisions;
-mod publication_data;
-pub use publication_data::{ImportCatalogDisposition, ImportPublicationDataV1};
-mod publication_wire;
-pub use publication_wire::{
-    ImportAccessDocument, ImportCatalogData, ImportPublicationCommandData,
-    import_publication_max_bytes, prepare_import_catalog,
-};
-mod custody;
-mod custody_session;
-pub use custody_session::{ImportCustodyStartedRequest, VerifiedCurrentImportStarted};
-mod effects;
+pub mod publication_wire;
 mod remote_state;
 mod sources;
 use remote_state::ImportActionState;
@@ -40,18 +29,10 @@ mod catalog_seed;
 #[cfg(all(unix, feature = "native-import-fixture"))]
 mod fixture;
 #[cfg(unix)]
-mod remote;
+pub mod remote;
 mod remote_server;
 #[cfg(unix)]
 mod remote_tls;
-pub use effects::{NativeImportBinding, NativeImportClaim, NativeImportMode, NativeImportStart};
-#[cfg(unix)]
-pub use remote::VerifiedCurrentImportTerminal;
-#[cfg(unix)]
-pub use remote::{
-    AuthenticatedImportCatalogObservation, AuthenticatedImportTerminal, RemoteAdmittedImport,
-    RemoteImportAuthority,
-};
 pub struct PreparedNativeImport {
     row: ImportActionRow,
 }
@@ -305,4 +286,3 @@ fn required_nullable<'de, T: Deserialize<'de>, D: serde::Deserializer<'de>>(
 ) -> Result<Option<T>, D::Error> {
     Option::<T>::deserialize(d)
 }
-pub(super) use custody::validate_custody;

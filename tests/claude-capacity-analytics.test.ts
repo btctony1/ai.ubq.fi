@@ -11,7 +11,7 @@ import {
   storeClaudeCodeWorkspaceState,
 } from "../src/provider/claude-code-credentials.ts";
 import { recordClaudeCodeQuotaOutcome as recordBoundQuotaOutcome, type ClaudeCodeAcceptedObservation } from "../src/provider/claude-code-quota.ts";
-import { resolveClaudeCodeAccount, updateClaudeCodeAccount, selectClaudeCodeAccount } from "../src/provider/claude-code-accounts.ts";
+import { resolveClaudeCodeAccount, updateClaudeCodeAccount, selectClaudeCodeAccount, removeClaudeCodeAccount } from "../src/provider/claude-code-accounts.ts";
 import type { ProviderCapacityView } from "../src/provider/capacity-contract.ts";
 import {
   recordClaudeCapacityObservation,
@@ -23,12 +23,14 @@ import {
 import { listClaudeCapacityRollups, CLAUDE_CAPACITY_READ_LIMIT, CLAUDE_CAPACITY_ROLLUP_PREFIX } from "../src/provider/claude-capacity-rollups.ts";
 import { CountingKv as AnalyticsKv } from "./helpers/counting-kv.ts";
 import { resetProviderHealthThrottleForTest } from "../src/provider/health.ts";
+import { refreshClaudeCodeUsage, CLAUDE_CODE_USAGE_FRESH_MS } from "../src/provider/claude-code-usage-refresh.ts";
+import { loadClaudeCodeQuotaState } from "../src/provider/claude-code-quota.ts";
 import { resetProviderSelectionCacheForTest } from "../src/provider/selection.ts";
 
 const recordClaudeCodeQuotaOutcome = async (kv: Kv, input: Omit<Parameters<typeof recordBoundQuotaOutcome>[1], "binding">) => {
   const binding = await resolveClaudeCodeAccount(kv, () => null);
   assert(binding);
-  return await recordBoundQuotaOutcome(kv, { ...input, binding });
+  return await recordBoundQuotaOutcome(kv, { observation_source: "response_headers", ...input, binding });
 };
 
 const NOW_MS = 1_800_000_000_000;
@@ -101,6 +103,55 @@ test("a configured tier reports its credential, workspace, and observed subscrip
     assert.equal(fiveHour.status, "allowed");
     assert.equal(sevenDay.used_percent, 10);
     assert.deepEqual(source.standard, [{ family: "requests", limit: 50, remaining: 49, reset_at_ms: NOW_MS + 60_000 }]);
+  });
+});
+
+test("historical direct usage diagnostics do not override accepted header evidence", async () => {
+  await withKv(async (kv) => {
+    const store = kv as unknown as Kv;
+    await storeClaudeCodeStoredCredential(store, { secret: "sk-ant-oat-usage-state-fixture" });
+    await recordClaudeCodeQuotaOutcome(store, {
+      observation: {
+        windows: {
+          "5h": { status: null, utilization: 0.42, reset_at_ms: NOW_MS + 3_600_000, observed_at_ms: NOW_MS },
+          "7d": { status: null, utilization: 0.12, reset_at_ms: NOW_MS + 86_400_000, observed_at_ms: NOW_MS },
+        },
+        standard: {},
+        representative_claim: null,
+        observed_at_ms: NOW_MS,
+      },
+      usage: {
+        source: "oauth_usage",
+        state: "ok",
+        status: 200,
+        message: null,
+        attempted_at_ms: NOW_MS,
+        observed_at_ms: NOW_MS,
+      },
+      nowMs: NOW_MS,
+    });
+    const observed = await claudeCapacitySource(store, NOW_MS + 1_000, nullEnv);
+    assert.equal(observed.usage, null);
+    assert.equal(observed.windows.five_hour?.used_percent, 42);
+
+    await recordClaudeCodeQuotaOutcome(store, {
+      observation: null,
+      usage: {
+        source: "oauth_usage",
+        state: "scope_missing",
+        status: 403,
+        message: "OAuth token is missing the user:profile scope",
+        attempted_at_ms: NOW_MS + 2_000,
+        observed_at_ms: null,
+      },
+      nowMs: NOW_MS + 2_000,
+    });
+    const missingScope = await claudeCapacitySource(store, NOW_MS + 3_000, nullEnv);
+    assert.equal(missingScope.state, "available", "a usage-only scope failure does not disable inference");
+    assert.equal(missingScope.last_error, null);
+    assert.equal(missingScope.cooldown_until_ms, null);
+    assert.equal(missingScope.usage, null);
+    assert.equal(missingScope.windows.five_hour?.used_percent, 42, "the last accepted window is preserved");
   });
 });
 
@@ -180,6 +231,7 @@ test("current Claude roster rows and retained history stay account/cohort-bound 
       [second, 0.4, NOW_MS - 1_900_000],
     ] as const) {
       await recordBoundQuotaOutcome(store, {
+        observation_source: "response_headers",
         binding,
         response_status: 200,
         nowMs: NOW_MS,
@@ -576,4 +628,131 @@ test("Claude sampling retains bounded state/reset/new-window transitions and ded
     rollups.points.reduce((sum, point) => sum + point.samples, 0),
     6
   );
+});
+
+const directUsagePayload = (at: number, used = 42) => ({
+  five_hour: { utilization: used, resets_at: new Date(at + 18_000_000).toISOString() },
+  seven_day: { utilization: 12, resets_at: new Date(at + 86_400_000).toISOString() },
+});
+
+test("capacity polling reads header evidence without direct Claude requests or new samples", async () => {
+  await withKv(async (kv) => {
+    const store = kv as unknown as Kv;
+    await storeClaudeCodeStoredCredential(store, { secret: "sk-ant-oat-passive-capacity" });
+    await recordClaudeCodeQuotaOutcome(store, {
+      observation: {
+        windows: { "5h": { status: "allowed", utilization: 0.42, reset_at_ms: null, observed_at_ms: NOW_MS } },
+        standard: {},
+        representative_claim: null,
+        observed_at_ms: NOW_MS,
+      },
+      nowMs: NOW_MS,
+    });
+    let at = NOW_MS;
+    let claudeCalls = 0;
+    const fetcher = (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.startsWith("https://api.anthropic.com/")) claudeCalls += 1;
+      return Promise.resolve(Response.json({}, { status: 503 }));
+    };
+    const initial = await (
+      await handleProviderCapacity(new Request("http://localhost/admin/providers/capacity"), { kv: store, fetcher, now: () => at })
+    ).json();
+    assert.equal(initial.claude.windows.five_hour.used_percent, 42);
+    assert.equal(initial.claude_history.points.length, 1);
+    at += 35_000;
+    const later = await (await handleProviderCapacity(new Request("http://localhost/admin/providers/capacity"), { kv: store, fetcher, now: () => at })).json();
+    assert.equal(later.claude.windows.five_hour.used_percent, 42);
+    assert.equal(later.claude.source_observed_at_ms, NOW_MS);
+    assert.equal(later.claude_history.points.length, 1);
+    assert.equal(claudeCalls, 0);
+  });
+});
+
+test("legacy direct-usage storage retains its independent lease and cannot become header evidence", async () => {
+  await withKv(async (kv) => {
+    const store = kv as unknown as Kv;
+    await storeClaudeCodeStoredCredential(store, { secret: "sk-ant-oat-concurrent-usage" });
+    const account = await resolveClaudeCodeAccount(store, nullEnv);
+    assert(account);
+    const fetched = Promise.withResolvers<undefined>();
+    const released = Promise.withResolvers<Response>();
+    let calls = 0;
+    const first = refreshClaudeCodeUsage(store, account, {
+      now: () => NOW_MS,
+      fetcher: () => {
+        calls++;
+        fetched.resolve(undefined);
+        return released.promise;
+      },
+    });
+    await fetched.promise;
+    assert.equal((await refreshClaudeCodeUsage(store, account, { now: () => NOW_MS })).kind, "busy");
+    released.resolve(Response.json(directUsagePayload(NOW_MS)));
+    assert.equal((await first).kind, "completed");
+    assert.equal((await refreshClaudeCodeUsage(store, account, { now: () => NOW_MS + 1 })).kind, "fresh");
+    assert.equal(calls, 1);
+    await refreshClaudeCodeUsage(store, account, {
+      now: () => NOW_MS + CLAUDE_CODE_USAGE_FRESH_MS,
+      fetcher: () => Promise.resolve(Response.json({ error: { message: "user:profile scope required" } }, { status: 403 })),
+    });
+    const quota = await loadClaudeCodeQuotaState(store, account);
+    assert.equal(quota?.usage?.state, "scope_missing");
+    assert.equal(quota.windows["5h"]?.utilization, 0.42);
+    assert.equal(quota.blocked_until_ms, null);
+    assert.equal(quota.cooldown_until_ms, null);
+    assert.equal((await readClaudeCapacityHistory(store, NOW_MS + CLAUDE_CODE_USAGE_FRESH_MS)).points.length, 1);
+  });
+});
+
+test("an account removed or replaced during direct collection cannot publish quota or history", async () => {
+  for (const change of ["remove", "replace"] as const)
+    await withKv(async (kv) => {
+      const store = kv as unknown as Kv;
+      await storeClaudeCodeStoredCredential(store, { secret: "sk-ant-oat-replaced-usage" });
+      const account = await resolveClaudeCodeAccount(store, nullEnv);
+      assert(account);
+      const result = await refreshClaudeCodeUsage(store, account, {
+        now: () => NOW_MS,
+        fetcher: async () => {
+          if (change === "remove") await removeClaudeCodeAccount(store, account.account_id);
+          else
+            await updateClaudeCodeAccount(
+              store,
+              { accountId: account.account_id, credential: { ...account.credential, secret: "sk-ant-oat-new-generation" } },
+              nullEnv
+            );
+          return Response.json(directUsagePayload(NOW_MS));
+        },
+      });
+      assert.equal(result.kind, "changed");
+      assert.equal(await loadClaudeCodeQuotaState(store, account), null);
+      assert.equal((await readClaudeCapacityHistory(store, NOW_MS)).points.length, 0);
+    });
+});
+
+test("direct usage quota and history survive native close and reopen", async () => {
+  const root = resolve(".cleanup-evidence/claude-usage-native");
+  mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(`${root}/case-`);
+  const path = `${directory}/kv.sqlite3`;
+  let kv: Kv = await openKv(path);
+  try {
+    const now = Date.now();
+    await storeClaudeCodeStoredCredential(kv, { secret: "sk-ant-oat-native-direct" });
+    const account = await resolveClaudeCodeAccount(kv, nullEnv);
+    assert(account);
+    assert.equal(
+      (await refreshClaudeCodeUsage(kv, account, { now: () => now, fetcher: () => Promise.resolve(Response.json(directUsagePayload(now))) })).kind,
+      "completed"
+    );
+    kv.close();
+    kv = await openKv(path);
+    assert.equal((await loadClaudeCodeQuotaState(kv, account))?.usage?.state, "ok");
+    assert.equal((await loadClaudeCodeQuotaState(kv, account))?.windows["5h"]?.utilization, 0.42);
+    assert.equal((await readClaudeCapacityHistory(kv, now + 1_000)).points[0]?.windows.five_hour?.used_percent, 42);
+  } finally {
+    kv.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

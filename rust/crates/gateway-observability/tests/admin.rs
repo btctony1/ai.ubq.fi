@@ -2,7 +2,7 @@ mod support;
 use gateway_admin_runtime::capabilities::{Context, ProviderRequest};
 use gateway_auth::crypto::sha256_hex;
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     source_json::SourceJson,
     state::{RecordKey, StoredRecord},
     tuple_key::TupleKey,

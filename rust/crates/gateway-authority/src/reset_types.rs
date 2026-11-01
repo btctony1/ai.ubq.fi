@@ -1,9 +1,11 @@
 //! Reset records, immutable identities and pure credit selection.
-use crate::reset::hash;
-use crate::routing::{AdmittedAccount, CohortProof};
-use crate::{nonnegative, text, unavailable};
-use gateway_core::GatewayError;
-use gateway_core::identity::AccountBinding;
+use crate::{
+    nonnegative,
+    reset::hash,
+    routing_types::{AdmittedAccount, CohortProof},
+    text, unavailable,
+};
+use gateway_core::{error::GatewayError, identity::AccountBinding};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

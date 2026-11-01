@@ -1,21 +1,25 @@
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-use gateway_auth::{AuthMethod, AuthPrincipal, api_keys::ApiKeyPolicy, crypto::Secret};
-use gateway_core::{
-    GatewayError,
-    identity::{ApiKeyId, PrincipalId, RequestContext, RequestId},
-    lifecycle::SemanticTerminal,
-    query::{QueryEntry, QueryPage, QueryRequest, QueryStore},
-    state::{
-        AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, StoredRecord,
-    },
-    tuple_key::TupleKey,
+use gateway_auth::api_keys::ApiKeyPolicy;
+use gateway_auth::crypto::Secret;
+use gateway_auth::types::{AuthMethod, AuthPrincipal};
+use gateway_core::error::GatewayError;
+use gateway_core::identity::{ApiKeyId, PrincipalId, RequestContext, RequestId};
+use gateway_core::lifecycle::SemanticTerminal;
+use gateway_core::state::RecordKey;
+use gateway_core::tuple_key::TupleKey;
+use gateway_extras_runtime_test_support::fixture::{Memory, error};
+
+use gateway_extras_runtime::ExtrasRuntime;
+use gateway_extras_runtime::types::{
+    DispatchFailure, DispatchFailureOrigin, ExtrasDispatch, ExtrasHost, ExtrasProvider,
+    ExtrasRequest, ExtrasRoute, Headers, HealthKind, ImageKind, KernelDisposition,
+    UpstreamResponse,
 };
-use gateway_extras_runtime::*;
 use gateway_providers::types::PrepareOptions;
 use serde_json::{Value, json};
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, VecDeque},
+    collections::VecDeque,
     future::Future,
     pin::Pin,
     rc::Rc,
@@ -33,130 +37,6 @@ fn run<F: Future>(future: F) -> F::Output {
         }
     }
     panic!("fixture remained pending")
-}
-fn key(parts: Value) -> RecordKey {
-    TupleKey::from_json_parts(parts.as_array().unwrap())
-        .unwrap()
-        .to_record_key()
-}
-fn error(code: &str) -> GatewayError {
-    GatewayError::unavailable("fixture", code)
-}
-#[derive(Clone)]
-struct Memory {
-    rows: Rc<RefCell<BTreeMap<String, StoredRecord>>>,
-    clock: Rc<Cell<i64>>,
-    rate_conflicts: Rc<Cell<usize>>,
-    cache_quota: Rc<Cell<usize>>,
-}
-impl Memory {
-    fn new(clock: Rc<Cell<i64>>) -> Self {
-        Self {
-            rows: Rc::new(RefCell::new(BTreeMap::new())),
-            clock,
-            rate_conflicts: Rc::new(Cell::new(0)),
-            cache_quota: Rc::new(Cell::new(0)),
-        }
-    }
-    fn seed(&self, parts: Value, value: Value, expiry: Option<i64>) {
-        self.rows
-            .borrow_mut()
-            .insert(key(parts).0, StoredRecord::json("seed", value, expiry));
-    }
-    fn budget(&self, requests: u64, tokens: u64, window_start: i64) {
-        self.seed(
-            json!(["embeddings", "v1", "rate", "voyage"]),
-            json!({"window_start_ms":window_start,"requests":requests,"tokens":tokens}),
-            None,
-        )
-    }
-    fn live(&self, key: &RecordKey) -> Option<StoredRecord> {
-        self.rows
-            .borrow()
-            .get(&key.0)
-            .filter(|r| r.expires_at_ms.is_none_or(|e| e > self.clock.get()))
-            .cloned()
-    }
-}
-impl AuthorityStore for Memory {
-    async fn read(&self, k: &RecordKey) -> Result<Option<StoredRecord>, GatewayError> {
-        Ok(self.live(k))
-    }
-    async fn commit(&self, t: AtomicTransition) -> Result<CommitOutcome, GatewayError> {
-        let rate = key(json!(["embeddings", "v1", "rate", "voyage"]));
-        if t.checks.iter().any(|c| c.key == rate) && self.rate_conflicts.get() > 0 {
-            self.rate_conflicts.set(self.rate_conflicts.get() - 1);
-            return Ok(CommitOutcome::Conflict);
-        }
-        if self.cache_quota.get() > 0
-            && t.mutations.iter().any(|m| match m {
-                RecordMutation::Put { key, .. } => TupleKey::from_record_key(key)
-                    .unwrap()
-                    .is_strict_descendant_of(
-                        &TupleKey::from_json_parts(&[
-                            json!("embeddings"),
-                            json!("v2"),
-                            json!("cache"),
-                        ])
-                        .unwrap(),
-                    ),
-                _ => false,
-            })
-        {
-            self.cache_quota.set(self.cache_quota.get() - 1);
-            return Err(error("storage_quota"));
-        }
-        for c in &t.checks {
-            if self.live(&c.key).map(|r| r.revision) != c.expected_revision {
-                return Ok(CommitOutcome::Conflict);
-            }
-        }
-        let mut rows = self.rows.borrow_mut();
-        for m in t.mutations {
-            match m {
-                RecordMutation::Put { key, record } => {
-                    rows.insert(key.0, record);
-                }
-                RecordMutation::Delete { key } => {
-                    rows.remove(&key.0);
-                }
-            }
-        }
-        Ok(CommitOutcome::Committed)
-    }
-}
-impl QueryStore for Memory {
-    async fn query(&self, r: QueryRequest) -> Result<QueryPage, GatewayError> {
-        let validated = r.validate()?;
-        let mut entries = Vec::new();
-        for (key, row) in self.rows.borrow().iter() {
-            let key = RecordKey(key.clone());
-            if validated.accepts_record(&key, row)? {
-                entries.push(QueryEntry {
-                    key,
-                    record: row.clone(),
-                });
-            }
-        }
-        entries.sort_by_key(|e| TupleKey::from_record_key(&e.key).unwrap());
-        if r.reverse {
-            entries.reverse()
-        }
-        let more = entries.len() > r.limit as usize;
-        entries.truncate(r.limit as usize);
-        let next_cursor = if more {
-            entries
-                .last()
-                .map(|e| validated.cursor_after(&e.key))
-                .transpose()?
-        } else {
-            None
-        };
-        Ok(QueryPage {
-            entries,
-            next_cursor,
-        })
-    }
 }
 #[derive(Clone)]
 struct Host(Rc<HostState>);

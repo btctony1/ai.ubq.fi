@@ -3,15 +3,19 @@ use super::{
     NativeRenewalFence, NativeRenewalMode, NativeRenewalPublished, OWNER_RENEWAL_MAX_MS, facts,
     rows::{self, ActionRow, GenerationEffect, OperationRow, Phase, conflict, fail},
 };
-use crate::{Authority, TokenSource, add, store::Transaction, text};
+use crate::{
+    add,
+    store::{Authority, TokenSource, Transaction},
+    text,
+};
 use gateway_auth::{
-    AuthConfig, AuthHost, AuthRequest,
     crypto::sha256_hex,
     native::NATIVE_CONTROL_PATH,
     native_auth::{AuthenticatedNativeOwner, NativeCapability, NativeTransportIdentity},
     native_control::{NativeControlEnvelope, NativeControlRequest},
+    types::{AuthConfig, AuthHost, AuthRequest},
 };
-use gateway_core::{GatewayError, state::AuthorityStore};
+use gateway_core::{error::GatewayError, state::AuthorityStore};
 
 /// Registry construction is a host operation; no request may select a native home.
 pub struct RegisteredRenewalOwner {

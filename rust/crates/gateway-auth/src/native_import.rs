@@ -3,7 +3,6 @@ pub mod authority;
 pub mod catalog_seed;
 pub mod publication;
 use crate::{
-    GatewayError,
     crypto::{base64url, decode_base64url, sha256_hex},
     native::{NATIVE_AUTH_WINDOW_MS, NATIVE_WIRE_VERSION},
     native_auth::{
@@ -11,6 +10,7 @@ use crate::{
         NativeTransportIdentity,
     },
 };
+use gateway_core::error::GatewayError;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;

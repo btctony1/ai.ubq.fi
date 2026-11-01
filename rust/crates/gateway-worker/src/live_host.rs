@@ -1,29 +1,25 @@
 //! Fixed live HTTP/stream adapter. Account and owner capabilities are request-owned.
 mod account;
-mod body;
+pub(crate) mod body;
 mod health;
 mod platform;
-
-pub use account::CurrentLiveAccount;
-pub use body::{Body, into_response};
-
-use gateway_auth::{AuthConfig, AuthMethod, AuthPrincipal, AuthRequest};
-use gateway_authority::{
-    Authority,
-    native_control::actor::{NativeRenewalActor, authenticate_client_actor},
-};
-use gateway_core::{
-    GatewayError,
-    identity::{ApiKeyId, PrincipalId, RequestContext, RequestId},
-};
-use gateway_live_runtime::protocol::{LiveRoute, live_route, principal_id};
-use std::rc::Rc;
-use worker::Context;
 
 use crate::{
     host::{PlatformClock, PlatformHost, PlatformTokens},
     storage::now_ms,
 };
+use gateway_auth::types::{AuthConfig, AuthMethod, AuthPrincipal, AuthRequest};
+use gateway_authority::{
+    native_control::actor::{NativeRenewalActor, authenticate_client_actor},
+    store::Authority,
+};
+use gateway_core::{
+    error::GatewayError,
+    identity::{ApiKeyId, PrincipalId, RequestContext, RequestId},
+};
+use gateway_live_runtime::protocol::{LiveRoute, live_route, principal_id};
+use std::rc::Rc;
+use worker::Context;
 
 /// Captures the actual authenticated request, not an actor reconstructed from request ID/time.
 pub struct WorkerLiveHost {

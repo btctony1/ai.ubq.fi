@@ -4,17 +4,15 @@ use crate::{
     session::RoutingSession,
     types::{RoutingHost, RoutingResult},
 };
-use gateway_authority::{
-    AuthorityClock, TokenSource, keys,
-    quota::{ApiReservation, ApiUsageRequest, ApiUsageState, KernelReservation, KernelTerminal},
-};
-use gateway_core::{
-    GatewayError,
-    lifecycle::SemanticTerminal,
-    local_work::LocalWorkPhase,
-    query::QueryStore,
-    state::{AtomicTransition, CommitOutcome, RevisionCheck, StoredRecord},
-};
+use gateway_authority::kernel::{KernelReservation, KernelTerminal};
+use gateway_authority::keys;
+use gateway_authority::quota::{ApiReservation, ApiUsageRequest, ApiUsageState};
+use gateway_authority::store::{AuthorityClock, TokenSource};
+use gateway_core::error::GatewayError;
+use gateway_core::lifecycle::SemanticTerminal;
+use gateway_core::local_work::LocalWorkPhase;
+use gateway_core::query::QueryStore;
+use gateway_core::state::{AtomicTransition, CommitOutcome, RevisionCheck, StoredRecord};
 use std::cell::RefCell;
 
 /// Captured only by the two genuine constructors, never loaded from stored rows.

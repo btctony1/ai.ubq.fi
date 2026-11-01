@@ -8,14 +8,14 @@ use gateway_admin_runtime::{
     claude::{self, AccountBinding},
     claude_generation::StateSnapshot,
 };
-use gateway_auth::AuthHost;
-use gateway_catalog_runtime::{
+use gateway_auth::types::AuthHost;
+use gateway_catalog_runtime::host::{
     CatalogFetch, CatalogFetchResponse, CatalogHost, CatalogProvider, CredentialPublication,
     ProviderBinding,
 };
-use gateway_claude_runtime::ClaudePoolHost;
+use gateway_claude_runtime::host::ClaudePoolHost;
 use gateway_core::{
-    GatewayError, js_string::JsString16, source_json::SourceJson, state::RevisionCheck,
+    error::GatewayError, js_string::JsString16, source_json::SourceJson, state::RevisionCheck,
 };
 use gateway_schema::catalog::ProviderCatalog;
 use std::collections::BTreeMap;

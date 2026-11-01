@@ -1,10 +1,10 @@
 //! Raw terminal fields share the core source parser; unrelated UTF16 remains untouched.
 use gateway_authority::cache_experiment::{
-    ReadSample, Sample, Usage,
-    model::{Reason, STEPS},
+    model::{Reason, STEPS, Sample, Usage},
+    run::ReadSample,
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     source_json::SourceJson,
     source_usage::{UsageStatus, extract_source_usage_tokens},

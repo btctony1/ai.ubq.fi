@@ -1,10 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
-
-use gateway_core::GatewayError;
+use crate::transport::{SupervisorMethod, SupervisorTransport};
+use gateway_core::error::GatewayError;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-
-use crate::transport::{SupervisorMethod, SupervisorTransport};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_SOURCES: usize = 8;
 pub const INVENTORY_LIMIT: usize = 60;
@@ -101,57 +99,6 @@ impl InventoryScope {
             id: id.to_owned(),
             inventory_generation: self.generation.clone(),
         })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SupervisorState {
-    Active,
-    Idle,
-    Stale,
-    Unknown,
-    SystemError,
-}
-
-pub fn classify_state(runtime: Option<&str>, turn: Option<&str>, loaded: bool) -> SupervisorState {
-    let terminal = turn.is_some_and(|status| {
-        matches!(
-            status,
-            "completed"
-                | "interrupted"
-                | "failed"
-                | "declined"
-                | "cancelled"
-                | "canceled"
-                | "errored"
-                | "aborted"
-        )
-    });
-    match runtime {
-        Some("active") => SupervisorState::Active,
-        Some("systemError") => SupervisorState::SystemError,
-        Some("idle") => SupervisorState::Idle,
-        Some("notLoaded") => {
-            if turn.is_some() && !terminal {
-                SupervisorState::Stale
-            } else if terminal {
-                SupervisorState::Idle
-            } else {
-                SupervisorState::Unknown
-            }
-        }
-        _ => {
-            if turn.is_some() && !terminal {
-                if loaded {
-                    SupervisorState::Active
-                } else {
-                    SupervisorState::Stale
-                }
-            } else {
-                SupervisorState::Unknown
-            }
-        }
     }
 }
 
@@ -272,7 +219,7 @@ fn redacted_follow_entries(turn_id: &str, items: &Value) -> Vec<FollowEntry> {
         .into_iter()
         .map(|entry| (entry.index, entry.revision))
         .collect();
-    let sanitized = crate::redaction::sanitize_follow_items(items);
+    let sanitized = gateway_core::redaction::sanitize_follow_items(items);
     let mut entries = extract_follow(turn_id, &sanitized);
     for entry in &mut entries {
         if let Some(revision) = raw_revisions.get(&entry.index) {

@@ -1,15 +1,13 @@
 //! Authenticated native/configuration owner proofs. No deserializable proof,
 //! arbitrary fingerprint authority, provider credential or permissive fallback.
-use std::{collections::BTreeSet, future::Future};
-
+use crate::{
+    crypto::{base64url, decode_base64url, sha256_hex},
+    native::{NATIVE_AUTH_WINDOW_MS, publication_response_input, signature_input},
+};
+use gateway_core::error::GatewayError;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-
-use crate::{
-    GatewayError,
-    crypto::{base64url, decode_base64url, sha256_hex},
-    native::*,
-};
+use std::{collections::BTreeSet, future::Future};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum NativeCapability {

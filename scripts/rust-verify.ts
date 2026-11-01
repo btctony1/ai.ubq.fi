@@ -4,6 +4,8 @@ import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } fro
 import { fileURLToPath } from "node:url";
 import { detectCiScope, isDocumentationPath, isRustGatePath, RUST_NATIVE_ONLY_PACKAGES } from "./test-scope.ts";
 import { testNetworkArgv } from "./test-network.ts";
+import { observeRustCommandResult as observeCommandResult, rustClippyCommand, rustQualityCommands } from "./rust-verify-quality.ts";
+import { guardRustTarget } from "./rust-target-owner.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const NATIVE_TARGET = "aarch64-unknown-linux-gnu";
@@ -41,6 +43,8 @@ export type RustCommand = Readonly<{
   darwinNativeTests?: boolean;
   nativeImportFixture?: boolean;
   ownedImportDriver?: boolean;
+  clippyStage?: RustStage;
+  clippyPackages?: readonly string[];
 }>;
 export type CommandResult = Readonly<{ code: number; stdout: string; stderr: string }>;
 export type CommandRunner = (command: RustCommand, environment: Record<string, string>) => Promise<CommandResult>;
@@ -167,8 +171,9 @@ export const planRustVerification = (root: string, paths: readonly string[], sta
   const target = stage === "native" ? rustNativeTarget(host) : WASM_TARGET;
   const cargo = ["--locked", "--offline", "--target", target, ...flags];
   const commands: RustCommand[] = [
+    ...rustQualityCommands(root, cwd),
     { argv: ["cargo", "fmt", "--all", "--", "--check"], cwd, isolated: true },
-    { argv: ["cargo", "clippy", ...cargo, ...(stage === "native" ? ["--all-targets"] : ["--lib"]), "--", "-D", "warnings"], cwd, isolated: true },
+    rustClippyCommand(stage, cwd, cargo, names),
   ];
   // A complete CI job still retains documentation-only zero-test selection.
   const testAffected = affectedPackages(root, packages, changed, false);
@@ -232,14 +237,13 @@ export const rustVerificationEnvironment = (source: NodeJS.ProcessEnv = process.
     environment.PATH = [...new Set([macRustBin(environment), ...paths, "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(delimiter);
     environment.RUSTUP_TOOLCHAIN = `${RUST_VERSION}-aarch64-apple-darwin`;
     environment.CARGO_INCREMENTAL = "0";
-    environment.CARGO_PROFILE_DEV_DEBUG = "0";
-    environment.CARGO_PROFILE_TEST_DEBUG = "0";
     environment.RUSTC = rustToolPath("rustc", environment, host);
     environment.RUSTDOC = rustToolPath("rustdoc", environment, host);
   }
   return environment;
 };
 export const runCommand: CommandRunner = async (command, environment) => {
+  await guardRustTarget(command, environment, runCommand);
   const argv = command.isolated ? testNetworkArgv(command.argv) : [...command.argv];
   const child = Bun.spawn(argv, { cwd: command.cwd, env: environment, stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true });
   const control = { expired: false };
@@ -274,16 +278,7 @@ export const runCommand: CommandRunner = async (command, environment) => {
     stop();
   }
 };
-const observeCommandResult = (command: RustCommand, result: CommandResult): number => {
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
-  if (result.code !== 0) throw new Error(`Rust command failed (${result.code}): ${command.argv.join(" ")}`);
-  const tests = command.testListing ? result.stdout.split("\n").filter((line) => /: test\s*$/.test(line)).length : 0;
-  if (command.testListing && tests === 0) throw new Error("Selected Rust test package listed zero tests");
-  if (command.testRun && !/^test result: ok\..* [1-9]\d* passed;/m.test(result.stdout))
-    throw new Error("Selected Rust test package executed zero passing tests");
-  return tests;
-};
+
 const PRELAUNCH_TARGET = "connector_confinement";
 // Prelaunch fixtures apply their own Seatbelt profile. macOS refuses a second
 // sandbox_apply from inside the outer test-network profile, so these cases run
@@ -774,7 +769,7 @@ export const executeRustPlan = async (plan: RustPlan, environment: Record<string
     else
       listedTests += command.darwinNativeTests
         ? await executeDarwinNativeTests(command.cwd, environment, "package", run)
-        : observeCommandResult(command, await run(command, environment));
+        : observeCommandResult(command, await run(command, environment), environment);
   }
   return listedTests;
 };
@@ -864,8 +859,12 @@ const prepareCi = async (root: string, stage: RustStage): Promise<void> => {
   }
   if (stage === "wasm") {
     await checkedRun(["cargo", "install", "worker-build", "--version", `=${WORKER_BUILD_VERSION}`, "--locked", "--root", tools], root, environment);
-    await checkedRun(["cargo", "install", "wasm-bindgen-cli", "--version", "=0.2.129", "--locked", "--root", tools], root, environment);
     for (const [name, url, checksum] of [
+      [
+        "wasm-bindgen",
+        "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-aarch64-unknown-linux-gnu.tar.gz",
+        "1797c349a0f45d30946e8986b184135e12839ab576c9a04203e85febfc5dcb35",
+      ],
       [
         "binaryen",
         "https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-aarch64-linux.tar.gz",
@@ -884,7 +883,7 @@ const prepareCi = async (root: string, stage: RustStage): Promise<void> => {
       await fetchArchive(url, archive, checksum);
       await checkedRun(["/usr/bin/tar", "-xzf", archive, "--strip-components=1", "-C", destination], root, environment);
     }
-    environment.WASM_BINDGEN_BIN = join(tools, "bin/wasm-bindgen");
+    environment.WASM_BINDGEN_BIN = join(tools, "wasm-bindgen/wasm-bindgen");
     environment.WASM_OPT_BIN = join(tools, "binaryen/bin/wasm-opt");
     environment.ESBUILD_BIN = join(tools, "esbuild/bin/esbuild");
   }
@@ -916,12 +915,7 @@ const verifyTools = async (stage: RustStage, environment: Record<string, string>
     [["cargo", "--version"], `cargo ${RUST_VERSION} `],
     [["rustfmt", "--version"], RUST_REVISION],
     [["cargo-clippy", "--version"], RUST_REVISION],
-    ...(stage === "wasm"
-      ? [
-          [["worker-build", "--version"], WORKER_BUILD_VERSION],
-          [["wasm-bindgen", "--version"], "0.2.129"],
-        ]
-      : []),
+    ...(stage === "wasm" ? [[["worker-build", "--version"], WORKER_BUILD_VERSION]] : []),
   ] as [string[], string][]) {
     const version = await checkedRun(argv, ROOT, environment);
     if (!version.includes(expected)) throw new Error(`Pinned Rust tool version mismatch: ${argv[0]}`);

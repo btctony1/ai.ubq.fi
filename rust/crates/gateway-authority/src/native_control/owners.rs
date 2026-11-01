@@ -1,25 +1,22 @@
 //! Constructor-owned fixed profile registry. Picking a resource is not renewal authorization.
 use super::{
-    RegisteredRenewalOwner,
     actor::{self, NativeActorScope, NativeRenewalActor},
+    receiver::RegisteredRenewalOwner,
     rows::{self, ActionRow, fail},
 };
 use crate::{
-    Authority, TokenSource, keys,
-    routing::{LiveAccountSelection, SubscriptionPool},
-    store::Transaction,
+    keys,
+    routing::LiveAccountSelection,
+    routing_types::SubscriptionPool,
+    store::{Authority, TokenSource, Transaction},
 };
-use gateway_auth::{
-    AuthConfig,
-    crypto::sha256_hex,
-    provider_credentials::{codex_source_pool_key, parse_codex_source_pool},
-};
-use gateway_core::{
-    GatewayError,
-    identity::AccountBinding,
-    state::{AuthorityStore, RecordKey},
-    tuple_key::{ScalarKeyPart, TupleKey},
-};
+use gateway_auth::crypto::sha256_hex;
+use gateway_auth::provider_credentials::{codex_source_pool_key, parse_codex_source_pool};
+use gateway_auth::types::AuthConfig;
+use gateway_core::error::GatewayError;
+use gateway_core::identity::AccountBinding;
+use gateway_core::state::{AuthorityStore, RecordKey};
+use gateway_core::tuple_key::{ScalarKeyPart, TupleKey};
 use serde_json::Value;
 
 /// One or two explicitly configured independent native owners. No environment/default lookup.
@@ -30,7 +27,7 @@ impl RegisteredRenewalOwners {
     pub async fn for_inference<'a, S: AuthorityStore, I: TokenSource>(
         &'a self,
         authority: &Authority<S, I>,
-        admission: &crate::routing::AdmittedAccount,
+        admission: &crate::routing_types::AdmittedAccount,
     ) -> Result<&'a RegisteredRenewalOwner, GatewayError> {
         for _ in 0..3 {
             authority
@@ -212,7 +209,7 @@ impl RegisteredRenewalOwners {
         for _ in 0..3 {
             let mut tx = authority.transaction(authority.fresh_time(0)?)?;
             let (account_hash, native_owner) =
-                super::import::owner_selection(&mut tx, action_ref).await?;
+                super::import::owner_selection::read(&mut tx, action_ref).await?;
             let owner = self
                 .account(&mut tx, &account_hash, None, Some(&native_owner))
                 .await?;

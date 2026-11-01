@@ -7,7 +7,7 @@ use gateway_auth::{
 use gateway_authority::initial_control_owner::{
     InitialAdoptionBinding, InitialControlOwnerDeployment, InitialNativeCustodyBinding,
 };
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use worker::Env;
@@ -68,8 +68,8 @@ impl CandidateNativeConfiguration {
         Ok(result)
     }
 
-    pub(crate) fn bindings(&self) -> Result<crate::NativeBindings, GatewayError> {
-        crate::NativeBindings::configured_https(&self.origin, self.identity.clone())
+    pub(crate) fn bindings(&self) -> Result<crate::native_host::NativeBindings, GatewayError> {
+        crate::native_host::NativeBindings::configured_https(&self.origin, self.identity.clone())
             .map_err(|_| refused())
     }
 }
@@ -200,5 +200,4 @@ fn refused() -> GatewayError {
 }
 
 #[cfg(test)]
-#[path = "candidate_bindings_tests.rs"]
 mod tests;

@@ -1,6 +1,6 @@
 //! Exact source redemption/day validation; no redemption or promotion capability is minted.
 use gateway_admin_data::migration::{ObservedRow, starts};
-use gateway_authority::reset::{ResetRecord, ResetState};
+use gateway_authority::reset_types::{ResetRecord, ResetState};
 use serde_json::Value;
 
 fn safe(value: Option<&Value>) -> bool {
@@ -124,12 +124,12 @@ fn daily(parts: &[Value], value: &Value) -> bool {
 pub(crate) fn audit(
     rows: &[ObservedRow],
     errors: &mut Vec<gateway_core::js_string::JsString16>,
-) -> Result<(), gateway_core::GatewayError> {
+) -> Result<(), gateway_core::error::GatewayError> {
     for row in rows
         .iter()
         .filter(|r| starts(&r.parts, &["uos_ai", "codex_reset_shadow_decision"]))
     {
-        if gateway_authority::full_pool_reset::FullPoolShadowDecision::validate_record(
+        if gateway_authority::full_pool_reset::types::FullPoolShadowDecision::validate_record(
             &row.key,
             &row.record,
         )

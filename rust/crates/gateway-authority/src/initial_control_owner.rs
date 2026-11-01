@@ -1,16 +1,13 @@
 //! Initial installation by the private account operator, never native MAC publication.
 //! The deployment seal is produced after independent local physical custody checks.
 //! Neither a signed identity nor a captured row can construct installation authority.
+use crate::{keys, paid_control::PaidControlOwner};
 use gateway_auth::{crypto::sha256_hex, native_auth::NativeTransportIdentity};
-use gateway_core::{
-    GatewayError,
-    identity::MAX_SAFE_INTEGER,
-    state::{AtomicTransition, RecordMutation, RevisionCheck, StoredRecord},
-};
+use gateway_core::error::GatewayError;
+use gateway_core::identity::MAX_SAFE_INTEGER;
+use gateway_core::state::{AtomicTransition, RecordMutation, RevisionCheck, StoredRecord};
 use serde::Serialize;
 use std::collections::BTreeSet;
-
-use crate::{keys, paid_control::PaidControlOwner};
 
 pub const INITIAL_AUTHORITY_BINDING: &str = "AUTHORITY";
 pub const INITIAL_AUTHORITY_OBJECT: &str = "gateway-authority-v1";

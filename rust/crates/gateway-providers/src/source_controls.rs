@@ -106,7 +106,7 @@ pub(crate) fn ordinary(
         let view = document.for_surface(gateway_schema::request::RequestSurface::ChatCompletions);
         let messages = s::get(raw, "messages");
         let messages = json::array(&messages).ok_or_else(|| {
-            gateway_schema::source_request::SourceRequestError::new(
+            gateway_schema::source_request::error::SourceRequestError::new(
                 400,
                 "messages must be an array",
                 "invalid_request_error",
@@ -115,13 +115,15 @@ pub(crate) fn ordinary(
             )
         })?;
         if messages.is_empty() {
-            return Err(gateway_schema::source_request::SourceRequestError::new(
-                400,
-                "messages must be a non-empty array",
-                "invalid_request_error",
-                Some("invalid_request_error"),
-                None,
-            ));
+            return Err(
+                gateway_schema::source_request::error::SourceRequestError::new(
+                    400,
+                    "messages must be a non-empty array",
+                    "invalid_request_error",
+                    Some("invalid_request_error"),
+                    None,
+                ),
+            );
         }
         // Chat effort syntax and stream options precede content conversion; metadata mapping does not.
         let effort = view.reasoning_effort()?;
@@ -222,7 +224,7 @@ fn validate_cache(
     input_key: &str,
 ) -> s::Result<()> {
     if let Some(context) = context {
-        gateway_schema::source_request::validate_known_unsupported_prompt_cache(
+        gateway_schema::source_request::cache_capability::validate_known_unsupported_prompt_cache(
             model,
             context.prompt_cache(),
             raw,

@@ -1,6 +1,7 @@
 use crate::{store::*, types::*};
-use gateway_core::source_json::SourceJson;
-use gateway_core::{GatewayError, lifecycle::SemanticTerminal, query::QueryStore};
+use gateway_core::{
+    error::GatewayError, lifecycle::SemanticTerminal, query::QueryStore, source_json::SourceJson,
+};
 use gateway_providers::extras;
 use gateway_schema::selection::ProviderSelection;
 use serde_json::{Value, json};

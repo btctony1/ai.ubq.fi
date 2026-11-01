@@ -2,7 +2,7 @@ use crate::{input::NOW, store::Store};
 use gateway_auth::crypto::Secret;
 use gateway_authority::{
     keys,
-    routing::{PoolAccount, SubscriptionPool},
+    routing_types::{PoolAccount, SubscriptionPool},
 };
 use gateway_core::{
     identity::{ApiKeyId, PoolVersionstamp},

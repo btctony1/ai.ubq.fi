@@ -1,12 +1,10 @@
 use super::{FullPoolFence, FullPoolShadowDecision, invalid};
-use gateway_core::{
-    GatewayError,
-    identity::MAX_SAFE_INTEGER,
-    js_string::JsString16,
-    source_json::SourceJson,
-    state::{RecordKey, StoredRecord},
-    value::ValueEncoding,
-};
+use gateway_core::error::GatewayError;
+use gateway_core::identity::MAX_SAFE_INTEGER;
+use gateway_core::js_string::JsString16;
+use gateway_core::source_json::SourceJson;
+use gateway_core::state::{RecordKey, StoredRecord};
+use gateway_core::value::ValueEncoding;
 use serde_json::Value;
 use std::collections::BTreeSet;
 

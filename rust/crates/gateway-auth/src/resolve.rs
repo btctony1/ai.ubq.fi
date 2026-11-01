@@ -1,21 +1,20 @@
-use std::{cell::RefCell, collections::BTreeMap};
-
-use gateway_core::state::AuthorityStore;
-use serde_json::{Value, json};
-use url::Url;
-
-use crate::{
-    AuthConfig, AuthHost, AuthMethod, AuthPrincipal, AuthRequest, AuthResponse, GatewayError,
-    PasskeyService,
-};
 use crate::{
     api_keys,
     crypto::{Secret, sha256_base64url, sha256_hex},
     origin::local_bypass,
-    passkeys::SessionView,
-    unauthorized,
-    upstream::*,
+    passkeys::{PasskeyService, SessionView},
+    types::{
+        AuthConfig, AuthHost, AuthMethod, AuthPrincipal, AuthRequest, AuthResponse, unauthorized,
+    },
+    upstream::{
+        AuthUpstreamRequest, console_title_matches, deno_token_shape, github_rejected,
+        github_token_shape, kernel_public_keys_key, upstream_unavailable, verify_kernel,
+    },
 };
+use gateway_core::{error::GatewayError, state::AuthorityStore};
+use serde_json::{Value, json};
+use std::{cell::RefCell, collections::BTreeMap};
+use url::Url;
 
 pub struct AuthService<'a, S, H> {
     pub store: &'a S,
@@ -514,7 +513,8 @@ impl<'a, S: AuthorityStore, H: AuthHost> AuthService<'a, S, H> {
         &self,
         request: &AuthRequest,
     ) -> Result<Option<AuthResponse>, GatewayError> {
-        let url = Url::parse(&request.url).map_err(|_| crate::invalid("Invalid request URL"))?;
+        let url =
+            Url::parse(&request.url).map_err(|_| crate::types::invalid("Invalid request URL"))?;
         let result = match (request.method.as_str(), url.path()) {
             ("POST", "/api/auth/register/start") => {
                 let admin = self.authenticate_admin(request).await?;

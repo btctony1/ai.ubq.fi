@@ -1,7 +1,7 @@
 //! Request controls share the same source string view as content validation.
 use super::{
-    SourceRequestError,
-    value::{Value, json, keyed_error, unknown_key},
+    error::SourceRequestError,
+    value::{Value, keyed_error, unknown_key},
 };
 fn invalid(message: impl AsRef<str>, param: Option<&str>) -> SourceRequestError {
     SourceRequestError::scalar(message.as_ref(), param)

@@ -1,9 +1,17 @@
 //! Closed native interchange; no runtime VM bytes or source database are opened here.
-use crate::*;
-use gateway_core::{
-    source_graph::SourceGraph,
-    value::{PortableValue, ValueEncoding},
+use crate::{
+    Mapping, Row, Transform, capture::SourceEntry, engine::PreparedAdoption, error::MigrationError,
+    invalid, parts, private_source_key, unavailable,
 };
+use gateway_core::error::GatewayError;
+use gateway_core::source_graph::SourceGraph;
+use gateway_core::source_json::SourceJson;
+use gateway_core::state::StoredRecord;
+use gateway_core::tuple_key::TupleKey;
+use gateway_core::value::{PortableValue, ValueEncoding};
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -226,7 +234,7 @@ pub(crate) fn validate_entry(entry: &NativeEntry, version: i64) -> Result<Row, G
     let source_value = if record.value_encoding == ValueEncoding::SourceGraphV1 {
         SourceJson::parse("null")?
     } else {
-        gateway_admin_data::profile::to_source_profile(&record.portable_value()?)?
+        gateway_admin_data::profile::source::to_source_profile(&record.portable_value()?)?
     };
     Ok(Row {
         key,

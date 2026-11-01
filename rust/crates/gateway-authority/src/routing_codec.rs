@@ -1,11 +1,13 @@
 //! Source v2 row normalization; absent legacy fields follow native-codex-contracts.ts.
-use crate::routing::{
-    ProbeCircuit, ProbeLease, QuotaBlock, QuotaBlockSource, RoutingSlot, RoutingState,
-    SubscriptionPool,
+use crate::{
+    invalid, next_generation,
+    routing_types::{
+        ProbeCircuit, ProbeLease, QuotaBlock, QuotaBlockSource, RoutingSlot, RoutingState,
+        SubscriptionPool,
+    },
 };
-use crate::{invalid, next_generation};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     identity::{CredentialVersion, MAX_SAFE_INTEGER, RoutingAccountHash},
     provider::CodexQuotaClass,
 };

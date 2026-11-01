@@ -1,14 +1,12 @@
 //! One fixed native owner action. Current actor/fences and start intent come
 //! from the authenticated shared-store reverse receiver, never a local ledger.
 use crate::{
-    NativeOwnerTransport,
     authority_http::{NativeAuthorityHttp, authority_deadline},
     owner_control::{NativeControlContext, NativeOwnerRenewalHandler, NativeRenewalGuard},
-    transport::renew_owned_guarded,
+    transport::{NativeOwnerTransport, renew_owned_guarded},
     unix::{NativeOwnerLocation, UnixOwnerTransport},
 };
 use gateway_auth::{
-    GatewayError,
     crypto::base64url,
     managed_access::ManagedAccessProjection,
     native_auth::AuthenticatedNativeOwner,
@@ -27,6 +25,7 @@ use gateway_authority::native_control::{
         OriginalControlHeaders,
     },
 };
+use gateway_core::error::GatewayError;
 use std::cell::RefCell;
 
 pub(crate) fn require_current_fence(fence: &NativeRenewalFence) -> Result<(), GatewayError> {

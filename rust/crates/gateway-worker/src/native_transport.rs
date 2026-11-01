@@ -1,24 +1,27 @@
 //! Constructor-only native transport. Service bindings use a synthetic origin;
 //! HTTPS carriers pin their origin before any request-owned input is available.
-use std::rc::Rc;
-
-use gateway_auth::{
-    GatewayError,
-    crypto::base64url,
-    native::*,
-    native_auth::NativeTransportIdentity,
-    native_control::{NATIVE_CONTROL_MAX_BYTES, unverified},
-};
-use worker::js_sys::Uint8Array;
-use worker::worker_sys::ext::ResponseExt;
-use worker::{Fetcher, Headers, Method, RequestInit, RequestRedirect, Response, Url};
-
 use crate::{
     host::PlatformHost,
     transport::{
         outbound::{Cancellation, Deadline},
         random,
     },
+};
+use gateway_auth::{
+    crypto::base64url,
+    native::{
+        NATIVE_CONTROL_PATH, NATIVE_FOLLOW_PATH, NATIVE_KEY_HEADER, NATIVE_MAC_HEADER,
+        NATIVE_MAX_BODY_BYTES, NATIVE_NONCE_HEADER, NATIVE_RPC_PATH, NATIVE_TIME_HEADER,
+        NATIVE_VERSION_HEADER,
+    },
+    native_auth::NativeTransportIdentity,
+    native_control::{NATIVE_CONTROL_MAX_BYTES, unverified},
+};
+use gateway_core::error::GatewayError;
+use std::rc::Rc;
+use worker::{
+    Fetcher, Headers, Method, RequestInit, RequestRedirect, Response, Url, js_sys::Uint8Array,
+    worker_sys::ext::ResponseExt,
 };
 
 #[derive(Clone)]
@@ -97,8 +100,7 @@ impl NativeTransport {
         &self,
         request: &worker::web_sys::Request,
     ) -> Result<worker::web_sys::Response, GatewayError> {
-        use worker::wasm_bindgen::JsCast;
-        use worker::wasm_bindgen_futures::JsFuture;
+        use worker::{wasm_bindgen::JsCast, wasm_bindgen_futures::JsFuture};
         let promise = match &self.carrier {
             NativeCarrier::Service(carrier) => {
                 let carrier: worker::worker_sys::Fetcher = carrier.clone().into_rpc();
@@ -121,7 +123,7 @@ impl NativeTransport {
         &self,
         action_ref: &str,
         platform: &PlatformHost,
-    ) -> Result<crate::GatewayResponse, GatewayError> {
+    ) -> Result<crate::response::GatewayResponse, GatewayError> {
         use gateway_auth::native_live::{NATIVE_LIVE_ACTION_HEADER, NATIVE_LIVE_PATH};
         let now = crate::storage::now_ms()?;
         let nonce = base64url(&random::random_bytes(32)?);
@@ -158,7 +160,7 @@ impl NativeTransport {
         if raw.status() != 101 || raw.websocket().is_none() {
             return Err(unavailable());
         }
-        Ok(crate::GatewayResponse::Raw(raw))
+        Ok(crate::response::GatewayResponse::Raw(raw))
     }
 
     pub async fn send(

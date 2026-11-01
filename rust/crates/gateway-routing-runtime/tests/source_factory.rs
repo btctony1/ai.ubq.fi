@@ -1,6 +1,9 @@
-use gateway_authority::{Authority, AuthorityClock, TokenSource, quota::ApiReservation};
+use gateway_authority::{
+    quota::ApiReservation,
+    store::{Authority, AuthorityClock, TokenSource},
+};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     source_json::SourceJson,
     source_serialization as source,
     tuple_key::{ScalarKeyPart, TupleKey},

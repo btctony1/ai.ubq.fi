@@ -2,39 +2,37 @@
 //! The production mutation boundary fails closed; a recovered durability receipt is not publication.
 use gateway_auth::crypto::sha256_hex;
 use gateway_authority::{
-    TokenSource,
     native_control::{
-        NativeRenewalAuthority, NativeRenewalCancellation,
-        import::{AuthenticatedNativeImport, NativeImportBinding, NativeImportClaim},
+        NativeRenewalCancellation,
+        import::{
+            AuthenticatedNativeImport,
+            effects::{NativeImportBinding, NativeImportClaim},
+        },
+        receiver::NativeRenewalAuthority,
     },
+    store::TokenSource,
 };
-use gateway_core::{GatewayError, state::AuthorityStore};
+use gateway_core::{error::GatewayError, state::AuthorityStore};
 use std::{fs::File, path::Path};
 mod acl_inspector;
 mod actor_channel;
 mod completion;
-mod custodian_runtime;
+pub mod custodian_runtime;
 mod custodian_service;
-mod durability;
-mod exclusive_owner;
+pub mod durability;
+pub mod exclusive_owner;
 mod import_documents;
 mod import_endpoints;
-pub(crate) mod import_process;
+pub mod import_process;
 mod import_publication;
-mod live_custody;
-mod owner_runtime;
+pub mod live_custody;
+pub mod owner_runtime;
 mod prepare_flow;
 mod validation;
-pub use custodian_runtime::CustodianRuntime;
-pub use exclusive_owner::ExclusiveManagedOwner;
-pub use live_custody::LiveImportCustody;
-pub use owner_runtime::{ExclusiveOwnerLease, OwnedRuntime};
 /// Fixed helper-only entry; it accepts no path, command, environment or arbitrary descriptor selector.
 pub fn owner_inspector_entry() -> Result<(), GatewayError> {
     acl_inspector::entry()
 }
-
-pub use durability::DurableNativeImport;
 
 /// Explicit registry construction, never an uploaded home or environment default.
 pub struct ExistingAccountImportStore {
@@ -45,7 +43,7 @@ pub struct ExistingAccountImportStore {
 }
 impl ExistingAccountImportStore {
     pub fn configured(
-        registered: &gateway_authority::native_control::RegisteredRenewalOwner,
+        registered: &gateway_authority::native_control::receiver::RegisteredRenewalOwner,
         account_id_hash: String,
     ) -> Result<Self, GatewayError> {
         let native_owner_id = registered.native_owner_id().to_owned();
@@ -65,13 +63,13 @@ impl ExistingAccountImportStore {
     /// Verify trusted bootstrap DATA against actual kernel custody; this does not grant mutation.
     pub fn prepare_exclusive_owner(
         &self,
-        registered: &gateway_authority::native_control::RegisteredRenewalOwner,
+        registered: &gateway_authority::native_control::receiver::RegisteredRenewalOwner,
         writer_uid: u32,
         native_client_uids: &[u32],
         inspector: &Path,
         inspector_sha256: &str,
         deadline: std::time::Instant,
-    ) -> Result<ExclusiveManagedOwner, GatewayError> {
+    ) -> Result<exclusive_owner::ExclusiveManagedOwner, GatewayError> {
         exclusive_owner::ExclusiveManagedOwner::prepare(
             self,
             registered,
@@ -106,7 +104,7 @@ impl ExistingAccountImportStore {
         claim: &NativeImportClaim,
         proof: &AuthenticatedNativeImport,
         original_body: &[u8],
-    ) -> Result<DurableNativeImport, GatewayError> {
+    ) -> Result<durability::DurableNativeImport, GatewayError> {
         self.require_binding(claim.binding())?;
         if proof.metadata().action_ref != claim.binding().action_ref
             || proof.metadata().operation_id != claim.binding().operation_id
@@ -126,12 +124,12 @@ impl ExistingAccountImportStore {
     #[cfg(test)]
     pub(super) fn issue_fixture(
         &self,
-        start: gateway_authority::native_control::import::NativeImportStart<'_>,
+        start: gateway_authority::native_control::import::effects::NativeImportStart<'_>,
         proof: &AuthenticatedNativeImport,
         original_body: &[u8],
         context: &crate::native_import::NativeImportContext<'_>,
         now_ms: i64,
-    ) -> Result<DurableNativeImport, GatewayError> {
+    ) -> Result<durability::DurableNativeImport, GatewayError> {
         durability::issue_fixture(self, start, proof, original_body, context, now_ms)
     }
     /// A recovered proof still requires an exact current native reread before publication.
@@ -145,7 +143,7 @@ impl ExistingAccountImportStore {
         claim: &NativeImportClaim,
         proof: &AuthenticatedNativeImport,
         original_body: &[u8],
-        receipt: &DurableNativeImport,
+        receipt: &durability::DurableNativeImport,
     ) -> Result<(), GatewayError> {
         self.require_binding(receipt.binding())?;
         let current = self

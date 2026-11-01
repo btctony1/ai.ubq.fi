@@ -1,6 +1,6 @@
 //! One constructor-preconnected socket, fixed URI and normal Rustls validation.
 //! No DNS, new network socket, proxy, redirect or reconnection after confinement.
-use gateway_auth::GatewayError;
+use gateway_core::error::GatewayError;
 use std::{
     io::{self, Read, Write},
     net::{SocketAddr, TcpStream},
@@ -268,7 +268,9 @@ impl PrivateHttps {
         if target.path() != gateway_auth::native::NATIVE_PUBLICATION_PATH {
             return Err(unavailable());
         }
-        gateway_authority::native_control::import::ImportPublicationCommandData::parse(body)?;
+        gateway_auth::native_import::publication::command::ImportPublicationCommandData::parse(
+            body,
+        )?;
         self.send_bounded(
             headers,
             body,

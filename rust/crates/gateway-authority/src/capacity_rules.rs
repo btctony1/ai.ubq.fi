@@ -1,14 +1,13 @@
 //! Source capacity row codecs and named-window applicability; no producer trust is inferred here.
-use crate::routing_codec::{safe_integer, safe_ms};
 use crate::{
     invalid,
-    routing::{
+    routing_codec::{safe_integer, safe_ms},
+    routing_types::{
         CapacityAdditionalRateLimit, CapacityObservation, CapacityState, CapacityStore,
         CapacityWindow, CapacityWindows,
     },
 };
-use gateway_core::model::ModelId;
-use gateway_core::{GatewayError, identity::RoutingAccountHash};
+use gateway_core::{error::GatewayError, identity::RoutingAccountHash, model::ModelId};
 use serde_json::Value;
 pub const CAPACITY_MAX_AGE_MS: i64 = 30 * crate::MINUTE_MS;
 fn optional_time(value: &Value, name: &str) -> Option<i64> {

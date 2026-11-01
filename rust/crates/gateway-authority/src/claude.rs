@@ -1,16 +1,18 @@
 //! Current source Claude roster and quota evidence, never a caller-supplied authorization.
-use std::collections::BTreeSet;
-
+use crate::{
+    invalid, keys, positive,
+    store::{Authority, TokenSource, Transaction},
+    unavailable,
+};
+use gateway_core::error::GatewayError;
+use gateway_core::js_string::JsString16;
+use gateway_core::model::ModelId;
+use gateway_core::source_json::SourceJson;
+use gateway_core::source_serialization as source;
 use gateway_core::state::{AuthorityStore, RevisionCheck};
 use gateway_core::value::PortableValue;
-use gateway_core::{
-    GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson,
-    source_serialization as source,
-};
 use sha2::{Digest, Sha256};
-
-use crate::store::Transaction;
-use crate::{Authority, TokenSource, invalid, keys, positive, unavailable};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Binding {

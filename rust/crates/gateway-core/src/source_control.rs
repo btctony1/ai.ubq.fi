@@ -1,7 +1,7 @@
 //! Finite JSON-tree conversion for explicitly selected control record families.
 //! This data codec never reads storage, validates a family, renews expiry or grants authority.
 use crate::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     source_json::SourceJson,
     source_serialization as source,

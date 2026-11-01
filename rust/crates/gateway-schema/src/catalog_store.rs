@@ -4,16 +4,14 @@ use crate::{
     snapshot::{ModelSnapshot, SnapshotOverrides, compare_client_versions, normalize_snapshot},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
+    query::{QueryRequest, QuerySelector, QueryStore},
     source_control::{decode_source_control_record, encode_source_control_record},
     source_json::SourceJson,
     state::{
         AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, RevisionCheck,
         StoredRecord,
     },
-};
-use gateway_core::{
-    query::{QueryRequest, QuerySelector, QueryStore},
     tuple_key::{KeyPart, ScalarKeyPart, TupleKey},
 };
 use serde::{Deserialize, Serialize};

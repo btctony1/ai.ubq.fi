@@ -1,10 +1,10 @@
-use gateway_auth::{AuthPrincipal, crypto::Secret};
+use gateway_auth::{crypto::Secret, types::AuthPrincipal};
 use gateway_authority::{
-    paid::{PaidReservation, PaidUsage},
-    routing::{AdmittedAccount, CohortProof},
+    paid_types::{PaidReservation, PaidUsage},
+    routing_types::{AdmittedAccount, CohortProof},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     identity::RequestContext,
     js_string::JsString16,
     lifecycle::TransportObservation,
@@ -12,7 +12,7 @@ use gateway_core::{
     provider::UpstreamProvider,
     state::{RecordKey, RevisionCheck},
 };
-use gateway_providers::{
+use gateway_providers::types::{
     AuthMaterial, ClaudeBodyOptions, ClientSurface, DecodePlan, Headers, PrepareOptions,
     PreparedClaudeBody, PreparedRequest,
 };
@@ -39,7 +39,7 @@ impl RoutingInput {
     /// Neutral data construction only; validation remains in source-defined planning phases.
     pub fn from_source_request(
         metadata: crate::local_work::LocalRequestMetadata,
-        request: gateway_schema::source_request::OrdinarySourceRequest,
+        request: gateway_schema::source_request::ordinary::OrdinarySourceRequest,
     ) -> Self {
         Self {
             context: metadata.context,
@@ -98,6 +98,12 @@ impl SourceRefusalBody {
         }
     }
 }
+impl std::fmt::Display for RoutingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self.error.as_ref(), formatter)
+    }
+}
+impl std::error::Error for RoutingError {}
 impl RoutingError {
     /// Cleanup is an internal diagnostic; the original wire status/body remain authoritative.
     pub(crate) fn with_cleanup_diagnostic(mut self, cleanup: &RoutingError) -> Self {
@@ -133,8 +139,8 @@ impl From<GatewayError> for RoutingError {
         }
     }
 }
-impl From<gateway_schema::source_request::SourceRequestError> for RoutingError {
-    fn from(error: gateway_schema::source_request::SourceRequestError) -> Self {
+impl From<gateway_schema::source_request::error::SourceRequestError> for RoutingError {
+    fn from(error: gateway_schema::source_request::error::SourceRequestError) -> Self {
         Self {
             error: Box::new(error.diagnostic().clone()),
             headers: BTreeMap::new(),
@@ -508,7 +514,7 @@ mod source_cleanup_tests {
     use gateway_core::{js_string::JsString16, source_json::SourceJson};
     #[test]
     fn cleanup_diagnostic_never_overwrites_original_source_wire_truth() {
-        let source = gateway_schema::source_request::SourceRequestError::new(
+        let source = gateway_schema::source_request::error::SourceRequestError::new(
             400,
             JsString16::from_units(vec![0xd800]),
             "invalid_request_error",
@@ -520,7 +526,9 @@ mod source_cleanup_tests {
             &GatewayError::unavailable("cleanup detail", "cleanup_failed").into(),
         );
         assert_eq!(error.error.status, 400);
-        assert_eq!(error.source_body.unwrap().as_bytes(), body.as_bytes());
+        let actual = error.source_body.as_ref().map(|body| body.as_bytes());
+        assert_eq!(actual, Some(body.as_bytes()));
+        assert_eq!(error.to_string(), error.error.to_string());
         assert!(
             error
                 .error

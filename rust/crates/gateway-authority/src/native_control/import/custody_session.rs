@@ -66,7 +66,7 @@ impl ImportCustodyStartedRequest {
 }
 /// A fresh CAS-checked original Started observation, NOT a stop/write/publication capability.
 /// ```compile_fail
-/// use gateway_authority::native_control::import::VerifiedCurrentImportStarted;
+/// use gateway_authority::native_control::import::custody_session::VerifiedCurrentImportStarted;
 /// let forged:VerifiedCurrentImportStarted=serde_json::from_str("{}").unwrap();
 /// ```
 /// ```compile_fail

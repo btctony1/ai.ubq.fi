@@ -1,12 +1,22 @@
 //! Pinned Bun source oracles plus neutral construction/error-phase invariants.
 use gateway_core::{
-    GatewayError, js_string::JsString16, source_json::SourceJson, source_serialization as source,
+    error::GatewayError, js_string::JsString16, source_json::SourceJson,
+    source_serialization as source,
 };
 use gateway_schema::{
     request::{RequestExtensions, RequestSurface},
-    source_request::{self, SourceRequestDocument, SourceRequestError},
+    source_request::{
+        SourceRequestDocument,
+        error::SourceRequestError,
+        fields::validate_prompt_cache_controls,
+        normalized::{
+            normalize_chat_message, normalize_function_output, normalize_response_content,
+            normalize_response_message,
+        },
+    },
 };
 use serde::{Deserialize, Serialize};
+type TestResult = Result<(), Box<dyn std::error::Error>>;
 fn raw(text: &str) -> SourceJson {
     SourceJson::parse(text).unwrap()
 }
@@ -33,34 +43,36 @@ struct Case {
     expected: String,
 }
 #[test]
-fn source_normalization_matches_pinned_bun_utf16_oracles() {
+fn source_normalization_matches_pinned_bun_utf16_oracles() -> TestResult {
     let fixture: Fixture =
-        serde_json::from_str(include_str!("fixtures/source-normalization-v1.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/source-normalization-v1.json"))?;
     assert_eq!(fixture.runtime, "bun@1.4.0");
     assert_eq!(fixture.source, "893c14045e9aaaf436fe135a0b7743d3ea3fd9ac");
     assert_eq!(fixture.cases.len(), 17);
     for case in fixture.cases {
         let value = raw(&case.input);
         let result = match case.op.as_str() {
-            "content" => source_request::normalize_response_content(&value, "input[0]", "user"),
-            "message" => source_request::normalize_response_message(&value, "input[0]"),
-            "function" => source_request::normalize_function_output(&value, "input[0]"),
-            "chat" => source_request::normalize_chat_message(&value, 0).map(|message| {
-                #[derive(Serialize)]
-                struct Chat {
-                    instruction: Option<JsString16>,
-                    #[serde(rename = "instructionContent")]
-                    instruction_content: Option<Vec<SourceJson>>,
-                    input: Vec<SourceJson>,
+            "content" => normalize_response_content(&value, "input[0]", "user"),
+            "message" => normalize_response_message(&value, "input[0]"),
+            "function" => normalize_function_output(&value, "input[0]"),
+            "chat" => match normalize_chat_message(&value, 0) {
+                Ok(message) => {
+                    #[derive(Serialize)]
+                    struct Chat {
+                        instruction: Option<JsString16>,
+                        #[serde(rename = "instructionContent")]
+                        instruction_content: Option<Vec<SourceJson>>,
+                        input: Vec<SourceJson>,
+                    }
+                    Ok(SourceJson::from_serializable(&Chat {
+                        instruction: message.instruction,
+                        instruction_content: message.instruction_content,
+                        input: message.input,
+                    })?)
                 }
-                SourceJson::from_serializable(&Chat {
-                    instruction: message.instruction,
-                    instruction_content: message.instruction_content,
-                    input: message.input,
-                })
-                .unwrap()
-            }),
-            "cache" => source_request::validate_prompt_cache_controls(&value).map(|()| raw("null")),
+                Err(error) => Err(error),
+            },
+            "cache" => validate_prompt_cache_controls(&value).map(|()| raw("null")),
             other => panic!("unknown oracle operation {other}"),
         };
         let actual = match result {
@@ -69,28 +81,32 @@ fn source_normalization_matches_pinned_bun_utf16_oracles() {
                 if case.op != "cache" {
                     fields.push(("value", value))
                 }
-                source::object(fields).unwrap()
+                source::object(fields)?
             }
             Err(error) => {
-                let error = source::member(error.body(), "error").unwrap();
+                let error = source::member(error.body(), "error").ok_or("missing fixture value")?;
                 let mut fields = vec![
                     ("ok", raw("false")),
-                    ("message", source::member(&error, "message").unwrap()),
+                    (
+                        "message",
+                        source::member(&error, "message").ok_or("missing fixture value")?,
+                    ),
                 ];
                 if let Some(param) = source::member(&error, "param") {
                     fields.push(("param", param))
                 }
-                source::object(fields).unwrap()
+                source::object(fields)?
             }
         };
         assert_eq!(
-            source::canonical(&actual).unwrap(),
-            source::canonical(&raw(&case.expected)).unwrap(),
+            source::canonical(&actual)?,
+            source::canonical(&raw(&case.expected))?,
             "{}: {}",
             case.op,
             case.name
         );
     }
+    Ok(())
 }
 #[test]
 fn neutral_surface_does_not_prevalidate_direct_chat_or_ordinary_content() {

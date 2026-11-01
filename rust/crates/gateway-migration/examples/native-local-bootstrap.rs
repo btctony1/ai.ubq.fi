@@ -22,7 +22,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
     #[serde(deny_unknown_fields)]
     struct Input {
         v: u32,
-        capture: Option<gateway_migration::NativeCapture>,
+        capture: Option<gateway_migration::native_capture::NativeCapture>,
         capture_file: Option<std::path::PathBuf>,
         registrations: Vec<Registration>,
         #[serde(default)]

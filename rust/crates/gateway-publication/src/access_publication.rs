@@ -1,6 +1,5 @@
 //! Access-only publication from one constructor-registered native owner. This
 //! invokes no OAuth refresh and writes secrets only in the existing raw auth row.
-use crate::control_publication::{conflict, unavailable, verify_owner};
 use gateway_auth::{
     crypto::Secret,
     native_auth::{AuthenticatedNativeOwner, NativeCapability, NativeTransportIdentity},
@@ -13,13 +12,14 @@ use gateway_auth::{
 use gateway_authority::{
     keys,
     paid_control::PaidControlOwner,
-    routing::{PoolAccount, SubscriptionPool},
+    routing_types::{PoolAccount, SubscriptionPool},
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     identity::PoolVersionstamp,
     state::{AuthorityStore, RecordMutation, RevisionCheck},
 };
+use gateway_publication_policy::control_publication::{conflict, unavailable, verify_owner};
 use serde_json::json;
 
 /// Not deserializable from a request. A transport resolves this ID through its

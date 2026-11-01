@@ -1,12 +1,18 @@
+use gateway_core::error::GatewayError;
 #[cfg(not(target_arch = "wasm32"))]
-mod fixture;
+use gateway_migration_test_support::fixture;
 #[cfg(not(target_arch = "wasm32"))]
-mod sqlite_store;
+use gateway_migration_test_support::sqlite_store;
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use fixture::{Directory, run};
+    use gateway_admin_data::profile::CanonicalDates;
     use gateway_core::identity::{ApiKeyId, RequestId};
-    use gateway_migration::*;
+    use gateway_migration::{
+        capture::PrivateCapture,
+        engine::{adopt_empty, prepare},
+        inverse::export_latest,
+    };
     use serde_json::json;
     use sqlite_store::SqliteStore;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,8 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     struct Tokens(AtomicU64);
-    impl gateway_authority::TokenSource for Tokens {
-        fn next_token(&self) -> Result<String, gateway_core::GatewayError> {
+    impl gateway_authority::store::TokenSource for Tokens {
+        fn next_token(&self) -> Result<String, GatewayError> {
             Ok(format!(
                 "offline-fixture-{}",
                 self.0.fetch_add(1, Ordering::SeqCst)
@@ -25,8 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     struct Clock;
-    impl gateway_authority::AuthorityClock for Clock {
-        fn now_ms(&self) -> Result<i64, gateway_core::GatewayError> {
+    impl gateway_authority::store::AuthorityClock for Clock {
+        fn now_ms(&self) -> Result<i64, GatewayError> {
             Ok(2300)
         }
     }
@@ -40,8 +46,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = SqliteStore::open(&path);
     let token = format!("u_{}", "1".repeat(64));
     let authenticated = run(gateway_auth::api_keys::authenticate(&store, &token, 2300))?;
-    let authority =
-        gateway_authority::Authority::with_clock(store.clone(), Tokens(AtomicU64::new(1)), Clock);
+    let authority = gateway_authority::store::Authority::with_clock(
+        store.clone(),
+        Tokens(AtomicU64::new(1)),
+        Clock,
+    );
     let reservation = run(authority.reserve_api_key(
         &ApiKeyId("offline-key".into()),
         &RequestId("post-restart-write".into()),

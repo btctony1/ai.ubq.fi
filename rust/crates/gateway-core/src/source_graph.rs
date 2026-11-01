@@ -1,5 +1,5 @@
 //! Explicit native-source object identity. This is data, never an evaluator.
-use crate::{GatewayError, js_string::JsString16, value::PortableValue};
+use crate::{error::GatewayError, js_string::JsString16, value::PortableValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 

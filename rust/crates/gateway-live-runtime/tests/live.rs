@@ -1,15 +1,9 @@
-use std::{
-    cell::{Cell, RefCell},
-    collections::{BTreeMap, VecDeque},
-    future::Future,
-    pin::pin,
-    rc::Rc,
-    task::{Context, Poll, Waker},
+use gateway_auth::{
+    crypto::Secret,
+    types::{AuthMethod, AuthPrincipal},
 };
-
-use gateway_auth::{AuthMethod, AuthPrincipal, crypto::Secret};
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     state::{
         AtomicTransition, AuthorityStore, CommitOutcome, RecordKey, RecordMutation, StoredRecord,
@@ -28,6 +22,14 @@ use gateway_live_runtime::{
     },
 };
 use serde_json::{Value, json};
+use std::{
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, VecDeque},
+    future::Future,
+    pin::pin,
+    rc::Rc,
+    task::{Context, Poll, Waker},
+};
 
 fn run<F: Future>(future: F) -> F::Output {
     let mut context = Context::from_waker(Waker::noop());

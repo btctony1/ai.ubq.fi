@@ -1,7 +1,7 @@
 //! Source validation views of current common authority records, never a backup ledger.
 use crate::*;
 use gateway_admin_data::migration::{ObservedRow, audit, logical_fields};
-use gateway_auth::AuthResponse;
+use gateway_auth::types::AuthResponse;
 use gateway_core::{query::*, value::PortableValue};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};

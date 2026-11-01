@@ -1,12 +1,12 @@
 //! Source capture-status metadata admission/recount/pruning against the same ledger fence.
-use crate::{ObservabilityRuntime, types::ObservabilityHost};
 use crate::{
-    replay_model as model, replay_retention_schema as schema,
+    ObservabilityRuntime, replay_model as model, replay_retention_schema as schema,
     replay_values::{SourceObject, read_json_record},
     store,
+    types::ObservabilityHost,
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     query::QueryStore,
     source_json::SourceJson,
     state::{RecordKey, RecordMutation, StoredRecord},

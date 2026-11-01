@@ -1,6 +1,15 @@
-use gateway_core::{GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson};
+use gateway_core::{
+    error::GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson,
+};
 use gateway_schema::{
-    aliases::*, catalog::*, metadata::*, prompt_cache::*, runtime_config::*, selection::*,
+    aliases::*,
+    catalog::{CatalogInput, ProviderCatalog},
+    catalog_views::{capabilities, ordinary_models, public_catalog},
+    metadata::*,
+    native_catalog::native_catalog,
+    prompt_cache::*,
+    runtime_config::*,
+    selection::*,
     snapshot::*,
 };
 use serde_json::{Value, json};

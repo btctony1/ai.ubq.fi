@@ -1,5 +1,6 @@
 //! The import uses the original operation/generation rows, not a second effect ledger.
 use super::super::rows::{GenerationEffect, OperationRow, Phase};
+use super::custody_session::ImportCustodyStartedRequest;
 use super::*;
 use crate::store::Transaction;
 use gateway_auth::crypto::sha256_hex;
@@ -37,7 +38,7 @@ impl NativeImportClaim {
 }
 /// Consumed by the fixed native importer, never deserialized from caller data.
 /// ```compile_fail
-/// use gateway_authority::native_control::import::NativeImportStart;
+/// use gateway_authority::native_control::import::effects::NativeImportStart;
 /// let forged: NativeImportStart<'_> = serde_json::from_str("{}").unwrap();
 /// ```
 pub struct NativeImportStart<'a> {

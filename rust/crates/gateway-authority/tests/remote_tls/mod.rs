@@ -7,7 +7,7 @@ use gateway_auth::{
     },
     native_control::{NATIVE_CONTROL_ERROR_MAX_BYTES, NATIVE_RENEWAL_MAX_MS},
 };
-use gateway_core::{GatewayError, identity::MAX_SAFE_INTEGER};
+use gateway_core::{error::GatewayError, identity::MAX_SAFE_INTEGER};
 use std::{
     io::{self, Read, Write},
     net::{SocketAddr, TcpStream},

@@ -7,13 +7,13 @@ use gateway_admin_runtime::{
     claude::{AccountBinding, Bootstrap},
     claude_generation::{StateGeneration, StateSnapshot},
 };
-use gateway_auth::AuthHost;
-use gateway_catalog_runtime::ProviderBinding;
+use gateway_auth::types::AuthHost;
+use gateway_catalog_runtime::host::ProviderBinding;
 use gateway_core::{
-    GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson,
+    error::GatewayError, js_string::JsString16, model::ModelId, source_json::SourceJson,
     source_serialization as source, state::RevisionCheck,
 };
-use gateway_providers::{Headers, PrepareOptions};
+use gateway_providers::types::{Headers, PrepareOptions};
 use gateway_schema::{catalog::ProviderCatalog, selection::ProviderSelection};
 use serde::Serialize;
 use std::{cmp::Ordering, future::Future};

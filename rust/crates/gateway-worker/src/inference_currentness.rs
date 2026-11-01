@@ -8,7 +8,7 @@ use futures_util::{
     future::{Either, select},
     task::AtomicWaker,
 };
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 use gateway_routing_runtime::{
     currentness::{ObservedRoutingLease, RoutingLeaseState},
     local_work::KERNEL_RENEWAL_INTERVAL_MS,

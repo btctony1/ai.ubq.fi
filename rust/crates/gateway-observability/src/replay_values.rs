@@ -1,7 +1,7 @@
 //! Logical JSON leaves for declared replay record schemas, with explicit ProfileV2 text.
 use crate::store;
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     js_string::JsString16,
     source_json::SourceJson,
     state::{RecordKey, RecordMutation, StoredRecord},

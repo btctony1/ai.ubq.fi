@@ -2,9 +2,11 @@ use super::{
     Audit, AuditInventory, SliceInventory, api_id, reference, safe, under, valid_api_request,
     valid_api_window, valid_kernel_policy,
 };
-use crate::integer;
-use crate::migration::{ObservedRow, kernel};
-use gateway_core::GatewayError;
+use crate::{
+    integer,
+    migration::{ObservedRow, kernel},
+};
+use gateway_core::error::GatewayError;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 

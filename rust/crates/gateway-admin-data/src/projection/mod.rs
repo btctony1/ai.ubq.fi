@@ -1,7 +1,6 @@
 //! Source: src/quota-projection.ts at dc6be2c3; caller supplies locale comparison explicitly.
 mod refill;
-mod source;
-pub use source::project_quota_source;
+pub mod source;
 
 use crate::{json_number, number, positive, present, text};
 use serde_json::{Value, json};

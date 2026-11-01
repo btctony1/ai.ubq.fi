@@ -1,9 +1,9 @@
 //! The provider's JSON strings remain UTF-16 through selection and consumption.
-use gateway_authority::full_pool_reset::{
+use gateway_authority::full_pool_reset::types::{
     SourceCreditCollation, SourceResetCredit, SourceResetInventory,
 };
 use gateway_core::{
-    GatewayError,
+    error::GatewayError,
     identity::{AccountBinding, MAX_SAFE_INTEGER},
     js_string::JsString16,
     source_json::SourceJson,

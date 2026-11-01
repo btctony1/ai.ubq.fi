@@ -1,7 +1,7 @@
 //! Trusted prelaunch resolution, then fixed once-connected actor transports.
 use crate::import_custody_protocol::unavailable;
 use gateway_authority::native_control::NativeRenewalCancellation;
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 use serde::{Deserialize, Serialize};
 use std::{
     net::{SocketAddr, TcpStream, ToSocketAddrs},
@@ -162,14 +162,17 @@ pub(super) fn fixed_authority_client<'a, C: NativeRenewalCancellation>(
     identity: gateway_auth::native_auth::NativeTransportIdentity,
     cancellation: &'a C,
     deadline: Instant,
-) -> Result<gateway_authority::native_control::import::RemoteImportAuthority<'a, C>, GatewayError> {
+) -> Result<
+    gateway_authority::native_control::import::remote::RemoteImportAuthority<'a, C>,
+    GatewayError,
+> {
     let origin = checked_origin(origin)?;
     #[cfg(feature = "native-import-fixture")]
     {
         if origin.host_str() != Some("localhost") {
             return Err(unavailable());
         }
-        gateway_authority::native_control::import::RemoteImportAuthority::from_fixture_connected(
+        gateway_authority::native_control::import::remote::RemoteImportAuthority::from_fixture_connected(
             socket,
             identity,
             cancellation,
@@ -181,7 +184,7 @@ pub(super) fn fixed_authority_client<'a, C: NativeRenewalCancellation>(
         let target = origin
             .join(gateway_auth::native::NATIVE_RENEWAL_AUTHORITY_PATH)
             .map_err(|_| unavailable())?;
-        gateway_authority::native_control::import::RemoteImportAuthority::from_connected(
+        gateway_authority::native_control::import::remote::RemoteImportAuthority::from_connected(
             target.as_str(),
             socket,
             identity,

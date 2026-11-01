@@ -1,8 +1,8 @@
 //! Chat-side half of the one source content normalization policy.
 use super::content_engine::{check_fields, image_detail, role, string_field, with_breakpoint};
 use super::{
-    SourceRequestError as GatewayError,
-    value::{Text, Value, json, normalized_string},
+    error::SourceRequestError as GatewayError,
+    value::{Text, Value, normalized_string},
 };
 fn invalid(message: impl AsRef<str>, param: Option<&str>) -> GatewayError {
     GatewayError::scalar(message.as_ref(), param)

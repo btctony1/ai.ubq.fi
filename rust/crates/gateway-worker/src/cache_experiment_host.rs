@@ -11,14 +11,16 @@ use crate::{
 };
 use futures_util::StreamExt;
 use gateway_authority::{
-    Authority,
     cache_experiment::{
-        CacheDispatch, ExperimentIo, PreparedTarget, ReadSample, RefreshPermit,
+        PreparedTarget, RefreshPermit,
         model::{failed, unavailable},
+        run::{ExperimentIo, ReadSample},
+        transport::CacheDispatch,
     },
     native_control::actor::{NativeActorScope, NativeRenewalActor},
+    store::Authority,
 };
-use gateway_core::{GatewayError, identity::PoolVersionstamp, source_json::SourceJson};
+use gateway_core::{error::GatewayError, identity::PoolVersionstamp, source_json::SourceJson};
 use gateway_observability::{
     ObservabilityRuntime,
     types::{HealthEvent, HealthTarget, ObservabilityHost},
@@ -200,8 +202,7 @@ impl ExperimentIo for Host<'_> {
         let timeout = i32::try_from(deadline.saturating_sub(now_ms()?))
             .map_err(|_| failed("Prompt-cache scope experiment deadline is invalid."))?;
         let timer = cancellation.set_timeout_ms(timeout)?;
-        let base = crate::host::setting(&self.platform.env, "CODEX_BASE_URL")
-            .unwrap_or_else(|| "https://chatgpt.com/backend-api/codex".into());
+        let base = "https://chatgpt.com/backend-api/codex";
         let target =
             PinnedDestination::new(&format!("{}/responses", base.trim().trim_end_matches('/')))?;
         let headers = BTreeMap::from([
@@ -327,7 +328,7 @@ impl ExperimentIo for Host<'_> {
         }
         if head.slot != slot {
             return Ok(ReadSample {
-                value: Err(gateway_authority::cache_experiment::Reason::SlotDrift),
+                value: Err(gateway_authority::cache_experiment::model::Reason::SlotDrift),
                 completed: false,
             });
         }

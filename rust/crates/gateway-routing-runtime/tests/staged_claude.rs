@@ -1,4 +1,4 @@
-use gateway_authority::TokenSource;
+use gateway_authority::store::TokenSource;
 use gateway_core::{
     js_string::JsString16,
     model::ModelId,
@@ -13,8 +13,11 @@ use gateway_core::{
     value::ValueEncoding,
 };
 use gateway_providers::{
-    ClaudeBodyOptions, ClaudeCredentialKind, ClientSurface, OrdinaryPreparationContext,
-    PreparedClaudeBody, prepare_source_request,
+    source_request::prepare_source_request,
+    types::{
+        ClaudeBodyOptions, ClaudeCredentialKind, ClientSurface, OrdinaryPreparationContext,
+        PreparedClaudeBody,
+    },
 };
 use gateway_routing_runtime::{currentness::*, custody, policy, session::*, types::*};
 use gateway_routing_runtime_test_support::{exec::*, host::*, input::*, seed::*, store::*};

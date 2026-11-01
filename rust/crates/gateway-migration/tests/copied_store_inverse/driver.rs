@@ -4,7 +4,7 @@ use super::store::ReadonlyStore;
 use gateway_auth::native_credentials::OwnerFence;
 use gateway_core::identity::MAX_SAFE_INTEGER;
 use gateway_migration::{
-    ArtifactContext,
+    inverse::ArtifactContext,
     native_operator::{ConfiguredNativeCustody, NativeCustodyRegistration, write_private_latest},
     operational::ArtifactInput,
 };

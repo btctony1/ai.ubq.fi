@@ -1,13 +1,12 @@
 //! Fixed, bounded durable replay fences. Expiry cleanup belongs to the request;
 //! capacity never evicts a nonce that can still authenticate a replay.
 use crate::{
-    GatewayError,
     crypto::{base64url, decode_base64url, sha256_hex},
     native::NATIVE_NONCE_CAP,
     native_auth::NativeNonceAuthority,
     store,
 };
-use gateway_core::state::AuthorityStore;
+use gateway_core::{error::GatewayError, state::AuthorityStore};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;

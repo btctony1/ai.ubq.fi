@@ -1,11 +1,13 @@
 //! Thin WebCrypto primitives. Rust authentication code owns every ceremony,
 //! key/algorithm policy, challenge, RP, origin, flags and counter decision.
 
-use gateway_core::GatewayError;
+use gateway_core::error::GatewayError;
 use serde_json::Value;
-use worker::js_sys::{Array, Function, JSON, Promise, Reflect, Uint8Array};
-use worker::wasm_bindgen::{JsCast, JsValue};
-use worker::wasm_bindgen_futures::JsFuture;
+use worker::{
+    js_sys::{Array, Function, JSON, Promise, Reflect, Uint8Array},
+    wasm_bindgen::{JsCast, JsValue},
+    wasm_bindgen_futures::JsFuture,
+};
 
 pub async fn validate_verification_key(
     jwk: &Value,
