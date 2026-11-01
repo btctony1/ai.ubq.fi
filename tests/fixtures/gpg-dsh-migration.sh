@@ -1,7 +1,8 @@
 #!/bin/sh
-# Offline issue #1182 probe. The helper argument is explicit so an owner can test a protected-path
-# candidate without installing it or changing ops/. Requires the pinned legacy commit in local Git.
+# Offline issue #1182 probe: upgrade a fixture-installed legacy helper through the enforced
+# quiescence installer, never the owner's helper. Requires the pinned legacy commit in local Git.
 set -eu
+umask 077
 case ${1:-} in
   /*) helper=$1 ;;
   *) echo 'usage: sh tests/fixtures/gpg-dsh-migration.sh /absolute/path/to/helper' >&2; exit 2 ;;
@@ -9,7 +10,16 @@ esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 root=$(mktemp -d "${TMPDIR:?set TMPDIR to a writable fixture directory}/gpg-dsh-migration.XXXXXX")
 legacy_pid=
+installer_pid=
+new_pid=
 cleanup() {
+  : >"$root/resume"
+  : >"$root/gpg-resume"
+  if [ -n "$installer_pid" ]; then
+    kill "$installer_pid" 2>/dev/null || :
+    wait "$installer_pid" 2>/dev/null || :
+  fi
+  if [ -n "$new_pid" ]; then wait "$new_pid" 2>/dev/null || :; fi
   if [ -n "$legacy_pid" ]; then
     : >"$root/resume"
     wait "$legacy_pid" 2>/dev/null || :
@@ -59,8 +69,18 @@ SH
 cat >"$root/bin/gpg" <<'SH'
 #!/bin/sh
 set -eu
+if [ "${PAUSE_GPG:-}" = 1 ]; then
+  : >"$FIXTURE_ROOT/gpg-paused"
+  attempts=0
+  while [ ! -f "$FIXTURE_ROOT/gpg-resume" ]; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 400 ] || exit 3
+    sleep 0.05
+  done
+fi
 [ "$(cat "$GNUPGHOME/pubring.kbx")" = fixture-public ]
 [ "$(cat "$GNUPGHOME/private-keys-v1.d/AAAA.key")" = fixture-secret ]
+printf '%s\n' "$GNUPGHOME" >>"$FIXTURE_ROOT/gpg.log"
 printf '%s\n' "$GNUPGHOME"
 SH
 cat >"$root/bin/gpgconf" <<'SH'
@@ -72,41 +92,105 @@ export PATH="$root/bin:$PATH"
 uid=$(id -u)
 legacy=$TMPDIR/dsh-gnupg/$uid
 seed=$TMPDIR/dsh-gnupg-$uid/seed
-PAUSE_LEGACY=1 /bin/sh "$root/legacy.sh" >"$root/legacy.out" 2>"$root/legacy.err" &
-legacy_pid=$!
-attempts=0
-while [ ! -f "$root/paused" ]; do
-  attempts=$((attempts + 1))
-  [ "$attempts" -lt 200 ] || fail 'legacy rebuild never reached the copy barrier'
-  kill -0 "$legacy_pid" 2>/dev/null || { cat "$root/legacy.err" >&2; fail 'legacy exited before the barrier'; }
-  sleep 0.05
-done
-stage=$(cat "$root/paused")
-{ [ -d "$legacy.lock" ] && [ -d "$stage" ]; } || fail 'the legacy lock and staging directory must exist'
-read -r owner_pid owner_time <"$legacy.lock/owner"
-{ [ "$owner_pid" = "$legacy_pid" ] && [ "$owner_time" = 1 ]; } || fail 'the lock must have a live, old owner token'
+installed="$root/bin/gpg-dsh 'fixture"
+installer=$repo/scripts/install-gpg-dsh.sh
+start_legacy() {
+  rm -f "$root/resume" "$root/paused"
+  cp -p "$root/legacy.sh" "$installed"
+  PAUSE_LEGACY=1 /bin/sh "$installed" >"$root/legacy.out" 2>"$root/legacy.err" &
+  legacy_pid=$!
+  attempts=0
+  while [ ! -f "$root/paused" ]; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 200 ] || fail 'legacy rebuild never reached the copy barrier'
+    kill -0 "$legacy_pid" 2>/dev/null || { cat "$root/legacy.err" >&2; fail 'legacy exited before the barrier'; }
+    sleep 0.05
+  done
+  stage=$(cat "$root/paused")
+  { [ -d "$legacy.lock" ] && [ -d "$stage" ]; } || fail 'the legacy lock and staging directory must exist'
+  read -r owner_pid owner_time <"$legacy.lock/owner"
+  { [ "$owner_pid" = "$legacy_pid" ] && [ "$owner_time" = 1 ]; } || fail 'the lock must have a live, old owner token'
+}
+start_installer() {
+  GPG_DSH_INSTALL_WAIT_SECONDS=$1 /bin/sh "$installer" "$installed" >"$root/install.out" 2>"$root/install.err" &
+  installer_pid=$!
+  attempts=0
+  until grep -q 'waiting for legacy invocations' "$root/install.err"; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 200 ] || fail 'installer did not observe the active legacy invocation'
+    kill -0 "$installer_pid" 2>/dev/null || { cat "$root/install.err" >&2; fail 'installer exited without draining'; }
+    sleep 0.05
+  done
+}
+resume_legacy() {
+  : >"$root/resume"
+  if wait "$legacy_pid"; then legacy_code=0; else legacy_code=$?; fi
+  legacy_pid=
+  if [ "$legacy_code" -ne 0 ]; then cat "$root/legacy.err" >&2; fail 'migration interrupted the live legacy rebuild'; fi
+  [ "$(cat "$root/legacy.out")" = "$legacy" ] || fail 'legacy signing did not read its complete seed'
+}
 run_new() {
-  /bin/sh "$helper" >"$root/new.out" 2>"$root/new.err" || { cat "$root/new.err" >&2; fail 'new helper failed'; }
+  /bin/sh "$installed" >"$root/new.out" 2>"$root/new.err" || { cat "$root/new.err" >&2; fail 'new helper failed'; }
   [ "$(cat "$root/new.out")" = "$seed" ] || fail 'new signing did not use the per-user seed'
 }
+
+start_legacy
+start_installer 30
+# Invoke signing through the fenced installation while the legacy call is still paused. Observe
+# the queue process itself, not a sleep: it must not enter the unsafe new cleanup until the drain.
+/bin/sh "$installed" >"$root/new.out" 2>"$root/new.err" &
+new_pid=$!
+attempts=0
+until ps -p "$new_pid" -o args= | grep -q gpg-dsh-install-wait; do
+  attempts=$((attempts + 1))
+  [ "$attempts" -lt 200 ] || fail 'new signing did not reach the installation barrier'
+  kill -0 "$new_pid" 2>/dev/null || { cat "$root/new.err" >&2; fail 'new signing exited instead of waiting'; }
+  sleep 0.05
+done
+{ [ -d "$legacy.lock" ] && [ -d "$stage" ]; } || fail 'installation removed the live legacy lock or stage'
+[ ! -s "$root/gpgconf.log" ] || fail 'installation stopped an active legacy agent'
+cmp "$root/legacy.sh" "$installed.install-lock/original" || fail 'installer did not preserve the original helper'
+resume_legacy
+if ! wait "$installer_pid"; then cat "$root/install.err" >&2; fail 'installer failed after legacy completion'; fi
+installer_pid=
+if ! wait "$new_pid"; then cat "$root/new.err" >&2; fail 'queued signing failed after installation'; fi
+new_pid=
+cmp "$helper" "$installed" || fail 'installer did not publish the current repository helper'
+[ ! -e "$installed.install-lock" ] || fail 'successful installation left a barrier'
+[ "$(cat "$root/new.out")" = "$seed" ] || fail 'queued signing did not use the per-user seed'
+[ "$(sed -n '1p' "$root/gpg.log")" = "$legacy" ] || fail 'new signing ran before legacy signing finished'
+printf 'paused rebuild: install=0 new=0 legacy=0 lock-and-stage-preserved=true\n'
+
+# Timeout must roll back without touching the paused call, including an unpublished lock owner.
+start_legacy
+mv "$legacy.lock/owner" "$root/saved-owner"
+start_installer 1
+if wait "$installer_pid"; then fail 'installer published while a legacy call was active'; else install_code=$?; fi
+installer_pid=
+[ "$install_code" -eq 2 ] || fail 'installer did not fail closed on timeout'
+grep -q 'timed out draining' "$root/install.err" || fail 'installer failed for a reason other than quiescence'
+cmp "$root/legacy.sh" "$installed" || fail 'failed installation did not restore the original helper'
+{ [ -d "$legacy.lock" ] && [ -d "$stage" ] && [ ! -e "$installed.install-lock" ]; } || fail 'timeout damaged legacy state or left a barrier'
+mv "$root/saved-owner" "$legacy.lock/owner"
+resume_legacy
+# A legacy fast-path signer has no rebuild lock. Its GnuPG process must drain as well.
+PAUSE_GPG=1 /bin/sh "$installed" >"$root/legacy.out" 2>"$root/legacy.err" &
+legacy_pid=$!
+attempts=0
+while [ ! -f "$root/gpg-paused" ]; do
+  attempts=$((attempts + 1))
+  [ "$attempts" -lt 200 ] || fail 'legacy signer never reached GnuPG'
+  kill -0 "$legacy_pid" 2>/dev/null || { cat "$root/legacy.err" >&2; fail 'legacy signer exited before GnuPG'; }
+  sleep 0.05
+done
+[ ! -e "$legacy.lock" ] || fail 'fast-path signing unexpectedly held a rebuild lock'
+start_installer 30
+[ -d "$legacy" ] || fail 'installer removed the seed of a legacy GnuPG client'
+: >"$root/gpg-resume"
+resume_legacy
+if ! wait "$installer_pid"; then cat "$root/install.err" >&2; fail 'retry after quiescence failed'; fi
+installer_pid=
 run_new
-intact=true
-if [ ! -d "$legacy.lock" ] || [ ! -d "$stage" ]; then intact=false; fi
-if [ "$intact" = true ]; then
-  # A lock holder may not have published its owner yet: this must also defer migration.
-  mv "$legacy.lock/owner" "$root/saved-owner"
-  run_new
-  { [ -d "$legacy.lock" ] && [ -d "$stage" ]; } || fail 'migration removed a lock with an unpublished owner'
-  mv "$root/saved-owner" "$legacy.lock/owner"
-  [ ! -s "$root/gpgconf.log" ] || fail 'migration stopped an active legacy agent'
-fi
-: >"$root/resume"
-if wait "$legacy_pid"; then legacy_code=0; else legacy_code=$?; fi
-legacy_pid=
-printf 'paused rebuild: new=0 legacy=%s lock-and-stage-preserved=%s\n' "$legacy_code" "$intact"
-if [ "$legacy_code" -ne 0 ]; then cat "$root/legacy.err" >&2; fi
-{ [ "$intact" = true ] && [ "$legacy_code" -eq 0 ]; } || fail 'migration interrupted the live legacy rebuild'
-[ "$(cat "$root/legacy.out")" = "$legacy" ] || fail 'legacy signing did not read its complete seed'
 
 # A known exited holder and abandoned private-key copies must still be collected.
 /bin/sh -c 'exit 0' &
@@ -130,4 +214,7 @@ printf 'untouched\n' >"$root/outside/sentinel"
 ln -s "$root/outside" "$legacy.lock"
 run_new
 { [ -L "$legacy.lock" ] && [ "$(cat "$root/outside/sentinel")" = untouched ]; } || fail 'migration followed a legacy lock symlink'
-printf 'PASS: live and unpublished owners deferred; abandoned copies removed; config and layout preserved\n'
+if /bin/sh "$installer" "$installed" >"$root/install.out" 2>"$root/install.err"; then fail 'installer accepted a symlinked legacy lock'; fi
+cmp "$helper" "$installed" || fail 'refused installation changed the helper'
+{ [ -L "$legacy.lock" ] && [ "$(cat "$root/outside/sentinel")" = untouched ]; } || fail 'installer followed a legacy lock symlink'
+printf 'PASS: installation quiescence, timeout rollback, abandoned cleanup, config and layout preserved\n'

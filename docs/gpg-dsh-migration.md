@@ -1,49 +1,77 @@
-# Signing-helper migration candidate (#1182)
+# Signing-helper upgrade quiescence (#1182)
 
-The runtime implementer cannot edit protected `ops/` paths. The repository helper is therefore **not fixed by
-these files alone**. `patches/gpg-dsh-legacy-migration.patch` is an owner-applied candidate against
-`670d2b3a494713a4631f57a2d84369c175963f2b`; applying it requires the repository owner's protected-path authority.
-Merging this candidate does not install anything on the owner's Mac.
+For an upgrade from the shared `$TMPDIR/dsh-gnupg/<uid>` layout, use the enforced installation procedure below.
+Do **not** overwrite the installed legacy helper with `install` or invoke the repository helper alongside a running
+legacy copy: the repository helper's migration cleanup does not coordinate with that old copy's rebuild lock.
+The installer closes that upgrade window without changing the helper's per-user layout or cleanup policy.
+Merging this change does not install anything on the owner's Mac, and no patch application is required.
 
-## Candidate behavior
+## Owner-authorized installation
 
-- Acquire the legacy rebuild lock before discarding the legacy seed, staging copies, or set-aside copies.
-- Defer migration when the legacy lock belongs to a live process, even if its timestamp looks stale. The new call
-  still signs using `$TMPDIR/dsh-gnupg-<uid>/seed`; a later call performs cleanup after the legacy call finishes.
-- Also defer when the owner has not been published, or the lock is not a real directory owned by this user.
-  An unidentifiable owner is not proof of abandonment; any manual recovery requires quiescing legacy invocations first.
-- Continue reclaiming locks with known dead owners and removing abandoned legacy key copies under the lock.
-- Retain ownership checks, configuration-file refusal, and the per-user layout. Current-layout stale-lock recovery
-  and publication behavior remain separate work under #1168.
+1. Identify the canonical absolute installed path already used as `gpg.program`, normally `~/bin/gpg-dsh`.
+   The file and its directory must be owned by the installing user. Symlinked files or parent paths are refused.
+2. Stop automatic signing jobs during maintenance. All callers must use that canonical installed entrypoint;
+   stop callers of other copies, relative paths, or aliases separately. Do not launch `ops/gpg-dsh.sh` directly
+   during the upgrade. The installer fences the configured entrypoint, not arbitrary copies elsewhere.
+3. Compare the repository helper with the installed helper, then explicitly run the installer as that user:
 
-## Owner application and deterministic fixture
+   ```sh
+   diff ops/gpg-dsh.sh "$HOME/bin/gpg-dsh"
+   sh scripts/install-gpg-dsh.sh "$HOME/bin/gpg-dsh"
+   ```
 
-Only an authorized owner should apply the protected-path patch:
+   A difference is expected; inspect it before authorizing installation. This replaces the direct `install -m`
+   step in the older signing-helper installation notes for legacy upgrades. The installer does not change Git
+   configuration, credentials, the real GnuPG homedir, or service configuration.
+4. Resume signing jobs only after the installer reports success. The existing `gpg.program` path is unchanged.
+   The first sandboxed signing call then removes abandoned legacy copies and uses `$TMPDIR/dsh-gnupg-<uid>/seed`.
+
+## Enforced drain and failure behavior
+
+The installer serializes upgrades with `<installed-path>.install-lock`, saves the original helper there, and
+atomically replaces the installed entrypoint with a temporary queue. New signing calls at that path wait rather
+than executing either helper during the drain. Already-running shells keep their old script inode and continue
+untouched. Process enumeration waits for those shells and for this user's GnuPG clients, including a legacy
+signer that has already released its rebuild lock and executed `gpg`. A live legacy lock owner also prevents
+publication, regardless of the lock's age. A missing owner is not proof of abandonment.
+
+Only after the drain does the installer atomically publish the repository helper and release queued calls.
+It neither kills a legacy process nor removes legacy locks, seeds, stages, set-asides, or agents. The helper
+continues to enforce ownership checks, refuse seeded configuration files, and remove abandoned key copies.
+Stale-lock recovery and publication races inside the helper remain separate work under #1168.
+
+The drain defaults to 60 seconds. `GPG_DSH_INSTALL_WAIT_SECONDS` may explicitly select 1–600 seconds. A timeout,
+process-enumeration failure, unsafe legacy lock, or handled signal restores the original helper **before** releasing
+queued calls and exits nonzero. Inspect the failure, let legacy calls finish, and retry; do not bypass the drain.
+An unpublished legacy owner requires manual investigation with all legacy callers stopped before recovering its
+abandoned lock. A symlink or foreign-owned lock is never removed by the installer.
+
+An uncatchable termination or failed rollback can leave the temporary queue and installation barrier in place,
+failing closed. Do not delete a live installer's barrier. The owner must first stop all signing callers and prove
+that no installer or legacy invocation remains, then restore `<installed-path>.install-lock/original` to the
+installed path before removing the barrier and retrying. The saved files are helper scripts, not signing keys.
+
+## Deterministic offline fixture
 
 ```sh
-git apply --check patches/gpg-dsh-legacy-migration.patch
-git apply patches/gpg-dsh-legacy-migration.patch
 sh tests/fixtures/gpg-dsh-migration.sh "$(pwd)/ops/gpg-dsh.sh"
 ```
 
-The fixture needs a writable absolute `TMPDIR` and the local Git object for legacy helper
-`ed0ecdda85ee261bc8388558bb26c2c86f5ac9a5`. It performs no fetch, install, real signing-key access, or real GnuPG invocation.
-All keys are fixture strings; `gpg`, `gpgconf`, and the real-homedir write probe are replaced. A copy barrier pauses
-that exact legacy helper after its lock and staging directory exist. A fake clock makes its live owner token old
-without a timing-dependent sleep. The fixture invokes the candidate, checks preservation, repeats with the owner
-file temporarily unpublished, and then releases and awaits the old call. Both calls must succeed. A subsequent call
-must collect a dead-owner lock and abandoned key copies; configuration refusal and lock-symlink preservation are
-also checked. All fixture state is removed on exit, including failure.
+Set `TMPDIR` to a writable absolute fixture directory. The local Git object for legacy helper
+`ed0ecdda85ee261bc8388558bb26c2c86f5ac9a5` must exist; the fixture performs no fetch or install of dependencies.
+It installs scripts only inside its private fixture directory, never at the owner's installed path. All keys
+are fixture strings; `gpg`, `gpgconf`, and the real-homedir write probe are replaced.
 
-Against the unpatched base helper, the same command intentionally fails: the new call exits 0, the lock and stage
-are deleted, and the resumed legacy call exits 2. Against a temporary patched copy, it must report
-`new=0 legacy=0 lock-and-stage-preserved=true` and `PASS`. The helper argument can point to that temporary copy;
-there is no need to change the protected checkout or install a helper to validate the candidate.
+A copy barrier pauses the exact legacy helper after its lock and staging directory exist. A fake clock makes
+its live owner token old without an aging sleep. While paused, the fixture starts the installer and a signing
+call through its queue, observes both barriers, and verifies that no legacy directory or agent was touched.
+It resumes the old call and requires `install=0 new=0 legacy=0 lock-and-stage-preserved=true`, with legacy signing
+preceding new-layout signing. A second paused call with an unpublished owner proves timeout rollback leaves the
+old helper and rebuild intact. A paused legacy GnuPG client without a rebuild lock must also drain before
+installation succeeds. Abandoned-copy removal, seeded configuration refusal, and legacy lock-symlink
+preservation are also checked. Fixture state is removed on exit.
 
-The patch also adds the probe to `tests/gpg-dsh.test.ts`, so the existing Linux and macOS test commands exercise
-the regression after owner application, without changing any existing assertions. The legacy commit is an ancestor
-of the base revision and is available with CI's full-history checkout.
-
-After owner application, run the normal focused `tests/gpg-dsh.test.ts` suite and full
-`bun --no-env-file run verify` with the repository's frozen dependencies and trusted native fixture binding.
-Installation, if separately authorized, still requires comparing the candidate with `~/bin/gpg-dsh` first.
+`tests/gpg-dsh.test.ts` invokes this fixture directly, so the existing focused Linux and macOS helper tests exercise
+the regression without applying a patch. CI's full-history checkout provides the legacy object. Run that focused
+suite, changed-document formatting, shell syntax/lint checks, and the normal strict TypeScript check with the
+repository's frozen dependencies; no full verification or live installation is needed for this bounded change.
