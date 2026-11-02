@@ -9,6 +9,7 @@ case ${1:-} in
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 root=$(mktemp -d "${TMPDIR:?set TMPDIR to a writable fixture directory}/gpg-dsh-migration.XXXXXX")
+root=$(CDPATH='' cd -- "$root" && pwd -P)
 legacy_pid=
 installer_pid=
 new_pid=
