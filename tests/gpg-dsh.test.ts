@@ -812,7 +812,8 @@ test("a seed left in the shared dsh-gnupg layout is discarded with its agent", a
 
 test("installation drains a live legacy rebuild before allowing new-layout signing", async () => {
   const fixture = fileURLToPath(new URL("./fixtures/gpg-dsh-migration.sh", import.meta.url));
-  const output = await runFixture("/bin/sh", { args: [fixture, HELPER], env: { PATH: HOST_PATH, TMPDIR: tmpdir() } });
+  // An 80-column display clips the gate marker unless the fixture widens ps arguments.
+  const output = await runFixture("/bin/sh", { args: [fixture, HELPER], env: { PATH: HOST_PATH, TMPDIR: tmpdir(), COLUMNS: "80" } });
   assert.equal(output.code, 0, decoder.decode(output.stderr));
   assert.match(decoder.decode(output.stdout), /install=0 new=0 legacy=0 lock-and-stage-preserved=true/);
   assert.match(decoder.decode(output.stdout), /PASS: installation quiescence/);
