@@ -8,7 +8,7 @@ Provider routing decisions are maintained separately in `docs/provider-decision-
 
 ## Native Claude Messages flattens Codex namespace tools - 2026-11-04
 
-The direct Claude subscription and native OpenLux Messages translator now flattens Codex namespace tools as `<namespace>_<tool>`, retains the reverse mapping for Responses output and signed replay, and keeps ordinary function names unchanged. Late developer/system text is preserved in native system blocks because Messages has no interleaved developer role. A hosted `web_search` declaration is omitted only when the caller explicitly sets `external_web_access:false`; enabled web search and JSON-schema structured output remain unsupported on this lane.
+The direct Claude subscription and native OpenLux Messages translator now flattens Codex namespace tools as `<namespace>_<tool>`, retains the reverse mapping for Responses output and signed replay, and keeps ordinary function names unchanged. Late developer/system text is preserved in native system blocks because Messages has no interleaved developer role. JSON-schema `text.format` maps to native `output_config.format`. A hosted `web_search` declaration is omitted only when the caller explicitly sets `external_web_access:false`; enabled web search remains unsupported on this lane.
 
 Reason: Codex 0.166 TUI requests include namespaced Clock, collaboration and MCP tools, late hook/time developer messages, a concise reasoning-summary preference, and a disabled web-search declaration. The previous translator rejected the first such request before dispatch as having no lossless native representation.
 
