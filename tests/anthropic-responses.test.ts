@@ -48,6 +48,21 @@ const collect = async (response: Response): Promise<JsonRecord[]> => {
 };
 const terminalResponse = (events: JsonRecord[]): JsonRecord => events.at(-1)?.response as JsonRecord;
 
+test("Anthropic Responses restores Codex namespace tool names", async () => {
+  const upstream = new Response(
+    JSON.stringify(message([{ type: "tool_use", id: "toolu_1", name: "clock_curr_time", input: {} }], { input_tokens: 4, output_tokens: 2 }, "tool_use")),
+    { headers: { "content-type": "application/json" } }
+  );
+  const response = await normalizeAnthropicResponsesResponse(upstream, {
+    model,
+    toolNames: new Map([["clock_curr_time", { name: "curr_time", namespace: "clock" }]]),
+  });
+  const payload = await response.json();
+  assert.equal(payload.output[0].type, "function_call");
+  assert.equal(payload.output[0].name, "curr_time");
+  assert.equal(payload.output[0].namespace, "clock");
+});
+
 test("Anthropic Responses usage counts native cache-fill input once and preserves unknown reads", () => {
   const usage = toAnthropicResponsesUsage({ input_tokens: 15, output_tokens: 4, cache_creation_input_tokens: 1028, buyer_cost_micro: 1056 });
   assert.deepEqual(usage, {

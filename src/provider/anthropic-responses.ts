@@ -1,6 +1,7 @@
 // Native Anthropic Messages output translated into the public Responses contract.
 import { readBoundedResponseBody } from "../bounded-response-body.ts";
 import { encodeClaudeResponsesEvent as encodeResponsesEvent, claudeResponsesEnvelope as responsesEnvelope } from "./anthropic-response-wire.ts";
+import type { ClaudeToolName } from "./anthropic-response-wire.ts";
 import { BUFFERED_INFERENCE_DEADLINE_MS, STREAM_FIRST_EVENT_DEADLINE_MS, STREAM_INACTIVITY_DEADLINE_MS } from "../inference-deadline.ts";
 import { MAX_RESPONSES_SSE_EVENT_BYTES, ResponsesStreamError } from "../responses-stream.ts";
 import { isRecord } from "../utils.ts";
@@ -15,6 +16,7 @@ export type AnthropicResponsesOptions = Readonly<{
   reasoningSummary?: string;
   reasoningReplayScope?: string;
   provider?: string;
+  toolNames?: ReadonlyMap<string, ClaudeToolName>;
 }>;
 
 const record = (value: unknown): value is JsonRecord => isRecord(value) && !Array.isArray(value);
@@ -205,7 +207,16 @@ const createMessagesTranslator = (options: AnthropicResponsesOptions) => {
     if (block.kind === "thinking") {
       return { id: block.id, type: "reasoning", status, summary: [{ type: "summary_text", text: block.text }] };
     }
-    return { id: block.id, type: "function_call", status, call_id: block.callId, name: block.name, arguments: block.args };
+    const original = options.toolNames?.get(block.name) ?? { name: block.name, namespace: null };
+    return {
+      id: block.id,
+      type: "function_call",
+      status,
+      call_id: block.callId,
+      name: original.name,
+      ...(original.namespace === null ? {} : { namespace: original.namespace }),
+      arguments: block.args,
+    };
   };
 
   const open = (nativeIndex: number, content: JsonRecord): JsonRecord[] => {
