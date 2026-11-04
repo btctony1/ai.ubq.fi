@@ -642,6 +642,7 @@ export const fetchClaudeCodeResponses = async (body: unknown, options: ClaudeCod
     reasoningSummary: responseReasoningSummary(body),
     reasoningReplayScope: options.reasoningReplayScope,
     provider: "claude_code",
+    toolNames: native.toolNames,
   });
   return {
     ...(accountBinding ? { account_binding: accountBinding } : {}),
