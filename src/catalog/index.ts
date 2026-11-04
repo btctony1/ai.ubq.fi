@@ -115,7 +115,7 @@ const catalogResponse = async (catalog: LoadedCodexCatalog, req: Request, cacheS
   warmOpenRouterModels();
   const headers = new Headers({
     "Content-Type": catalog.metadata.content_type,
-    "Cache-Control": "private, max-age=300",
+    "Cache-Control": "private, max-age=300, stale-while-revalidate=86400",
     "x-uos-upstream": "chatgpt_codex",
     "x-uos-cache": cacheState,
   });
@@ -404,6 +404,54 @@ const recoverFailedCatalogRefresh = async (context: CodexCatalogRefreshContext):
   return catalogResponse(recovered, context.req, recoveredCacheState(generationCurrent, context.cached));
 };
 
+/**
+ * Run one refresh under its lease. The lease must already belong to this caller.
+ * A stale cached response is served by a separate path; this helper is used both
+ * for synchronous cold misses and for stale-while-revalidate background work.
+ */
+const refreshCodexCatalogWithLease = async (
+  kv: Kv,
+  req: Request,
+  version: string,
+  authGeneration: string,
+  cached: LoadedCodexCatalog | null,
+  nowMs: number,
+  leaseOwner: string,
+  dependencies: CodexCatalogDependencies
+): Promise<Response> => {
+  const leaseHeartbeat = startRefreshLeaseHeartbeat(kv, version, leaseOwner);
+  let providerDegradationObserved = false;
+  let providerDegradationRecorded = false;
+  const recordObservedProviderDegradation = async (): Promise<void> => {
+    if (!providerDegradationObserved || providerDegradationRecorded) return;
+    providerDegradationRecorded = true;
+    await recordCatalogDegradation(version, dependencies);
+  };
+  const context: CodexCatalogRefreshContext = {
+    kv,
+    req,
+    version,
+    authGeneration,
+    cached,
+    nowMs,
+    leaseLost: () => leaseHeartbeat.lost(),
+    observeProviderDegradation: () => {
+      providerDegradationObserved = true;
+    },
+    recordObservedProviderDegradation,
+  };
+  try {
+    return await refreshCodexCatalog(context);
+  } catch (error) {
+    console.error(`[ai.ubq.fi] Codex catalog refresh failed for ${version}:`, error);
+    await recordObservedProviderDegradation();
+    return await recoverFailedCatalogRefresh(context);
+  } finally {
+    await leaseHeartbeat.stop();
+    await releaseRefreshLease(kv, version, leaseOwner);
+  }
+};
+
 export const handleCodexCatalogModels = async (req: Request, rawVersion: string, dependencies: CodexCatalogDependencies = {}): Promise<Response> => {
   const version = rawVersion.trim();
   if (!parseCodexClientVersion(version)) {
@@ -447,37 +495,17 @@ export const handleCodexCatalogModels = async (req: Request, rawVersion: string,
     return meteredCatalogOrError("Codex model catalog refresh is already in progress");
   }
 
-  const leaseHeartbeat = startRefreshLeaseHeartbeat(kv, version, leaseOwner);
-  let providerDegradationObserved = false;
-  let providerDegradationRecorded = false;
-  const recordObservedProviderDegradation = async (): Promise<void> => {
-    if (!providerDegradationObserved || providerDegradationRecorded) return;
-    providerDegradationRecorded = true;
-    await recordCatalogDegradation(version, dependencies);
-  };
-  const context: CodexCatalogRefreshContext = {
-    kv,
-    req,
-    version,
-    authGeneration,
-    cached,
-    nowMs,
-    leaseLost: () => leaseHeartbeat.lost(),
-    observeProviderDegradation: () => {
-      providerDegradationObserved = true;
-    },
-    recordObservedProviderDegradation,
-  };
-  try {
-    return await refreshCodexCatalog(context);
-  } catch (error) {
-    console.error(`[ai.ubq.fi] Codex catalog refresh failed for ${version}:`, error);
-    await recordObservedProviderDegradation();
-    return await recoverFailedCatalogRefresh(context);
-  } finally {
-    await leaseHeartbeat.stop();
-    await releaseRefreshLease(kv, version, leaseOwner);
+  // A verified cached catalog is safe to serve while one background refresh
+  // replaces it. This keeps the five-minute expiry from becoming a latency
+  // spike for the first client that asks. A cold miss still waits for upstream.
+  if (cached) {
+    void refreshCodexCatalogWithLease(kv, req, version, authGeneration, cached, nowMs, leaseOwner, dependencies).catch((error: unknown) => {
+      console.error(`[ai.ubq.fi] Codex catalog background refresh failed for ${version}:`, error);
+    });
+    return catalogResponse(cached, req, "stale");
   }
+
+  return await refreshCodexCatalogWithLease(kv, req, version, authGeneration, cached, nowMs, leaseOwner, dependencies);
 };
 
 export const getCatalogClientVersion = (req: Request): string | null => {

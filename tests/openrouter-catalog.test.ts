@@ -1,4 +1,5 @@
 import { createFetchMock } from "./helpers/fetch-mock.ts";
+import { waitForCatalogLeaseRelease } from "./helpers/codex-catalog-refresh.ts";
 import { test } from "bun:test";
 import type { Kv, KvEntry, KvEntryMaybe, KvKey } from "#kv";
 // Codex-catalog wiring for the OpenRouter upstream: its served catalogue
@@ -79,7 +80,8 @@ const { buildDeepSeekWaterfallCodexRecord } = await import("../src/catalog/model
 const { handleModels } = await import("../src/models/catalog.ts");
 const { DEEPSEEK_WATERFALL_MODEL_ID } = await import("../src/deepseek/waterfall.ts");
 const { loadCatalog, resetCodexCatalogMemoForTest, storeCodexCatalog } = await import("../src/catalog/store.ts");
-const { CODEX_CATALOG_AUTH_GENERATION_KEY, CODEX_CATALOG_CHUNK_PREFIX, CODEX_CATALOG_FRESH_MS, CODEX_CATALOG_PREFIX } = await import("../src/catalog/types.ts");
+const { CODEX_CATALOG_AUTH_GENERATION_KEY, CODEX_CATALOG_CHUNK_PREFIX, CODEX_CATALOG_FRESH_MS, CODEX_CATALOG_LEASE_PREFIX, CODEX_CATALOG_PREFIX } =
+  await import("../src/catalog/types.ts");
 import type { CodexCatalogMetadata } from "../src/catalog/types.ts";
 const { CODEX_AUTH_POOL_KV_KEY, resetCodexAuthCacheForTest } = await import("../src/codex/index.ts");
 const { setKvForTest } = await import("../src/kv.ts");
@@ -413,6 +415,7 @@ test("codex catalog: revalidation reapplies narrower OpenRouter windows to the s
       const firstModel = ((await first.json()) as { models: Record<string, unknown>[] }).models[0];
       assert.deepEqual([firstModel.context_window, firstModel.max_context_window], [1_050_000, 1_050_000]);
       assert.equal(firstModel.auto_compact_token_limit, 892_500);
+      await waitForCatalogLeaseRelease(kvStore, keyToString([...CODEX_CATALOG_LEASE_PREFIX, "0.100.0"]));
       assert.equal(upstreamIfNoneMatch, '"catalog-etag"');
       const loaded = await loadCatalog(kvStub, "0.100.0", AUTH_GENERATION, now);
       assert.ok(loaded);
@@ -424,6 +427,9 @@ test("codex catalog: revalidation reapplies narrower OpenRouter windows to the s
         fetcher: () => Promise.resolve(Response.json({ data: [{ id: "openai/gpt-6-astra", context_length: 128_000 }] })),
       });
       now += CODEX_CATALOG_FRESH_MS + 1;
+      const stale = await handleCodexCatalogModels(codexCatalogRequest(), "0.100.0");
+      assert.equal(stale.headers.get("x-uos-cache"), "stale");
+      await waitForCatalogLeaseRelease(kvStore, keyToString([...CODEX_CATALOG_LEASE_PREFIX, "0.100.0"]));
       const second = await handleCodexCatalogModels(codexCatalogRequest(), "0.100.0");
       const secondModel = ((await second.json()) as { models: Record<string, unknown>[] }).models[0];
       assert.deepEqual([secondModel.context_window, secondModel.max_context_window], [872_000, 872_000]);
