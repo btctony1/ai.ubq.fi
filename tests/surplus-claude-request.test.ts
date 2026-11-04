@@ -227,6 +227,29 @@ test("Surplus Claude reasoning preserves requested effort and the Codex ultra tr
   }
 });
 
+test("Surplus Claude carries JSON-schema structured output with adaptive reasoning", () => {
+  const schema = {
+    type: "object",
+    properties: { title: { type: "string", minLength: 1, maxLength: 36 } },
+    required: ["title"],
+    additionalProperties: false,
+  };
+  const result = buildSurplusClaudeRequest(
+    {
+      ...base(),
+      reasoning: { effort: "high", summary: "concise" },
+      text: { format: { type: "json_schema", strict: true, schema, name: "codex_output_schema" } },
+    },
+    undefined,
+    { supportsNativeReasoningEffort: true }
+  );
+  assert.ok(result);
+  assert.deepEqual(result.body.output_config, {
+    effort: "high",
+    format: { type: "json_schema", schema },
+  });
+});
+
 test("Surplus Claude accepts the Codex concise reasoning summary preference", () => {
   const result = buildSurplusClaudeRequest({ ...base(), reasoning: { effort: "high", summary: "concise" } }, undefined, {
     supportsNativeReasoningEffort: true,
@@ -280,7 +303,7 @@ test("Surplus native adapter returns incompatible inputs intact to the existing 
       ...base(),
       input: [{ role: "user", content: [{ type: "input_text", text: "stable", cache_control: { type: "ephemeral" }, prompt_cache_breakpoint: {} }] }],
     },
-    { ...base(), text: { format: { type: "json_schema", schema: { type: "object" } } } },
+    { ...base(), text: { format: { type: "json_schema" } } },
     { ...base(), text: { format: "text" } },
     { ...base(), store: true },
     { ...base(), previous_response_id: "resp_other_provider" },

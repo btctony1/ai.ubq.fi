@@ -310,12 +310,18 @@ const applyNativeCachePolicy = (
   return { promptCacheMode: explicit ? "explicit" : "implicit", explicitBreakpointCount };
 };
 
-const supportedTextFormat = (value: unknown): boolean => {
-  if (value === undefined) return true;
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== "format")) return false;
+const structuredOutputFormat = (value: unknown): JsonRecord | null | undefined => {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "format")) return null;
   const format = value.format;
-  return format === undefined || (isRecord(format) && format.type === "text" && Object.keys(format).every((key) => key === "type"));
+  if (format === undefined) return undefined;
+  if (!isRecord(format) || format.type !== "json_schema" || !isRecord(format.schema)) return null;
+  if (format.strict !== undefined && typeof format.strict !== "boolean") return null;
+  if (format.name !== undefined && typeof format.name !== "string") return null;
+  return { type: "json_schema", schema: format.schema };
 };
+
+const supportedTextFormat = (value: unknown): boolean => structuredOutputFormat(value) !== null;
 
 const supportedBaseControls = (body: JsonRecord): boolean => {
   if (!isSurplusClaudeModel(body.model) || (body.store !== undefined && body.store !== false)) return false;
@@ -358,12 +364,19 @@ const nativeBody = (
   messages: NativeMessage[],
   tools: JsonRecord[],
   choice: JsonRecord,
-  reasoning: JsonRecord
+  reasoning: JsonRecord,
+  format: JsonRecord | undefined
 ): JsonRecord => {
   const native: JsonRecord = { model: body.model, max_tokens: maxTokens, messages, stream: body.stream === true, ...reasoning };
   if (system.length) native.system = system;
   if (tools.length) native.tools = tools;
   if (Object.keys(choice).length) native.tool_choice = choice;
+  if (format) {
+    native.output_config = {
+      ...(isRecord(native.output_config) ? native.output_config : {}),
+      format,
+    };
+  }
   // The caller's affinity key remains a Surplus router hint, never a native Codex header.
   for (const key of ["temperature", "top_p", "prompt_cache_key"] as const) if (body[key] !== undefined) native[key] = body[key];
   return native;
@@ -395,9 +408,15 @@ export const buildSurplusClaudeRequest = (
     options.nativeReasoningEfforts
   );
   if (!reasoning) return null;
+  const format = structuredOutputFormat(body.text);
+  if (format === null) return null;
   const choice = parallelToolChoice(body, projection);
   if (!choice) return null;
   const policy = applyNativeCachePolicy(body, system, messages, projection.tools);
   if (!policy) return null;
-  return { ...policy, body: nativeBody(body, maxTokens, system, messages, projection.tools, choice, reasoning), toolNames: projection.toolNames };
+  return {
+    ...policy,
+    body: nativeBody(body, maxTokens, system, messages, projection.tools, choice, reasoning, format),
+    toolNames: projection.toolNames,
+  };
 };
