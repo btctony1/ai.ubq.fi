@@ -1164,10 +1164,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway-prompt-admission"
+version = "0.1.0"
+dependencies = [
+ "gateway-compaction",
+ "gateway-core",
+ "gateway-schema",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "gateway-providers"
 version = "0.1.0"
 dependencies = [
+ "gateway-compaction",
  "gateway-core",
+ "gateway-prompt-admission",
  "gateway-schema",
  "serde",
  "serde_json",
@@ -1254,6 +1268,7 @@ dependencies = [
  "gateway-auth",
  "gateway-authority",
  "gateway-core",
+ "gateway-prompt-admission",
  "gateway-providers",
  "gateway-routing-runtime-test-support",
  "gateway-schema",

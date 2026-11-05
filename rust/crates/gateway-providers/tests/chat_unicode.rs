@@ -1,6 +1,6 @@
 //! Internal source-string semantics; these do not claim ordinary JSON ingress supports lone surrogates.
 use gateway_core::js_string::JsString16;
-use gateway_providers::chat::{FORWARD_LIMIT, bound_source};
+use gateway_prompt_admission::forwarding::{FORWARD_LIMIT, bound_source};
 use serde_json::Value;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 

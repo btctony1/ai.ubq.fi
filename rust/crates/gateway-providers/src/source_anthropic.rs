@@ -731,6 +731,8 @@ pub(crate) fn chat(
         body,
         names,
         elisions: vec![],
+        exemptions: vec![],
+        admission: None,
         warnings: vec![],
     })
 }

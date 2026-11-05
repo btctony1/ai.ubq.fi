@@ -382,15 +382,6 @@ pub struct DecodedResponse {
     pub native_replay: Option<Value>,
     pub raw_body: Option<Vec<u8>>,
 }
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Elision {
-    pub path: String,
-    pub call_id: Option<JsString16>,
-    pub kind: String,
-    pub original_bytes: usize,
-    pub forwarded_bytes: usize,
-    pub omitted_bytes: usize,
-}
 pub(crate) fn invalid(message: impl Into<String>, param: &str) -> GatewayError {
     GatewayError::new(400, message, Some("invalid_request_error")).with_param(Some(param))
 }

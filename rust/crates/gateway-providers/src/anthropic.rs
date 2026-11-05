@@ -28,6 +28,8 @@ pub fn try_claude_chat(
         body: projection.body,
         tool_names: projection.names,
         elisions: projection.elisions,
+        exemptions: projection.exemptions,
+        admission: projection.admission,
         warnings: projection.warnings,
     })
 }

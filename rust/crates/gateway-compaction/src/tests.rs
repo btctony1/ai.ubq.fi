@@ -311,14 +311,7 @@ fn source_codex_items_and_opaque_redaction_are_exact() {
     }
 }
 #[test]
-fn source_utf16_estimator_and_bounded_heads_match_including_split_surrogates() {
-    for case in cases("tokens") {
-        let text: Text = decode(&field(&case, "text"));
-        assert_eq!(
-            state::estimate_tokens(&text),
-            decode::<usize>(&field(&case, "expected"))
-        );
-    }
+fn source_utf16_bounded_heads_match_including_split_surrogates() {
     for case in cases("truncation") {
         let value: Text = decode(&field(&case, "text"));
         let expected: Text = decode(&field(&case, "expected"));
