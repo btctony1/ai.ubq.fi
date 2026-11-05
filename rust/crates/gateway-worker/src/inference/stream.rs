@@ -3,7 +3,7 @@ use super::{
     ATTEMPT_DEADLINE_MS, CEREBRAS_RATE_LIMIT_HEADERS, ResponseResult, apply_warnings, copy_headers,
     invalid, observe_event, provider_correlation, set_header,
 };
-use crate::inference_source::cerebras_error_body;
+use crate::inference_source::{abort_frame, cerebras_error_body, stream_failure};
 use crate::storage::now_ms;
 use crate::transport::stream::FinishHook;
 use crate::transport::{body, stream::ObservedStream};
@@ -16,6 +16,7 @@ use crate::{
     },
 };
 use futures_util::StreamExt;
+use futures_util::future::{Either, select};
 use gateway_core::{error::GatewayError, lifecycle::SemanticTerminal, provider::UpstreamProvider};
 use gateway_prompt_admission::native_http_failure::{SelectedAnswer, reencodes};
 use gateway_providers::response::decode_response;
@@ -25,7 +26,6 @@ use gateway_providers::{
     types::{ClientSurface, DecodePlan, ProviderEvent},
 };
 use gateway_routing_runtime::types::PreparedWireRequest;
-use serde_json::json;
 use std::{collections::VecDeque, rc::Rc};
 use worker::{Response, ResponseBody};
 pub(super) struct Relay {
@@ -45,19 +45,27 @@ pub(super) struct Relay {
 
 impl Relay {
     fn failure_event(&self) -> ProviderEvent {
-        let code = match self.plan.provider {
-            UpstreamProvider::Deepseek => "deepseek_upstream_stream_error",
-            UpstreamProvider::Lithos => "lithos_upstream_stream_error",
-            _ => "upstream_stream_error",
-        };
-        let error = json!({"code":code,"message":"Upstream Chat Completions stream failed."});
-        if self.plan.surface == ClientSurface::Chat {
-            ProviderEvent::chat(json!({"error":error}))
-        } else {
-            ProviderEvent::responses(
-                json!({"type":"response.failed","sequence_number":self.next_sequence,"response":{"id":self.plan.response_id,"object":"response","status":"failed","error":error}}),
-            )
-        }
+        stream_failure(
+            self.plan.provider,
+            self.plan.surface,
+            &self.plan.response_id,
+            self.next_sequence,
+        )
+    }
+
+    /// An aborted relay is not a provider semantic terminal; see `abort_frame`.
+    fn aborted(&mut self) -> Option<worker::Result<Vec<u8>>> {
+        self.done = true;
+        let plan = &self.plan;
+        let client = self.cancellation.client_aborted();
+        abort_frame(
+            client,
+            plan.provider,
+            plan.surface,
+            &plan.response_id,
+            self.next_sequence,
+        )
+        .map(|event| Ok(event.encode_sse().into_bytes()))
     }
 
     async fn events(&mut self, events: Vec<ProviderEvent>) -> Result<(), GatewayError> {
@@ -165,18 +173,28 @@ impl Relay {
             if self.done {
                 return None;
             }
-            let incoming = {
-                match futures_util::future::select(
-                    Box::pin(self.source.next()),
-                    std::pin::Pin::new(&mut self.heartbeat),
-                )
-                .await
-                {
-                    futures_util::future::Either::Left((incoming, _remaining)) => Some(incoming),
-                    futures_util::future::Either::Right(((), remaining)) => {
-                        drop(remaining);
-                        None
-                    }
+            if self.cancellation.signal().aborted() {
+                return self.aborted();
+            }
+            let cancellation = self.cancellation.clone();
+            let abort = std::future::poll_fn(move |context| {
+                cancellation.register_waker(context.waker());
+                if cancellation.signal().aborted() {
+                    std::task::Poll::Ready(())
+                } else {
+                    std::task::Poll::Pending
+                }
+            });
+            let read = select(
+                Box::pin(self.source.next()),
+                std::pin::Pin::new(&mut self.heartbeat),
+            );
+            let incoming = match select(abort, read).await {
+                Either::Left(((), _)) => continue,
+                Either::Right((Either::Left((incoming, _)), _)) => Some(incoming),
+                Either::Right((Either::Right(((), remaining)), _)) => {
+                    drop(remaining);
+                    None
                 }
             };
             let Some(incoming) = incoming else {
@@ -442,7 +460,8 @@ impl Reply<'_> {
             self.host.cancellation.clone(),
             None,
             self.finish,
-        );
+        )
+        .with_deadline_frame();
         let mut response = stream
             .into_response()
             .map_err(|_| invalid("The downstream stream is unavailable."))?

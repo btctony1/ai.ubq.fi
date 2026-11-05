@@ -16,7 +16,7 @@
     "gateway-providers": 9718,
     "gateway-routing-runtime": 7486,
     "gateway-schema": 7544,
-    "gateway-worker": 20356
+    "gateway-worker": 20263
   },
   "targets": {
     "gateway-admin-runtime/test/contracts": 1509,
