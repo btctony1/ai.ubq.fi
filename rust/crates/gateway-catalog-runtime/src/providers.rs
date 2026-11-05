@@ -258,11 +258,7 @@ fn openrouter(raw: &SourceJson) -> Option<SourceJson> {
     let reasoning = get(raw, "reasoning")
         .filter(|v| source::entries(v).is_some())
         .and_then(|v| {
-            let mut seen = BTreeSet::new();
-            let efforts = strings(get(&v, "supported_efforts"))
-                .into_iter()
-                .filter(|e| seen.insert(e.clone()))
-                .collect::<Vec<_>>();
+            let efforts = unique(strings(get(&v, "supported_efforts")));
             let default = text(get(&v, "default_effort"));
             (!efforts.is_empty() || default.is_some()).then(|| {
                 object(vec![
@@ -275,12 +271,25 @@ fn openrouter(raw: &SourceJson) -> Option<SourceJson> {
                 ])
             })
         });
-    Some(object(vec![
+    let mut row = object(vec![
         ("id", json(&id)),
         ("context_window_tokens", json(&context)),
         ("max_context_window_tokens", json(&widest)),
         ("reasoning", json(&reasoning)),
-    ]))
+    ]);
+    // Declared output modalities decide text versus /v1/decisions serving.
+    let modalities = unique(strings(path(raw, "/architecture/output_modalities")));
+    if !modalities.is_empty() {
+        set(&mut row, "output_modalities", json(&modalities));
+    }
+    Some(row)
+}
+fn unique(values: Vec<JsString16>) -> Vec<JsString16> {
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .filter(|v| seen.insert(v.clone()))
+        .collect()
 }
 fn observed_flag(raw: &SourceJson, p: &str) -> Option<bool> {
     flag(path(raw, p).as_ref().and_then(|v| get(v, "supported")))

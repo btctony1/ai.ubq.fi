@@ -1023,6 +1023,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway-decisions"
+version = "0.1.0"
+dependencies = [
+ "gateway-auth",
+ "gateway-core",
+ "gateway-extras-runtime",
+ "gateway-extras-runtime-test-support",
+ "gateway-providers",
+ "gateway-schema",
+ "serde_json",
+]
+
+[[package]]
 name = "gateway-extras-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1304,6 +1317,7 @@ dependencies = [
  "gateway-claude-runtime",
  "gateway-compaction",
  "gateway-core",
+ "gateway-decisions",
  "gateway-extras-runtime",
  "gateway-live-runtime",
  "gateway-migration",
