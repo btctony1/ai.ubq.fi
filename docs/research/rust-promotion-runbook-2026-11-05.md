@@ -495,3 +495,30 @@ Claims required: a DECISIONS entry authorizing production cutover. A green CI an
 - Whether `cf 1.0.0-beta.12` has a `secret` subcommand, and whether `cf deploy --prebuilt` preserves secrets the config does not declare.
 - The binaryen version_132 macOS asset name; whether `sqlite3` is installed on the VPS; the `ubq.fi` zone ID and route ID; the candidate `workers.dev` subdomain; OpenRouter generation-API field names.
 - Whether the Mac and Linux ARM64 Worker builds of one SHA are byte-identical.
+
+## Addendum 2026-11-05: VPS exact-source build procedure (verified)
+
+The VPS (Linux ARM64) built `47e8973fc05a921381f0de37a34bc6b447ab19b9` with `ops/rust-worker-build.sh` in 471 s, peak target 735 MiB, all three tool overrides honoured and nothing downloaded; `cf build` and `cf deploy --prebuilt --dry-run` succeeded without a token. The task-local toolchain lives under `/home/codex/rust-worker-prep/` and is reached as `/var/tmp/rust-worker-prep` (a symlink; re-create it with `ln -sfn /home/codex/rust-worker-prep /var/tmp/rust-worker-prep` if systemd-tmpfiles ages it out). Environment is stored in `/home/codex/rust-worker-prep/worker-build-env.sh` (no secrets).
+
+```sh
+T=/var/tmp/rust-worker-prep
+export RUSTUP_HOME=$T/rustup CARGO_HOME=$T/cargo CARGO_TARGET_DIR=$T/target XDG_CACHE_HOME=$T/cache TMPDIR=$T/tmp
+export RUSTUP_TOOLCHAIN=1.98.1-aarch64-unknown-linux-gnu CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2
+export WASM_BINDGEN_BIN=$T/cargo/bin/wasm-bindgen WASM_OPT_BIN=$T/tools/binaryen/bin/wasm-opt ESBUILD_BIN=$T/tools/esbuild/bin/esbuild
+export PATH=$RUSTUP_HOME/toolchains/1.98.1-aarch64-unknown-linux-gnu/bin:$CARGO_HOME/bin:/usr/local/bin:/usr/bin:/bin
+unset NODE_OPTIONS
+SHA=<full 40-hex SHA>
+df -h /                                   # keep >= 4.5G free for the 3G floor
+SRC=/home/codex/rust-worker-prep/checkout-$SHA
+GIT_CONFIG_GLOBAL=/dev/null git clone --no-checkout https://github.com/ubiquity/ai.ubq.fi.git "$SRC"
+git -C "$SRC" checkout --detach "$SHA"
+cd "$SRC" && bun install --no-env-file --frozen-lockfile && cargo fetch --manifest-path rust/Cargo.toml --locked
+test -z "$(git status --porcelain --untracked-files=all)"
+env -i HOME="$HOME" bash -c '. /home/codex/rust-worker-prep/worker-build-env.sh; cd '"$SRC"'; exec timeout 3600 nice -n 19 ionice -c3 /bin/bash ops/rust-worker-build.sh' 2>&1 | tee /home/codex/rust-worker-prep/build-$SHA.log
+grep -E 'Using custom (Wasm Bindgen|Wasm Opt|Esbuild)' /home/codex/rust-worker-prep/build-$SHA.log
+sha256sum ".data/rust-worker-build/$SHA/receipt.json" rust/crates/gateway-worker/build/index_bg.wasm
+rm -rf /var/tmp/rust-worker-prep/target/*
+# Deploy only with authorization, from the same $SRC: CLOUDFLARE_API_TOKEN=... bash ops/rust-worker-deploy.sh
+```
+
+Findings: the receipt file is created with `wx`, so a second build of the same SHA in the same checkout fails (use a fresh checkout). ARM64 and x86_64 builds of one SHA differ in `index_bg.wasm` (embedded registry paths, host-dependent crate hashes) and in `index.js` identifier naming, so byte-identical cross-host builds are not established; the deployed artifact is bound to the receipt of the host that built it. Tool pins and archive hashes: binaryen `version_132` aarch64 `c58562417836c5d0493d89bdefc434933bdc097db641b483df86bcfa557a107f`; `@esbuild/linux-arm64` 0.28.2 `a96dbfa41d3ef5dbd1ef22b1c10d5187be9267e86093a870f06402a7ec931596`.
