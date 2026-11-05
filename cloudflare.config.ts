@@ -19,7 +19,11 @@ export default defineConfig({
       AUTHORITY: bindings.durableObject({ worker: workerName, exportName: "GatewayAuthority" }),
       ASSETS: bindings.assets(),
       // Isolated rust-candidate direct-provider path. Production ai.ubq.fi keeps
-      // its provider credentials on the VPS; this Worker never claims a native owner.
+      // its provider credentials on the VPS. This Worker never holds a Codex
+      // refresh token: UOS_NATIVE_CARRIER (optional) pins the HTTPS origin, the
+      // transport identity and the fixed renewal-owner registry of the one
+      // native owner that keeps Codex credential custody and performs refresh.
+      UOS_NATIVE_CARRIER: bindings.secret(),
       UOS_AI_TOKEN: bindings.secret(),
       DEEPSEEK_API_KEY: bindings.secret(),
       CEREBRAS_API_KEY: bindings.secret(),

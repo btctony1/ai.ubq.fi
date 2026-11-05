@@ -37,6 +37,8 @@ pub struct Host {
     pub claude_evidence: Arc<Mutex<Vec<Option<Vec<u16>>>>>,
     /// The worker's full-pool outcome; `None` is the source decline.
     pub codex_recovery: Arc<Mutex<Option<CodexRecovery>>>,
+    /// Scripted native-owner renewal: the outcome and every fence the host was asked to renew.
+    pub codex_refresh: Arc<Mutex<(RefreshOutcome, Vec<CredentialFence>)>>,
 }
 impl Host {
     pub fn new(store: &Store) -> Self {
@@ -53,6 +55,7 @@ impl Host {
             consumed_heads: Arc::new(Mutex::new(BTreeSet::new())),
             claude_evidence: Arc::new(Mutex::new(Vec::new())),
             codex_recovery: Arc::new(Mutex::new(None)),
+            codex_refresh: Arc::new(Mutex::new((RefreshOutcome::Unavailable, Vec::new()))),
         }
     }
 }
@@ -159,11 +162,12 @@ impl RoutingHost for Host {
         }
         Ok(())
     }
-    async fn refresh_codex(
-        &self,
-        _fence: &CredentialFence,
-    ) -> Result<RefreshOutcome, GatewayError> {
-        Ok(RefreshOutcome::Unavailable)
+    async fn refresh_codex(&self, fence: &CredentialFence) -> Result<RefreshOutcome, GatewayError> {
+        let poisoned =
+            |_| GatewayError::unavailable("fixture refresh poisoned", "fixture_poisoned");
+        let mut refresh = self.codex_refresh.lock().map_err(poisoned)?;
+        refresh.1.push(fence.clone());
+        Ok(refresh.0)
     }
     async fn select_claude(
         &self,
