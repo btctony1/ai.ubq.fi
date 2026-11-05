@@ -261,15 +261,18 @@ pub fn openrouter_models(input: &CatalogInput) -> Vec<SourceJson> {
     rows
 }
 pub fn openrouter_capabilities(input: &CatalogInput) -> Vec<SourceJson> {
+    // The first discovered row per exact id, indexed once instead of rescanned per model.
+    let rows = input.rows("openrouter").iter().rev();
+    let by_id = rows
+        .filter_map(|r| Some((c::get(r, "id").as_ref().and_then(c::string)?, r)))
+        .collect::<std::collections::BTreeMap<_, _>>();
     openrouter_models(input)
         .iter()
         .filter_map(|model| {
             let id = ModelId::from_source(c::get(model, "id").as_ref().and_then(c::string)?);
             let jev = id.matches_scalar("typesafe/jev-latest");
             let resolved = input.metadata(&id, None, None, false);
-            let discovered = input.rows("openrouter").iter().find(|r| {
-                c::get(r, "id").as_ref().and_then(c::string).as_ref() == Some(id.as_js_string())
-            });
+            let discovered = by_id.get(id.as_js_string()).copied();
             let levels = if jev {
                 vec!["none".into()]
             } else {

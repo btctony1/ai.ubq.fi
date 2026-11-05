@@ -232,18 +232,25 @@ fn public_entry(
     set_metadata_sources(&mut row, resolved);
     row
 }
+/// Rows in insertion order plus each id's row position; a join never rescans earlier rows.
+#[derive(Default)]
+struct PublicRows(Vec<SourceJson>, std::collections::BTreeMap<ModelId, usize>);
+impl PublicRows {
+    fn find(&mut self, id: &ModelId) -> Option<&mut SourceJson> {
+        self.1.get(id).map(|index| &mut self.0[*index])
+    }
+}
 fn add_public(
-    rows: &mut Vec<SourceJson>,
+    rows: &mut PublicRows,
     id: &ModelId,
     provider: SourceJson,
     created: Option<i64>,
     resolved: &ResolvedMetadata,
 ) {
-    if let Some(existing) = rows.iter_mut().find(|r| row_id(r).as_ref() == Some(id)) {
-        let mut providers = c::get(existing, "providers")
-            .as_ref()
-            .and_then(c::array)
-            .expect("constructed providers");
+    if let Some(existing) = rows.find(id) {
+        // Every public row is constructed with a providers array.
+        let providers = c::get(existing, "providers").as_ref().and_then(c::array);
+        let mut providers = providers.unwrap_or_default();
         providers.push(provider);
         c::set(existing, "providers", c::json(&providers));
         if c::get(existing, "created").is_none()
@@ -252,11 +259,12 @@ fn add_public(
             c::set(existing, "created", c::json(&n));
         }
     } else {
-        rows.push(public_entry(id, provider, created, resolved));
+        rows.1.insert(id.clone(), rows.0.len());
+        rows.0.push(public_entry(id, provider, created, resolved));
     }
 }
-fn merge_provider_metadata(rows: &mut [SourceJson], id: &ModelId, hint: MetadataHint) {
-    let Some(entry) = rows.iter_mut().find(|row| row_id(row).as_ref() == Some(id)) else {
+fn merge_provider_metadata(rows: &mut PublicRows, id: &ModelId, hint: MetadataHint) {
+    let Some(entry) = rows.find(id) else {
         return;
     };
     let resolved = resolve_metadata(&MetadataSources {
@@ -275,11 +283,8 @@ fn merge_provider_metadata(rows: &mut [SourceJson], id: &ModelId, hint: Metadata
     }
     if resolved.supported_reasoning_levels.is_some() || resolved.default_reasoning_effort.is_some()
     {
-        c::set(
-            entry,
-            "reasoning_source",
-            c::json(&resolved.reasoning_source),
-        );
+        let source = c::json(&resolved.reasoning_source);
+        c::set(entry, "reasoning_source", source);
     }
 }
 fn sorted_models(
@@ -296,7 +301,7 @@ pub fn build_catalog_snapshot(
     input: &CatalogInput,
     collator: &dyn SourceStringCollator,
 ) -> Result<SourceJson, GatewayError> {
-    let mut rows = Vec::new();
+    let mut rows = PublicRows::default();
     let codex = snapshot_models(input, true);
     for model in &codex {
         if let Some(id) = row_id(model) {
@@ -327,7 +332,7 @@ pub fn build_catalog_snapshot(
         }
         for id in provider_ids(provider) {
             let id = ModelId::from_scalar(id);
-            let existing = rows.iter().any(|row| row_id(row).as_ref() == Some(&id));
+            let existing = rows.1.contains_key(&id);
             let endpoints = if provider == "cerebras" {
                 vec!["/v1/chat/completions"]
             } else {
@@ -351,7 +356,7 @@ pub fn build_catalog_snapshot(
     }
     if input.synthetic_configured() {
         let id = ModelId::from_scalar(SYNTHETIC_MODEL);
-        let existing = rows.iter().any(|row| row_id(row).as_ref() == Some(&id));
+        let existing = rows.1.contains_key(&id);
         let resolved = input.metadata(&id, None, Some(provider_hint("ubiquity", &id)), false);
         add_public(
             &mut rows,
@@ -386,7 +391,7 @@ pub fn build_catalog_snapshot(
     add_openrouter_public(&mut rows, input);
     // Both source public renderers use the same stable locale comparator, never
     // lexical ModelId ordering or a comparator-error substitute (catalog.ts482).
-    let rows = sorted_models(rows, collator)?;
+    let rows = sorted_models(rows.0, collator)?;
     let codex_ready = input.codex().is_some_and(|s| !s.models.is_empty());
     let codex_status = ["unavailable", "available"][usize::from(codex_ready)];
     let codex_updated = input.codex().map(|s| s.updated_at_ms);
@@ -415,7 +420,7 @@ const SOURCE_PROVIDERS: [&str; 7] = [
     "lithos",
     "openrouter",
 ];
-fn add_discovered_public(rows: &mut Vec<SourceJson>, input: &CatalogInput) {
+fn add_discovered_public(rows: &mut PublicRows, input: &CatalogInput) {
     for provider in ["openlux", "surplus", "claude_code"] {
         for model in input.rows(provider) {
             if let Some(id) = row_id(model) {
@@ -443,7 +448,7 @@ fn add_discovered_public(rows: &mut Vec<SourceJson>, input: &CatalogInput) {
                 } else {
                     None
                 };
-                let existing = rows.iter().any(|row| row_id(row).as_ref() == Some(&id));
+                let existing = rows.1.contains_key(&id);
                 add_public(
                     rows,
                     &id,
@@ -463,7 +468,7 @@ fn add_discovered_public(rows: &mut Vec<SourceJson>, input: &CatalogInput) {
     }
 }
 /// OpenRouter text rows, decision rows on /v1/decisions, and the Jev alias row.
-fn add_openrouter_public(rows: &mut Vec<SourceJson>, input: &CatalogInput) {
+fn add_openrouter_public(rows: &mut PublicRows, input: &CatalogInput) {
     if !input.configured("openrouter") {
         return;
     }
@@ -475,13 +480,8 @@ fn add_openrouter_public(rows: &mut Vec<SourceJson>, input: &CatalogInput) {
                 ("owned_by", c::json(&openrouter_owner(&id))),
                 ("supported_endpoints", c::json(&endpoints)),
             ]);
-            add_public(
-                rows,
-                &id,
-                provider,
-                None,
-                &input.metadata(&id, None, None, false),
-            );
+            let resolved = input.metadata(&id, None, None, false);
+            add_public(rows, &id, provider, None, &resolved);
         }
     }
     let id = ModelId::from_scalar("typesafe/jev-latest");
@@ -493,13 +493,8 @@ fn add_openrouter_public(rows: &mut Vec<SourceJson>, input: &CatalogInput) {
             c::json(&["/v1/decisions", "/v1/systemone"]),
         ),
     ]);
-    add_public(
-        rows,
-        &id,
-        provider,
-        None,
-        &input.metadata(&id, None, None, false),
-    );
+    let resolved = input.metadata(&id, None, None, false);
+    add_public(rows, &id, provider, None, &resolved);
 }
 fn catalog_source(input: &CatalogInput, provider: &str) -> SourceJson {
     let snapshot = input.providers.get(provider);

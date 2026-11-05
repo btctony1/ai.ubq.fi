@@ -181,13 +181,17 @@ fn openrouter_native(input: &CatalogInput) -> Vec<SourceJson> {
         reasoning_fields(&mut row,&resolved,true);apply_resolved_fields(&mut row,&resolved,true,false);common_fields(&mut row,1000,false);Some(row)
     }).collect()
 }
+/// A retained row without an identifier never matches; a new one compares as empty.
 fn append_native(rows: &mut Vec<SourceJson>, entries: impl IntoIterator<Item = SourceJson>) {
+    let key = |row: &SourceJson| c::identifier(row).map(|id| c::trim(&id));
+    let mut seen = rows
+        .iter()
+        .filter_map(key)
+        .collect::<std::collections::BTreeSet<_>>();
     for record in entries {
-        let id = c::identifier(&record).unwrap_or_default();
-        if !rows
-            .iter()
-            .any(|r| c::identifier(r).is_some_and(|s| c::trim(&s) == c::trim(&id)))
-        {
+        let id = key(&record);
+        if !seen.contains(&id.clone().unwrap_or_default()) {
+            seen.extend(id);
             rows.push(record);
         }
     }
@@ -217,20 +221,14 @@ fn merge_configured_native(rows: &mut Vec<SourceJson>, input: &CatalogInput, pro
     append_native(rows, configured);
 }
 fn unique_paid(input: &CatalogInput) -> Vec<SourceJson> {
-    let mut rows = Vec::new();
-    for provider in ["openlux", "surplus"] {
-        for record in input.available_rows(provider) {
-            if endpoint_supports(record, "openai-response")
-                && !rows.iter().any(|r| {
-                    c::get(r, "id").as_ref().and_then(c::string)
-                        == c::get(record, "id").as_ref().and_then(c::string)
-                })
-            {
-                rows.push(record.clone());
-            }
-        }
-    }
-    rows
+    let mut seen = std::collections::BTreeSet::new();
+    let id = |record: &SourceJson| c::get(record, "id").as_ref().and_then(c::string);
+    ["openlux", "surplus"]
+        .into_iter()
+        .flat_map(|provider| input.available_rows(provider))
+        .filter(|record| endpoint_supports(record, "openai-response") && seen.insert(id(record)))
+        .cloned()
+        .collect()
 }
 pub fn native_catalog(stored: Option<&SourceJson>, input: &CatalogInput) -> SourceJson {
     let mut envelope = stored
