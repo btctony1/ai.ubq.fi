@@ -43,7 +43,7 @@ pub struct CoreStateManifest {
 }
 
 impl CoreStateManifest {
-    fn validate(&self) -> Result<(), MigrationError> {
+    pub fn validate(&self) -> Result<(), MigrationError> {
         let included = self.included.iter().map(|entry| entry.rows).sum::<usize>();
         let excluded = self.excluded.iter().map(|entry| entry.rows).sum::<usize>();
         if included != self.selected_rows
@@ -246,6 +246,10 @@ fn classify(
     if starts(&p, &["uos_ai", "provider_capacity"]) {
         return Ok(Decision::Exclude("historical_provider_capacity"));
     }
+    if starts(&p, &["uos_ai", "claude_code_usage"]) {
+        // Retired direct-usage leases (source Oct 25-27); never current operational state.
+        return Ok(Decision::Exclude("retired_claude_usage_lease"));
+    }
     if starts(&p, &["uos_ai", "provider_health"]) {
         return Ok(Decision::Include("provider_health_current_state"));
     }
@@ -439,56 +443,4 @@ pub(crate) fn select_spool(
     };
     manifest.validate()?;
     Ok(CoreStateCapture { capture, manifest })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn valid_manifest() -> CoreStateManifest {
-        CoreStateManifest {
-            v: 1,
-            source_git_sha: "a".repeat(40),
-            captured_at_ms: 1,
-            source_rows: 1,
-            selected_rows: 1,
-            excluded_rows: 0,
-            included: vec![CoreStateRuleCount {
-                rule: "fixture".into(),
-                rows: 1,
-            }],
-            excluded: vec![],
-            derived_rows: 0,
-            manifest_rows: 1,
-            do_row_writes: 3,
-            do_row_write_limit: CORE_STATE_DO_ROW_WRITE_LIMIT,
-            within_free_limit: true,
-            current_api_windows: 1,
-            current_paid_requests: 0,
-            current_paid_unresolved: 0,
-            current_paid_pending: 0,
-        }
-    }
-
-    #[test]
-    fn missing_current_quota_or_pending_evidence_is_refused() {
-        let mut missing_window = valid_manifest();
-        missing_window.current_api_windows = 0;
-        assert!(missing_window.validate().is_err());
-
-        let mut missing_pending = valid_manifest();
-        missing_pending.current_paid_unresolved = 1;
-        assert!(missing_pending.validate().is_err());
-    }
-
-    #[test]
-    fn write_budget_never_accepts_the_free_tier_boundary() {
-        let mut manifest = valid_manifest();
-        manifest.source_rows = 50_000;
-        manifest.selected_rows = 50_000;
-        manifest.included[0].rows = 50_000;
-        manifest.do_row_writes = 100_001;
-        manifest.within_free_limit = false;
-        assert!(manifest.validate().is_err());
-    }
 }

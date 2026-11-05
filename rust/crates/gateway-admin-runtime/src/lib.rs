@@ -107,7 +107,7 @@ impl<S: QueryStore, H: AuthHost, C: RuntimeCapabilities> AdminHost for AdminRunt
                 self.capabilities.provider(request, context).await
             }
             ClaudeAuthGet | ClaudeAuthSet | ClaudeAuthDelete | ClaudeAccountSelect
-            | ClaudeQuotaClear => {
+            | ClaudeQuotaClear | ClaudeQuotaRefresh => {
                 let request = match operation {
                     ClaudeAuthGet => ClaudeRequest::State,
                     ClaudeAuthSet => {
@@ -137,6 +137,25 @@ impl<S: QueryStore, H: AuthHost, C: RuntimeCapabilities> AdminHost for AdminRunt
                         // Account lookup and the targeted-cohort check belong to the
                         // actual owner in this source order; no early UUID/scalar gate.
                         ClaudeRequest::ClearQuota {
+                            account_id,
+                            cohort_id,
+                        }
+                    }
+                    // Passive compatibility read: meters come only from response headers.
+                    ClaudeQuotaRefresh => {
+                        let leaf = |name| source_body::member(&input.body, name);
+                        let account_id = leaf("account_id")
+                            .as_ref()
+                            .and_then(source_body::text)
+                            .ok_or_else(|| invalid("account_id is required"))?;
+                        let cohort_id = match leaf("account_cohort_id") {
+                            None => None,
+                            Some(value) => Some(
+                                source_body::text(&value)
+                                    .ok_or_else(|| invalid("account_cohort_id must be a string"))?,
+                            ),
+                        };
+                        ClaudeRequest::RefreshQuota {
                             account_id,
                             cohort_id,
                         }

@@ -187,6 +187,9 @@ pub struct ClaudeAcceptedObservation {
     pub response_status: Option<u16>,
     pub state: ClaudeObservationState,
     pub observation: SourceJson,
+    /// Source `observation_source`; part of the point digest only when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 impl ClaudeAcceptedObservation {
     pub fn from_source(value: &SourceJson) -> Result<Self, GatewayError> {

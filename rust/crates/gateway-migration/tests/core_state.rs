@@ -329,6 +329,33 @@ fn current_core_excludes_histories_and_proves_the_free_write_budget() {
 }
 
 #[test]
+fn retired_claude_usage_leases_are_excluded_not_refused() {
+    let mut entries = valid_core_entries();
+    let lease = json!([
+        "uos_ai",
+        "claude_code_usage",
+        "v1",
+        "lease",
+        "account",
+        "cohort"
+    ]);
+    entries.push(entry(lease, json!({"owner":"fixture"}), "49", -1));
+    let directory = Directory::new();
+    let spool = directory.file("spool");
+    std::fs::create_dir(&spool).unwrap();
+    let core = Captured::owned(capture(entries), &spool)
+        .unwrap()
+        .core_capture()
+        .unwrap();
+    assert!(
+        core.manifest
+            .excluded
+            .iter()
+            .any(|rule| rule.rule == "retired_claude_usage_lease" && rule.rows == 1)
+    );
+}
+
+#[test]
 fn unknown_source_family_is_refused_before_any_adoption_plan() {
     let mut entries = valid_core_entries();
     entries.push(entry(

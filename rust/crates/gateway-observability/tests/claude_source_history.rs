@@ -548,7 +548,7 @@ fn inventory(memory: &Memory, current: bool) -> InventoryHost {
         bound.0.clone(),
         StoredRecord::json("current", json!({}), None),
     );
-    let account=ClaudeAccountReadback{target:HealthTarget{provider:HealthProvider::ClaudeCode,identity:"synthetic-account:synthetic-cohort".into(),source_checks:vec![RevisionCheck{key:bound,expected_revision:Some(if current{"current"}else{"replaced"}.into())}]},account_id:"synthetic-account".into(),account_cohort_id:"synthetic-cohort".into(),label:credential.label.clone(),credential:CredentialMetadata{kind:CredentialKind::ApiKey,source:credential.source.clone(),hint:credential.hint.clone(),label:credential.label.clone(),updated_at_ms:credential.updated_at_ms},workspace:Some(WorkspaceMetadata{id:JsString16::from_units(vec![0xd800]),name:Some(JsString16::from_units(vec![0xdc00])),source:Some("kv".into()),pinned_by_env:false,discovered_at_ms:None,verified_at_ms:None,last_error:Some(SourceJson::parse(r#""workspace\ud800""#).unwrap())}),quota:Some(SourceJson::parse(r#"{"windows":{"5h":{"status":"allow\udc00","utilization":0.25,"reset_at_ms":10800000,"observed_at_ms":7200000}},"standard":{},"representative_claim":null,"blocked_until_ms":null,"block_window":null,"cooldown_until_ms":null,"last_error":{"kind":"upstream_error","status":503,"message":"error\ud800","at_ms":7200000},"updated_at_ms":7200000,"pool_proofs":{"secret":"synthetic-forbidden"}}"#).unwrap())};
+    let account=ClaudeAccountReadback{target:HealthTarget{provider:HealthProvider::ClaudeCode,identity:"synthetic-account:synthetic-cohort".into(),source_checks:vec![RevisionCheck{key:bound,expected_revision:Some(if current{"current"}else{"replaced"}.into())}]},account_id:"synthetic-account".into(),account_cohort_id:"synthetic-cohort".into(),label:credential.label.clone(),credential:CredentialMetadata{kind:CredentialKind::ApiKey,source:credential.source.clone(),hint:credential.hint.clone(),label:credential.label.clone(),updated_at_ms:credential.updated_at_ms},workspace:Some(WorkspaceMetadata{id:JsString16::from_units(vec![0xd800]),name:Some(JsString16::from_units(vec![0xdc00])),source:Some("kv".into()),pinned_by_env:false,discovered_at_ms:None,verified_at_ms:None,last_error:Some(SourceJson::parse(r#""workspace\ud800""#).unwrap())}),quota:Some(SourceJson::parse(r#"{"response_headers":{"source":"response_headers","windows":{"5h":{"status":"allow\udc00","utilization":0.25,"reset_at_ms":10800000,"observed_at_ms":7200000}},"standard":{},"representative_claim":null,"observed_at_ms":7200000},"windows":{"5h":{"status":"allow\udc00","utilization":0.25,"reset_at_ms":10800000,"observed_at_ms":7200000}},"standard":{},"usage":null,"representative_claim":null,"blocked_until_ms":null,"block_window":null,"cooldown_until_ms":null,"last_error":{"kind":"upstream_error","status":503,"message":"error\ud800","at_ms":7200000},"updated_at_ms":7200000,"pool_proofs":{"secret":"synthetic-forbidden"}}"#).unwrap())};
     InventoryHost {
         base,
         inventory: ProviderInventory {
@@ -661,6 +661,7 @@ fn actual_capacity_history_rollups_and_upstream_response_bytes_keep_one_source_d
             .last(),
         Some(&0xd800)
     );
+    assert_eq!(member(&claude, "usage").as_str(), "null");
     assert_eq!(rows(&member(&body, "claude_history")).len(), 1);
     assert!(!body.as_str().contains("pool_proofs"));
     assert!(!body.as_str().contains("synthetic-hidden-middle"));
@@ -670,6 +671,9 @@ fn actual_capacity_history_rollups_and_upstream_response_bytes_keep_one_source_d
         text(&rollups, "claude_rollup_scan"),
         JsString16::from_utf8("ok")
     );
+    let usage = member(&rollups, "claude_usage_rollups");
+    assert_eq!(text(&usage, "scan"), JsString16::from_utf8("ok"));
+    assert!(rows(&usage).is_empty());
     let health = response(run(runtime.upstream_health_response())?)?;
     assert_eq!(
         text(

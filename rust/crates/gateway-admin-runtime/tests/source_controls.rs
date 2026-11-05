@@ -591,3 +591,71 @@ fn clear_quota_named_leaf_preserves_source_presence_before_owner_lookup() {
         });
     }
 }
+
+// tests/claude-subscription-admin.test.ts: the passive refresh route forwards
+// only a validated account selector; it never reaches a provider from here.
+struct RefreshProbe(RefCell<Vec<(JsString16, Option<JsString16>)>>);
+impl RuntimeCapabilities for RefreshProbe {
+    async fn claude(
+        &self,
+        request: gateway_admin_runtime::capabilities::ClaudeRequest,
+        _: gateway_admin_runtime::capabilities::Context,
+    ) -> Result<AuthResponse, GatewayError> {
+        let gateway_admin_runtime::capabilities::ClaudeRequest::RefreshQuota {
+            account_id,
+            cohort_id,
+        } = request
+        else {
+            return Err(GatewayError::unavailable(
+                "Unexpected probe request",
+                "fixture_request_invalid",
+            ));
+        };
+        self.0.borrow_mut().push((account_id, cohort_id));
+        Ok(AuthResponse::json(200, json!({"refreshed": false})))
+    }
+}
+#[test]
+fn quota_refresh_requires_string_selectors_before_the_passive_owner_read() {
+    let cases: [(&str, u16, Option<&str>); 6] = [
+        (
+            r#"{"account_id":"a","account_cohort_id":"c"}"#,
+            200,
+            Some("c"),
+        ),
+        (r#"{"account_id":"a"}"#, 200, None),
+        (r#"{}"#, 400, None),
+        (r#"{"account_id":3}"#, 400, None),
+        (r#"[]"#, 400, None),
+        (r#"{"account_id":"a","account_cohort_id":null}"#, 400, None),
+    ];
+    for (body, status, cohort) in cases {
+        run(async {
+            let store = Store::default();
+            let host = Host::default();
+            let config = RuntimeConfig::default();
+            let probe = RefreshProbe(RefCell::new(Vec::new()));
+            let runtime = AdminRuntime {
+                store: &store,
+                host: &host,
+                capabilities: &probe,
+                config: &config,
+            };
+            let response = runtime
+                .execute(
+                    AdminOperation::ClaudeQuotaRefresh,
+                    input(SourceJson::parse(body).unwrap()),
+                )
+                .await
+                .unwrap_or_else(|error| AuthResponse::json(error.status, json!({})));
+            assert_eq!(response.status, status, "{body}");
+            let seen = probe.0.borrow();
+            assert_eq!(seen.len(), usize::from(status == 200), "{body}");
+            if let Some((account, seen_cohort)) = seen.first() {
+                assert_eq!(*account, JsString16::from_utf8("a"));
+                assert_eq!(*seen_cohort, cohort.map(JsString16::from_utf8));
+            }
+            assert!(store.rows.borrow().is_empty());
+        });
+    }
+}

@@ -94,13 +94,8 @@ pub fn safe_changed_source(value: &SourceJson) -> Result<SourceJson, GatewayErro
     SourceJson::parse(&format!("{{{}}}", result.join(",")))
 }
 pub fn event_key(event: &KeyChange) -> RecordKey {
-    store::key(json!([
-        "uos_ai",
-        "api_keys",
-        "change",
-        gateway_core::identity::MAX_SAFE_INTEGER - event.at_ms,
-        event.id
-    ]))
+    let reverse = gateway_core::identity::MAX_SAFE_INTEGER - event.at_ms;
+    store::key(json!(["uos_ai", "api_keys", "change", reverse, event.id]))
 }
 pub struct ChangeInput<'a> {
     pub principal: &'a AuthPrincipal,
