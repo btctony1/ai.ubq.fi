@@ -1363,6 +1363,7 @@ dependencies = [
  "gateway-migration",
  "gateway-observability",
  "gateway-observability-test-support",
+ "gateway-prompt-admission",
  "gateway-providers",
  "gateway-publication",
  "gateway-publication-policy",

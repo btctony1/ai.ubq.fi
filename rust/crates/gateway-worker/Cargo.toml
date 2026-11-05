@@ -33,6 +33,7 @@ gateway-publication.workspace = true
 gateway-publication-policy.workspace = true
 gateway-publication-transport.workspace = true
 gateway-observability.workspace = true
+gateway-prompt-admission.workspace = true
 gateway-live-runtime.workspace = true
 gateway-migration.workspace = true
 serde.workspace = true

@@ -20,6 +20,7 @@ use gateway_observability::{
     replay_producer::{ClientFailureObservation, FailureObservation, should_persist},
     replay_trace::{AttemptTrace, TraceProvider, TraceRecorder, TraceTerminal},
 };
+use gateway_prompt_admission::native_failure::{FAILURE_KIND, TERMINAL_TYPE};
 use gateway_providers::sse::{
     MAX_CHAT_EVENT_BYTES, MAX_RESPONSES_EVENT_BYTES, SseFrame, SseParser,
 };
@@ -39,6 +40,8 @@ pub struct Capture {
     trace_valid: Cell<bool>,
     finished: Cell<bool>,
     local_completed: Cell<bool>,
+    /// Gateway-built aggregate context overflow; nonsemantic and never quota proof.
+    context_overflow: Cell<bool>,
     terminal_request: RefCell<Option<TerminalRequest>>,
     provider_request_id: RefCell<Option<String>>,
     client: RefCell<ClientWire>,
@@ -84,6 +87,7 @@ impl Capture {
             trace_valid: Cell::new(true),
             finished: Cell::new(false),
             local_completed: Cell::new(false),
+            context_overflow: Cell::new(false),
             terminal_request: RefCell::new(None),
             provider_request_id: RefCell::new(None),
             client: RefCell::new(ClientWire {
@@ -313,7 +317,7 @@ impl Capture {
         let failure_kind = match observation.reader_termination {
             Some(ReaderTermination::ReadError) => Some("gateway_stream_read_error".into()),
             Some(ReaderTermination::Deadline) => Some("gateway_timeout".into()),
-            _ => None,
+            _ => self.overflow(FAILURE_KIND),
         };
         self.runtime
             .record_admin_error(&gateway_observability::ledger::ErrorObservation {
@@ -489,18 +493,23 @@ impl Capture {
         self.finish(TransportObservation::default(), None, None)
             .await;
     }
+    /// Source `chatResponsesProjectionFailure`: an incomplete, usage-free streamed terminal.
+    pub(crate) async fn native_context_failure(&self, body: &[u8]) {
+        self.context_overflow.set(true);
+        self.configure_local(200, true, false);
+        self.bytes(body);
+        self.finish_local(TransportObservation::default()).await;
+    }
+    fn overflow(&self, value: &str) -> Option<String> {
+        self.context_overflow.get().then(|| value.into())
+    }
     async fn persist(&self, observation: TransportObservation) -> Result<(), GatewayError> {
         let (internal, client) = {
             let mut wire = self.client.borrow_mut();
-            if let Some(parser) = &mut wire.parser {
-                match parser.finish() {
-                    Ok(frames) => {
-                        for frame in frames {
-                            wire.frame(frame)
-                        }
-                    }
-                    Err(_) => wire.valid = false,
-                }
+            match wire.parser.as_mut().map(SseParser::finish) {
+                Some(Ok(frames)) => frames.into_iter().for_each(|frame| wire.frame(frame)),
+                Some(Err(_)) => wire.valid = false,
+                None => {}
             }
             let cancelled = observation.reader_termination == Some(ReaderTermination::Cancelled);
             let terminal = if cancelled {
@@ -528,7 +537,7 @@ impl Capture {
             let failure = match observation.reader_termination {
                 Some(ReaderTermination::ReadError) => Some("gateway_stream_read_error".into()),
                 Some(ReaderTermination::Deadline) => Some("gateway_timeout".into()),
-                _ => None,
+                _ => self.overflow(FAILURE_KIND),
             };
             let internal = FailureObservation {
                 status: wire.status,
@@ -536,7 +545,7 @@ impl Capture {
                 completed,
                 terminal_type: terminal,
                 failure_kind: failure,
-                synthetic_terminal_type: None,
+                synthetic_terminal_type: self.overflow(TERMINAL_TYPE),
                 provider_route: wire.provider.clone(),
             };
             let mut client = ClientFailureObservation::from_internal(&internal);
