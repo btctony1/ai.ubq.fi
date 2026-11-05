@@ -8,7 +8,7 @@ use worker::{Context, Env, Method, Request, Response, Result};
 use {native_host::NativeBindings, response::GatewayResponse, std::rc::Rc};
 
 mod admin_host;
-mod admin_support_host;
+pub mod admin_support_host;
 mod admission;
 mod agent_messages;
 mod assets;
@@ -45,6 +45,7 @@ mod native_transport;
 mod observability_host;
 mod paid_lookup;
 pub mod private_installer;
+pub mod provider_error;
 mod publication;
 pub mod response;
 mod routing_host;

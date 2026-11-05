@@ -100,6 +100,15 @@ pub fn prepare_source_request(
             );
             s::set(&mut wire.body, "model", s::quoted(model.as_js_string()));
             controls::openrouter(&mut wire.body, &model);
+            // Source Chat handler: the gateway needs the upstream usage frame to meter the call.
+            if surface == ClientSurface::Chat && !client_stream {
+                s::remove(&mut wire.body, "stream_options");
+            } else if surface == ClientSurface::Chat
+                && s::present(&wire.body, "stream_options").is_none()
+            {
+                let include = serde_json::json!({"include_usage":true});
+                s::set(&mut wire.body, "stream_options", s::generated(&include));
+            }
         }
         UpstreamProvider::ChatgptCodex => codex_wire(&mut wire, surface, raw, &model, options)?,
         UpstreamProvider::Surplus | UpstreamProvider::Metered => {

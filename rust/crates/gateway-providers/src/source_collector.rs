@@ -85,6 +85,12 @@ pub(crate) fn usage(value: &SourceJson) -> Option<Value> {
         .then(|| value.deserialize().ok())
         .flatten()
 }
+/// Settled usage: a Chat body or chunk projects through source `extractChatUsageTokens`.
+pub(crate) fn accounting_usage(chat: bool, body: &SourceJson) -> Option<Value> {
+    let usage = usage(&s::get(body, "usage"));
+    let fields = gateway_core::source_usage::chat_usage_fields;
+    usage.and_then(|usage| if chat { fields(&usage) } else { Some(usage) })
+}
 impl ChatCollector {
     pub fn new(plan: DecodePlan) -> Self {
         Self {

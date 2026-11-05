@@ -599,7 +599,8 @@ impl Inference<'_> {
         let prepared = attempt.request.clone();
         let headers = upstream.headers().entries().collect::<Headers>();
         let decode_plan = gateway_providers::response::response_plan(prepared.decode(), &headers);
-        self.capture.correlate(correlation(provider, &headers));
+        let provider_request_id = correlation(provider, &headers).map(str::to_owned);
+        self.capture.correlate(provider_request_id.as_deref());
         let pricing = crate::inference_source::pricing_metadata(
             session.surplus_billing(),
             prepared.url().ends_with("/messages"),
@@ -609,7 +610,7 @@ impl Inference<'_> {
             currentness,
             attempt,
             principal: self.principal.clone(),
-            provider_request_id: correlation(provider, &headers).map(str::to_owned),
+            provider_request_id: RefCell::new(provider_request_id),
             status,
             store: self.store.clone(),
             pricing,
@@ -729,17 +730,19 @@ fn correlation(
     provider: UpstreamProvider,
     headers: &gateway_providers::types::Headers,
 ) -> Option<&str> {
-    let names: &[&str] = if provider == UpstreamProvider::Deepseek {
-        &["x-request-id", "x-ds-request-id", "x-deepseek-request-id"]
-    } else if provider == UpstreamProvider::Cerebras {
-        &[
+    let names: &[&str] = match provider {
+        UpstreamProvider::Deepseek => &["x-request-id", "x-ds-request-id", "x-deepseek-request-id"],
+        UpstreamProvider::Cerebras => &[
             "x-request-id",
             "x-api-request-id",
             "x-oneapi-request-id",
             "x-cerebras-request-id",
-        ]
-    } else {
-        &["x-request-id", "request-id"]
+        ],
+        // Source `providerRequestIdFromResponse`.
+        UpstreamProvider::Openrouter => {
+            &["x-request-id", "x-api-request-id", "x-oneapi-request-id"]
+        }
+        _ => &["x-request-id", "request-id"],
     };
     names
         .iter()
@@ -752,6 +755,22 @@ fn correlation(
         .filter(|id| {
             !id.is_empty() && id.len() <= 256 && !id.chars().any(|c| c <= '\u{1f}' || c == '\u{7f}')
         })
+}
+
+/// Source buffered DeepSeek/Cerebras: a header-less completion is correlated by its own id.
+fn completion_correlation(
+    lifecycle: &Lifecycle,
+    capture: &Capture,
+    plan: &gateway_providers::types::DecodePlan,
+    bytes: &[u8],
+) -> Option<String> {
+    if lifecycle.provider_request_id.borrow().is_some() {
+        return None;
+    }
+    let id = gateway_providers::response::completion_provider_request_id(plan, bytes)?;
+    capture.correlate(Some(&id));
+    *lifecycle.provider_request_id.borrow_mut() = Some(id.clone());
+    Some(id)
 }
 
 fn provider_correlation(

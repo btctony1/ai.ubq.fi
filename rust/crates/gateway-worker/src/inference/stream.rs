@@ -3,7 +3,8 @@ use super::{
     ATTEMPT_DEADLINE_MS, CEREBRAS_RATE_LIMIT_HEADERS, ResponseResult, apply_warnings, copy_headers,
     invalid, observe_event, provider_correlation, set_header,
 };
-use crate::inference_source::{abort_frame, cerebras_error_body, stream_failure};
+use crate::inference_source::{abort_frame, stream_failure};
+use crate::provider_error::cerebras_error_body;
 use crate::storage::now_ms;
 use crate::transport::stream::FinishHook;
 use crate::transport::{body, stream::ObservedStream};
@@ -498,6 +499,9 @@ impl Reply<'_> {
                 return Err(error);
             }
         };
+        let body_id = (decoded.status < 400).then(|| {
+            super::completion_correlation(&self.lifecycle, self.capture, &self.decode_plan, &bytes)
+        });
         if let Some(terminal) = decoded.terminal {
             self.observation.semantic_terminal(terminal);
         }
@@ -561,6 +565,9 @@ impl Reply<'_> {
             set_header(&mut response, &name, &value)?;
         }
         provider_correlation(&mut response, self.provider, &self.headers)?;
+        if let Some(id) = body_id.flatten() {
+            set_header(&mut response, "x-uos-provider-request-id", &id)?;
+        }
         apply_warnings(&mut response, self.prepared.warnings())?;
         Ok(response)
     }
