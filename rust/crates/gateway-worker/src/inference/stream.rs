@@ -434,6 +434,9 @@ impl Reply<'_> {
                 return Err(error);
             }
         };
+        let body_id = (decoded.status < 400).then(|| {
+            super::completion_correlation(&self.lifecycle, self.capture, &self.decode_plan, &bytes)
+        });
         if let Some(terminal) = decoded.terminal {
             self.observation.semantic_terminal(terminal);
         }
@@ -497,6 +500,9 @@ impl Reply<'_> {
             set_header(&mut response, &name, &value)?;
         }
         provider_correlation(&mut response, self.provider, &self.headers)?;
+        if let Some(id) = body_id.flatten() {
+            set_header(&mut response, "x-uos-provider-request-id", &id)?;
+        }
         apply_warnings(&mut response, self.prepared.warnings())?;
         Ok(response)
     }

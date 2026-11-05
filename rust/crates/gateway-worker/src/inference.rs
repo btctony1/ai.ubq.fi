@@ -41,7 +41,6 @@ use gateway_schema::{
     request::RequestSurface,
     source_request::{SourceRequestDocument, parse_http_body},
 };
-use serde_json::json;
 use std::{cell::RefCell, rc::Rc};
 use worker::{Context, Method, Request, Response};
 
@@ -576,7 +575,8 @@ impl Inference<'_> {
         let prepared = attempt.request.clone();
         let headers = upstream.headers().entries().collect::<Headers>();
         let decode_plan = gateway_providers::response::response_plan(prepared.decode(), &headers);
-        self.capture.correlate(correlation(provider, &headers));
+        let provider_request_id = correlation(provider, &headers).map(str::to_owned);
+        self.capture.correlate(provider_request_id.as_deref());
         let pricing = crate::inference_source::pricing_metadata(
             session.surplus_billing(),
             prepared.url().ends_with("/messages"),
@@ -586,7 +586,7 @@ impl Inference<'_> {
             currentness,
             attempt,
             principal: self.principal.clone(),
-            provider_request_id: correlation(provider, &headers).map(str::to_owned),
+            provider_request_id: RefCell::new(provider_request_id),
             status,
             store: self.store.clone(),
             pricing,
@@ -641,57 +641,8 @@ const CEREBRAS_RATE_LIMIT_HEADERS: &[&str] = &[
     "x-ratelimit-reset-tokens-day",
 ];
 
-/// Source Cerebras errors forward only message/code from a bounded body.
-fn cerebras_error_detail(bytes: &[u8]) -> (String, String) {
-    let fallback_message = "Cerebras upstream returned an error.".to_owned();
-    let fallback_code = "cerebras_upstream_error".to_owned();
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
-        return (fallback_message, fallback_code);
-    };
-    let error = value.get("error").filter(|value| value.is_object());
-    let text = |name: &str, limit: usize| {
-        error
-            .and_then(|error| error.get(name))
-            .or_else(|| value.get(name))
-            .and_then(serde_json::Value::as_str)
-            .map(|value| {
-                value
-                    .chars()
-                    .take(limit)
-                    .collect::<String>()
-                    .trim()
-                    .to_owned()
-            })
-            .filter(|value| !value.is_empty())
-    };
-    (
-        text("message", 1_000).unwrap_or(fallback_message),
-        text("code", 200).unwrap_or(fallback_code),
-    )
-}
-
-fn cerebras_error_type(status: u16) -> &'static str {
-    if status >= 500 {
-        "server_error"
-    } else if status == 429 {
-        "rate_limit_error"
-    } else {
-        "invalid_request_error"
-    }
-}
-
 fn cerebras_error_body(status: u16, bytes: &[u8]) -> Vec<u8> {
-    let (message, code) = cerebras_error_detail(bytes);
-    serde_json::to_vec(&json!({
-        "error": {
-            "message": message,
-            "type": cerebras_error_type(status),
-            "code": code,
-        }
-    }))
-    .unwrap_or_else(|_| {
-        br#"{"error":{"message":"Cerebras upstream returned an error.","type":"invalid_request_error","code":"cerebras_upstream_error"}}"#.to_vec()
-    })
+    crate::provider_error::cerebras_error_body(status, bytes)
 }
 
 fn set_header(response: &mut Response, name: &str, value: &str) -> Result<(), GatewayError> {
@@ -758,17 +709,19 @@ fn correlation(
     provider: UpstreamProvider,
     headers: &gateway_providers::types::Headers,
 ) -> Option<&str> {
-    let names: &[&str] = if provider == UpstreamProvider::Deepseek {
-        &["x-request-id", "x-ds-request-id", "x-deepseek-request-id"]
-    } else if provider == UpstreamProvider::Cerebras {
-        &[
+    let names: &[&str] = match provider {
+        UpstreamProvider::Deepseek => &["x-request-id", "x-ds-request-id", "x-deepseek-request-id"],
+        UpstreamProvider::Cerebras => &[
             "x-request-id",
             "x-api-request-id",
             "x-oneapi-request-id",
             "x-cerebras-request-id",
-        ]
-    } else {
-        &["x-request-id", "request-id"]
+        ],
+        // Source `providerRequestIdFromResponse`.
+        UpstreamProvider::Openrouter => {
+            &["x-request-id", "x-api-request-id", "x-oneapi-request-id"]
+        }
+        _ => &["x-request-id", "request-id"],
     };
     names
         .iter()
@@ -781,6 +734,22 @@ fn correlation(
         .filter(|id| {
             !id.is_empty() && id.len() <= 256 && !id.chars().any(|c| c <= '\u{1f}' || c == '\u{7f}')
         })
+}
+
+/// Source buffered DeepSeek/Cerebras: a header-less completion is correlated by its own id.
+fn completion_correlation(
+    lifecycle: &Lifecycle,
+    capture: &Capture,
+    plan: &gateway_providers::types::DecodePlan,
+    bytes: &[u8],
+) -> Option<String> {
+    if lifecycle.provider_request_id.borrow().is_some() {
+        return None;
+    }
+    let id = gateway_providers::response::completion_provider_request_id(plan, bytes)?;
+    capture.correlate(Some(&id));
+    *lifecycle.provider_request_id.borrow_mut() = Some(id.clone());
+    Some(id)
 }
 
 fn provider_correlation(
@@ -812,57 +781,4 @@ fn provider_correlation(
 
 fn invalid(message: &str) -> GatewayError {
     GatewayError::new(502, message, Some("upstream_transport_error"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cerebras_payment_required_body_forwards_only_source_detail_fields() {
-        let input = br#"{"error":{"message":"Payment required","code":"payment_required","param":"secret","type":"vendor"},"secret":"never"}"#;
-        let body = cerebras_error_body(402, input);
-        let text = String::from_utf8(body.clone()).unwrap();
-        assert_eq!(
-            text,
-            r#"{"error":{"message":"Payment required","type":"invalid_request_error","code":"payment_required"}}"#
-        );
-        assert!(!text.contains("vendor"));
-        assert!(!text.contains("secret"));
-        assert!(!text.contains("param"));
-    }
-
-    #[test]
-    fn cerebras_payment_required_146_byte_source_shape() {
-        let message = "x".repeat(65);
-        let input = serde_json::to_vec(&json!({
-            "error": {"message": message, "code": "payment_required"}
-        }))
-        .unwrap();
-        let body = cerebras_error_body(402, &input);
-        assert_eq!(body.len(), 146);
-        assert_eq!(
-            body,
-            br#"{"error":{"message":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","type":"invalid_request_error","code":"payment_required"}}"#
-        );
-    }
-
-    #[test]
-    fn cerebras_status_types_and_bounds_follow_the_source() {
-        let body = cerebras_error_body(429, br#"{"error":{"message":"slow down","code":"rate"}}"#);
-        assert!(
-            String::from_utf8(body)
-                .unwrap()
-                .contains("rate_limit_error")
-        );
-        let body = cerebras_error_body(503, br#"{"message":"down","code":"unavailable"}"#);
-        assert!(String::from_utf8(body).unwrap().contains("server_error"));
-        let oversized = serde_json::to_vec(&json!({
-            "error": {"message": "m".repeat(2_000), "code": "c".repeat(400)}
-        }))
-        .unwrap();
-        let body = String::from_utf8(cerebras_error_body(402, &oversized)).unwrap();
-        assert!(!body.contains(&"m".repeat(1_001)));
-        assert!(!body.contains(&"c".repeat(201)));
-    }
 }

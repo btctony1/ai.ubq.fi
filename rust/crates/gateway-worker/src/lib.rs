@@ -44,6 +44,7 @@ mod native_transport;
 mod observability_host;
 mod paid_lookup;
 pub mod private_installer;
+pub mod provider_error;
 mod publication;
 pub mod response;
 mod routing_host;

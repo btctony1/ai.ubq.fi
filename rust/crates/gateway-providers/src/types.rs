@@ -324,14 +324,11 @@ impl ProviderEvent {
     }
     /// Only the isolated numeric/accounting fragment crosses the scalar decoder boundary.
     pub fn observed_usage(&self) -> Option<Value> {
-        self.field("usage")
-            .as_ref()
-            .and_then(crate::source_collector::usage)
-            .or_else(|| {
-                self.field("response").and_then(|response| {
-                    crate::source_collector::usage(&crate::source::get(&response, "usage"))
-                })
+        crate::source_collector::accounting_usage(true, &self.data).or_else(|| {
+            self.field("response").and_then(|response| {
+                crate::source_collector::usage(&crate::source::get(&response, "usage"))
             })
+        })
     }
     pub fn terminal(&self) -> Option<gateway_core::lifecycle::SemanticTerminal> {
         use gateway_core::lifecycle::SemanticTerminal;
