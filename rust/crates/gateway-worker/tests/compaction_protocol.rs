@@ -1,6 +1,11 @@
-use super::*;
+//! Compaction host wire contracts, moved unchanged from the in-crate test module.
+use gateway_core::{js_string::JsString16, source_json::SourceJson};
+use gateway_worker::compaction_host::protocol::{
+    Call, interruption, jev_request, member, parse_response, residue_request,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
 struct Golden {
@@ -20,7 +25,8 @@ struct WireCase {
 #[test]
 fn compaction_host_jev_wire_matches_frozen_source_sdk_without_route_restrictions()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture: Golden = serde_json::from_str(include_str!("../source_golden.json"))?;
+    let fixture: Golden =
+        serde_json::from_str(include_str!("../src/compaction_host/source_golden.json"))?;
     assert_eq!(
         fixture.source_blob,
         "f2cf7a41e7c59e73bf5db9604027c4c42a0b15cb"

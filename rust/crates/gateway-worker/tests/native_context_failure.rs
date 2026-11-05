@@ -23,6 +23,7 @@ fn turn(stream: Option<&str>, metadata: Option<&str>) -> TestResult<NativeTurn> 
             .transpose()
             .map_err(|error| format!("{error:?}"))?,
         turn_metadata: metadata.map(str::to_owned),
+        early: None,
     })
 }
 fn answer(error: &RoutingError, turn: &NativeTurn, minted: &mut bool) -> TestResult<Reply> {

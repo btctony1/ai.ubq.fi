@@ -39,14 +39,22 @@ pub fn selects_native_encoding(
 /// The two SSE frames for one local aggregate failure under a gateway-minted response id.
 pub fn encode_native_context_failure(id: &str, created_at: i64, error: &GatewayError) -> String {
     let fields = &error.envelope.error;
+    failure_frames(
+        id,
+        created_at,
+        json!({
+            "code": fields.code,
+            "message": fields.message,
+            "param": fields.param.clone().flatten(),
+        }),
+    )
+}
+/// Source `response.created` then one `response.failed` carrying `error`, with no usage or output.
+pub fn failure_frames(id: &str, created_at: i64, error: serde_json::Value) -> String {
     let response = json!({"id":id,"object":"response","created_at":created_at,"status":"in_progress","error":null,"output":[],"usage":null});
     let mut failed = response.clone();
     failed["status"] = json!("failed");
-    failed["error"] = json!({
-        "code": fields.code,
-        "message": fields.message,
-        "param": fields.param.clone().flatten(),
-    });
+    failed["error"] = error;
     [
         json!({"type":"response.created","sequence_number":0,"response":response}),
         json!({"type":TERMINAL_TYPE,"sequence_number":1,"response":failed}),

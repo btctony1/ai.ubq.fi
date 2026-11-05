@@ -16,8 +16,8 @@ use crate::{
     },
 };
 use crate::{
-    inference_capture::Capture, inference_currentness::CurrentnessGuard, inference_local::Start,
-    inference_source::NativeTurn,
+    inference_capture::Capture, inference_currentness::CurrentnessGuard, inference_early::Gate,
+    inference_local::Start, inference_source::NativeTurn,
 };
 use gateway_auth::types::{AuthMethod, AuthPrincipal};
 use gateway_core::{
@@ -41,7 +41,6 @@ use gateway_schema::{
     request::RequestSurface,
     source_request::{SourceRequestDocument, parse_http_body},
 };
-use serde_json::json;
 use std::{cell::RefCell, rc::Rc};
 use worker::{Context, Method, Request, Response};
 
@@ -60,6 +59,7 @@ struct Dispatch<'a> {
     routing: &'a routing_host::Host,
     cancellation: &'a Rc<Cancellation>,
     capture: &'a Rc<Capture>,
+    early: Option<Rc<Gate>>,
 }
 impl Dispatch<'_> {
     async fn send(
@@ -74,6 +74,7 @@ impl Dispatch<'_> {
         let gate_attempt = attempt.clone();
         let gate_cancel = self.cancellation.clone();
         let gate_capture = self.capture.clone();
+        let gate_early = self.early.clone();
         let passive_trace = Rc::new(RefCell::new(None));
         let gate_trace = passive_trace.clone();
         // Claude actual body exists before any same-binding material/host constructor.
@@ -96,6 +97,9 @@ impl Dispatch<'_> {
             // No await follows this real dispatch gate before the actual fetch.
             if !gate_cancel.signal().aborted() {
                 *gate_trace.borrow_mut() = gate_capture.start(gate_attempt.request.provider());
+            }
+            if let Some(gate) = gate_early {
+                gate.commit(gate_cancel.signal().aborted());
             }
             Ok(())
         };
@@ -281,12 +285,14 @@ async fn dispatch_attempts(
     routing: routing_host::Host,
     cancellation: Rc<Cancellation>,
     capture: Rc<Capture>,
+    early: Option<Rc<Gate>>,
 ) -> Result<(Response, PreparedAttempt), RoutingError> {
     let dispatch = Dispatch {
         session: &session,
         routing: &routing,
         cancellation: &cancellation,
         capture: &capture,
+        early,
     };
     let mut pending: Option<(WorkspaceContinuation, Vec<u8>)> = None;
     loop {
@@ -365,35 +371,46 @@ pub async fn run(
         .get("x-codex-turn-metadata")
         .ok()
         .flatten();
+    let early = Gate::for_request(responses, turn_metadata.as_deref());
     let capture = Capture::new(request, &bytes, store.clone(), host, context.clone());
-    let result = Inference {
-        principal,
-        store: &store,
-        host,
-        context,
-        capture: &capture,
-        responses,
-        turn: NativeTurn {
+    let (principal, host, owner) = (principal.clone(), host.clone(), context.clone());
+    let committed = early.clone();
+    // Owned so that, after admitted native headers, `waitUntil` can finish this same pipeline.
+    let pipeline = async move {
+        let turn = NativeTurn {
             stream: None,
             turn_metadata,
-        },
-    }
-    .execute(
-        &bytes,
-        catalog,
-        client_version,
-        request_id,
+            early: committed.clone(),
+        };
+        let inference = Inference {
+            principal: &principal,
+            store: &store,
+            host: &host,
+            context,
+            capture: &capture,
+            responses,
+            turn,
+        };
         // Compaction requests use the selected provider, like ordinary inference.
-        false,
-        permit,
-    )
-    .await;
-    if let Err(error) = &result {
-        capture
-            .failure(error, host.cancellation.client_aborted())
+        let result = inference
+            .execute(&bytes, catalog, client_version, request_id, false, permit)
             .await;
+        let cancelled = host.cancellation.client_aborted();
+        match result {
+            Err(error) if committed.is_some_and(|gate| gate.committed()) => {
+                crate::inference_source::late_error(error, &capture, cancelled).await
+            }
+            Err(error) => {
+                capture.failure(&error, cancelled).await;
+                Err(error)
+            }
+            answer => answer,
+        }
+    };
+    match early {
+        Some(gate) => crate::inference_early::respond(gate, pipeline, &owner).await,
+        None => pipeline.await,
     }
-    result
 }
 
 struct Inference<'a> {
@@ -428,6 +445,11 @@ impl Inference<'_> {
         };
         self.turn.stream =
             gateway_core::source_serialization::member(document.original_source(), "stream");
+        if let Some(gate) = &self.turn.early {
+            let model =
+                gateway_core::source_serialization::member(document.original_source(), "model");
+            gate.arm(self.turn.stream.as_ref(), model.as_ref());
+        }
         let original = RequestContext {
             request_id,
             principal: PrincipalId(crate::lifecycle::principal_id(self.principal)),
@@ -557,6 +579,7 @@ impl Inference<'_> {
             routing,
             self.host.cancellation.clone(),
             self.capture.clone(),
+            self.turn.early.clone(),
         )
         .await
         {
@@ -620,6 +643,7 @@ impl Inference<'_> {
             event_stream,
             status,
             provider,
+            early: self.turn.early_committed(),
         }
         .send()
         .await
@@ -640,59 +664,6 @@ const CEREBRAS_RATE_LIMIT_HEADERS: &[&str] = &[
     "x-ratelimit-remaining-tokens-day",
     "x-ratelimit-reset-tokens-day",
 ];
-
-/// Source Cerebras errors forward only message/code from a bounded body.
-fn cerebras_error_detail(bytes: &[u8]) -> (String, String) {
-    let fallback_message = "Cerebras upstream returned an error.".to_owned();
-    let fallback_code = "cerebras_upstream_error".to_owned();
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
-        return (fallback_message, fallback_code);
-    };
-    let error = value.get("error").filter(|value| value.is_object());
-    let text = |name: &str, limit: usize| {
-        error
-            .and_then(|error| error.get(name))
-            .or_else(|| value.get(name))
-            .and_then(serde_json::Value::as_str)
-            .map(|value| {
-                value
-                    .chars()
-                    .take(limit)
-                    .collect::<String>()
-                    .trim()
-                    .to_owned()
-            })
-            .filter(|value| !value.is_empty())
-    };
-    (
-        text("message", 1_000).unwrap_or(fallback_message),
-        text("code", 200).unwrap_or(fallback_code),
-    )
-}
-
-fn cerebras_error_type(status: u16) -> &'static str {
-    if status >= 500 {
-        "server_error"
-    } else if status == 429 {
-        "rate_limit_error"
-    } else {
-        "invalid_request_error"
-    }
-}
-
-fn cerebras_error_body(status: u16, bytes: &[u8]) -> Vec<u8> {
-    let (message, code) = cerebras_error_detail(bytes);
-    serde_json::to_vec(&json!({
-        "error": {
-            "message": message,
-            "type": cerebras_error_type(status),
-            "code": code,
-        }
-    }))
-    .unwrap_or_else(|_| {
-        br#"{"error":{"message":"Cerebras upstream returned an error.","type":"invalid_request_error","code":"cerebras_upstream_error"}}"#.to_vec()
-    })
-}
 
 fn set_header(response: &mut Response, name: &str, value: &str) -> Result<(), GatewayError> {
     response
@@ -812,57 +783,4 @@ fn provider_correlation(
 
 fn invalid(message: &str) -> GatewayError {
     GatewayError::new(502, message, Some("upstream_transport_error"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cerebras_payment_required_body_forwards_only_source_detail_fields() {
-        let input = br#"{"error":{"message":"Payment required","code":"payment_required","param":"secret","type":"vendor"},"secret":"never"}"#;
-        let body = cerebras_error_body(402, input);
-        let text = String::from_utf8(body.clone()).unwrap();
-        assert_eq!(
-            text,
-            r#"{"error":{"message":"Payment required","type":"invalid_request_error","code":"payment_required"}}"#
-        );
-        assert!(!text.contains("vendor"));
-        assert!(!text.contains("secret"));
-        assert!(!text.contains("param"));
-    }
-
-    #[test]
-    fn cerebras_payment_required_146_byte_source_shape() {
-        let message = "x".repeat(65);
-        let input = serde_json::to_vec(&json!({
-            "error": {"message": message, "code": "payment_required"}
-        }))
-        .unwrap();
-        let body = cerebras_error_body(402, &input);
-        assert_eq!(body.len(), 146);
-        assert_eq!(
-            body,
-            br#"{"error":{"message":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","type":"invalid_request_error","code":"payment_required"}}"#
-        );
-    }
-
-    #[test]
-    fn cerebras_status_types_and_bounds_follow_the_source() {
-        let body = cerebras_error_body(429, br#"{"error":{"message":"slow down","code":"rate"}}"#);
-        assert!(
-            String::from_utf8(body)
-                .unwrap()
-                .contains("rate_limit_error")
-        );
-        let body = cerebras_error_body(503, br#"{"message":"down","code":"unavailable"}"#);
-        assert!(String::from_utf8(body).unwrap().contains("server_error"));
-        let oversized = serde_json::to_vec(&json!({
-            "error": {"message": "m".repeat(2_000), "code": "c".repeat(400)}
-        }))
-        .unwrap();
-        let body = String::from_utf8(cerebras_error_body(402, &oversized)).unwrap();
-        assert!(!body.contains(&"m".repeat(1_001)));
-        assert!(!body.contains(&"c".repeat(201)));
-    }
 }
