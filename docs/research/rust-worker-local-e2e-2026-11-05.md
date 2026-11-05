@@ -184,3 +184,7 @@ Totals: 47 rows. 45 PASS (rows 21 and 22 prove only "no hang"), 1 BLOCKED (21b),
 - Real Passport, passkey and GitHub sign-in completion, or a signed-in admin UI.
 - DNS, Cloudflare proxy and Worker-exclusion routing, the public `https://ai.ubq.fi/health`, or an authenticated live inference receipt.
 - The other contract gates (`cargo test`, `clippy`, `fmt`, native/WASM `cargo check`), CI, and ARM64 or macOS hosts.
+
+## Binding follow-up (2026-11-05)
+
+`cloudflare.config.ts` now also declares `DENO_DEPLOY_TOKEN` (the admin token source) and `UOS_AI_PASSPORT_CLIENT_ID`, `UOS_AI_PASSPORT_ORIGIN` and `UOS_AI_PASSPORT_REDIRECT_URI` as `bindings.secret()`, with no values. The pinned `cf` CLI treats every declared secret as required. Set all twelve with `cf secret` or `wrangler secret put` (or a `--secrets-file` on first deploy) before deploying, or the deploy refuses. `UOS_AI_PASSPORT_AUDIENCE` stays undeclared and defaults to `ai`. The Worker can also read other names that stay undeclared because declaring them would make them required: `UOS_AI_KERNEL_PUBLIC_KEY`, `OPENLUX_API_KEY`, `VOYAGEAI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_WORKSPACE_ID`, `CLAUDE_CODE_ALLOWED_KEY_IDS`, `CODEX_AUTH_JSON_B64` and `SENTINEL_REPLAY_KEY`. The same goes for the native-owner bindings `UOS_NATIVE_CARRIER`, `UOS_CANDIDATE_NATIVE_V1` and `UOS_CANDIDATE_INITIAL_SEAL_V1`, which this isolated candidate must not carry, and for the Deno Deploy platform markers.
