@@ -1,7 +1,7 @@
 {
   "crates": {
     "gateway-admin": 2469,
-    "gateway-admin-data": 4861,
+    "gateway-admin-data": 4854,
     "gateway-admin-runtime": 5607,
     "gateway-auth": 8506,
     "gateway-authority": 32269,
