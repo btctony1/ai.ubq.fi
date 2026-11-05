@@ -1,11 +1,11 @@
 //! Internal source-string semantics; these do not claim ordinary JSON ingress supports lone surrogates.
-use super::*;
+use gateway_core::js_string::JsString16;
+use gateway_providers::chat::{FORWARD_LIMIT, bound_source};
+use serde_json::Value;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 fn golden() -> serde_json::Result<Value> {
-    serde_json::from_str(include_str!(
-        "../../tests/fixtures/forwarding-unicode-source-v1.json"
-    ))
+    serde_json::from_str(include_str!("fixtures/forwarding-unicode-source-v1.json"))
 }
 
 #[test]

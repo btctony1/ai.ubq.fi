@@ -60,7 +60,7 @@ pub(crate) fn oversized(
         Some(Some(JsString16::from_utf8(path))),
     )
 }
-pub(crate) fn bound_source(
+pub fn bound_source(
     text: &JsString16,
     path: &str,
     call_id: Option<&JsString16>,
@@ -197,6 +197,3 @@ pub fn validate_thinking_choice(body: &Value, field: &str) -> Result<(), Gateway
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod unicode_tests;

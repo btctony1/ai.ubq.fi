@@ -173,6 +173,8 @@ pub struct ClaudeBodyOptions {
     pub reasoning_summary: Option<JsString16>,
     pub restored_native_messages: Option<Vec<SourceJson>>,
     pub ordinary_preparation: Option<OrdinaryPreparationContext>,
+    /// TS `omitHostedWebSearch`: the direct lane drops Codex's unsupported hosted search.
+    pub omit_hosted_web_search: bool,
 }
 impl ClaudeBodyOptions {
     pub fn new(kind: ClaudeCredentialKind) -> Self {
@@ -186,6 +188,7 @@ impl ClaudeBodyOptions {
             reasoning_summary: None,
             restored_native_messages: None,
             ordinary_preparation: None,
+            omit_hosted_web_search: true,
         }
     }
     pub(crate) fn from_scalar(options: &PrepareOptions) -> Self {
@@ -203,6 +206,7 @@ impl ClaudeBodyOptions {
             reasoning_summary: options.reasoning_summary.clone(),
             restored_native_messages: options.restored_native_messages.clone(),
             ordinary_preparation: options.ordinary_preparation.clone(),
+            omit_hosted_web_search: true,
         }
     }
 }
