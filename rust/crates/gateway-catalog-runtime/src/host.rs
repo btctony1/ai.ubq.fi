@@ -35,7 +35,9 @@ impl CatalogProvider {
             Self::Openlux => Some("https://api.openlux.ai/v1/models"),
             Self::Surplus => Some("https://api.surplusintelligence.ai/v1/models"),
             Self::Lithos => Some("https://api.lithosai.cloud/v1/models"),
-            Self::Openrouter => Some("https://openrouter.ai/api/v1/models"),
+            Self::Openrouter => {
+                Some("https://openrouter.ai/api/v1/models?output_modalities=text%2Cdecisions")
+            }
             Self::ClaudeCode => Some("https://api.anthropic.com/v1/models"),
             Self::Deepseek | Self::Cerebras => None,
         }
