@@ -1,15 +1,20 @@
-use super::*;
-use crate::types::direct_credential;
+//! Response-id translation through the actual per-hop wire preparation.
 use gateway_auth::{
     crypto::Secret,
     types::{AuthMethod, AuthPrincipal},
 };
 use gateway_core::identity::{PrincipalId, RequestContext, RequestId};
+use gateway_core::{provider::UpstreamProvider, source_json::SourceJson};
 use gateway_providers::{
     response::{decode_response, response_plan, translated_response_id},
     sse::StreamDecoder,
     types::{ClaudeBodyOptions, ClaudeCredentialKind, Headers, PrepareOptions, ResponseDecode},
 };
+use gateway_providers::{source_request::prepare_source_request, types::ClientSurface};
+use gateway_routing_runtime::types::{
+    CredentialFence, PreparedWireRequest, PublishedCredential, RoutingInput, direct_credential,
+};
+use gateway_routing_runtime::wire::{claude_ordinary, finalize_claude, prepare, set};
 use gateway_schema::catalog::CatalogInput;
 use serde_json::{Value, json};
 

@@ -4,7 +4,7 @@
     "gateway-admin-data": 4854,
     "gateway-admin-runtime": 5607,
     "gateway-auth": 8282,
-    "gateway-authority": 32259,
+    "gateway-authority": 32214,
     "gateway-catalog-runtime": 4198,
     "gateway-claude-runtime": 2211,
     "gateway-compaction": 3173,
@@ -14,14 +14,14 @@
     "gateway-native": 22320,
     "gateway-observability": 12243,
     "gateway-providers": 9773,
-    "gateway-routing-runtime": 7967,
+    "gateway-routing-runtime": 7524,
     "gateway-schema": 7563,
-    "gateway-worker": 20490
+    "gateway-worker": 20488
   },
   "targets": {
     "gateway-admin-runtime/test/contracts": 1509,
     "gateway-admin/test/contracts": 1400,
-    "gateway-authority/test/conformance": 5558,
+    "gateway-authority/test/conformance": 5516,
     "gateway-catalog-runtime/test/admin": 1020,
     "gateway-catalog-runtime/test/control": 1306,
     "gateway-catalog-runtime/test/runtime": 1502,
