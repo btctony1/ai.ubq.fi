@@ -20,5 +20,9 @@ gateway-migration-test-support.workspace = true
 name = "state-transfer-reverse"
 path = "examples/state-transfer-reverse.rs"
 
+[[example]]
+name = "state-transfer-fixture-frames"
+path = "examples/state-transfer-fixture-frames.rs"
+
 [lints]
 workspace = true

@@ -50,6 +50,32 @@ fn fixture() -> Result<NativeCapture, String> {
     serde_json::from_str(&text).check("fixture json")
 }
 
+/// The fixture plus rows large enough that staging needs several chunks.
+fn multi_chunk_fixture() -> Result<NativeCapture, String> {
+    use gateway_core::tuple_key::KeyPart;
+    use gateway_migration::native_capture::{NativeEntry, NativeRevision};
+    let mut capture = fixture()?;
+    for name in ["big-a", "big-b"] {
+        let parts = [
+            KeyPart::String("default".into()),
+            KeyPart::String(name.into()),
+        ];
+        capture.entries.push(NativeEntry {
+            raw_key: TupleKey::from_parts(&parts)
+                .check("key")?
+                .sort_bytes()
+                .to_vec(),
+            value: NativeValue::Bytes(vec![7; 1_100_000]),
+            revision: NativeRevision {
+                version: "49".into(),
+                sequence: "0".into(),
+            },
+            expiration_ms: 4_102_444_800_000,
+        });
+    }
+    Ok(capture)
+}
+
 struct Plan {
     capture_id: String,
     frames: Vec<Vec<u8>>,
@@ -155,29 +181,44 @@ fn counter_key() -> Result<RecordKey, String> {
     Ok(TupleKey::from_parts(&parts).check("key")?.to_record_key())
 }
 
+/// Applies every frame, then replays each one as a lost-response retry would.
+fn import_all(target: &SqliteStore, plan: &Plan) -> Outcome {
+    let operator = Operator::new(&Scope::Import {
+        capture_id: plan.capture_id.clone(),
+    })?;
+    let status = operator.json(target, Operation::ImportStatus, b"")?;
+    assert_eq!(status["state"], "empty");
+    for (index, frame) in plan.frames.iter().enumerate() {
+        let applied = operator.json(target, Operation::ImportFrame, frame)?;
+        assert_eq!(applied["outcome"], "applied", "frame {index}");
+        assert_eq!(applied["status"]["activation_authorized"], false);
+        // A lost response is retried with the exact same frame: no second write.
+        let replayed = operator.json(target, Operation::ImportFrame, frame)?;
+        assert_eq!(replayed["outcome"], "replayed", "frame {index}");
+        assert_eq!(replayed["status"], applied["status"]);
+    }
+    let sealed = operator.json(target, Operation::ImportStatus, b"")?;
+    assert_eq!(sealed["state"], "sealed");
+    assert_eq!(sealed["received_records"], sealed["expected_records"]);
+    Ok(())
+}
+
+#[test]
+fn several_chunks_import_with_exact_replay_of_each_committed_chunk() -> Outcome {
+    let directory = Directory::new();
+    let target = SqliteStore::open(&directory.file("target.sqlite3"));
+    let plan = plan(&multi_chunk_fixture()?)?;
+    assert!(plan.frames.len() >= 4, "several append chunks");
+    import_all(&target, &plan)
+}
+
 #[test]
 fn import_resume_write_export_and_reverse_preserve_every_latest_row() -> Outcome {
     let directory = Directory::new();
     let target = SqliteStore::open(&directory.file("target.sqlite3"));
     let source = fixture()?;
     let plan = plan(&source)?;
-    let operator = Operator::new(&Scope::Import {
-        capture_id: plan.capture_id.clone(),
-    })?;
-    let status = operator.json(&target, Operation::ImportStatus, b"")?;
-    assert_eq!(status["state"], "empty");
-    for (index, frame) in plan.frames.iter().enumerate() {
-        let applied = operator.json(&target, Operation::ImportFrame, frame)?;
-        assert_eq!(applied["outcome"], "applied", "frame {index}");
-        assert_eq!(applied["status"]["activation_authorized"], false);
-        // A lost response is retried with the exact same frame: no second write.
-        let replayed = operator.json(&target, Operation::ImportFrame, frame)?;
-        assert_eq!(replayed["outcome"], "replayed", "frame {index}");
-        assert_eq!(replayed["status"], applied["status"]);
-    }
-    let sealed = operator.json(&target, Operation::ImportStatus, b"")?;
-    assert_eq!(sealed["state"], "sealed");
-    assert_eq!(sealed["received_records"], sealed["expected_records"]);
+    import_all(&target, &plan)?;
     let staged = run(export_native_latest(&target, 2300)).check("staged inverse")?;
     // The established inverse normalizes graph wire tokens, so the staged
     // result must equal the existing atomic adoption's inverse exactly, and
