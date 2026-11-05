@@ -1342,6 +1342,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway-state-reverse"
+version = "0.1.0"
+dependencies = [
+ "gateway-auth",
+ "gateway-core",
+ "gateway-migration",
+ "gateway-migration-test-support",
+ "gateway-state-transfer",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "gateway-state-transfer"
+version = "0.1.0"
+dependencies = [
+ "gateway-auth",
+ "gateway-core",
+ "gateway-migration",
+ "gateway-migration-test-support",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "gateway-worker"
 version = "0.1.0"
 dependencies = [
@@ -1371,6 +1396,7 @@ dependencies = [
  "gateway-routing-runtime",
  "gateway-routing-runtime-test-support",
  "gateway-schema",
+ "gateway-state-transfer",
  "serde",
  "serde_json",
  "wasm-bindgen",
