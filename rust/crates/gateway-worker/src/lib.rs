@@ -31,7 +31,7 @@ mod inference_currentness;
 mod inference_lifecycle;
 mod inference_local;
 mod inference_local_lifecycle;
-mod inference_source;
+pub mod inference_source;
 mod lifecycle;
 mod live_host;
 mod live_http;

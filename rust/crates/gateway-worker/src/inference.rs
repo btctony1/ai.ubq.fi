@@ -17,6 +17,7 @@ use crate::{
 };
 use crate::{
     inference_capture::Capture, inference_currentness::CurrentnessGuard, inference_local::Start,
+    inference_source::NativeTurn,
 };
 use gateway_auth::types::{AuthMethod, AuthPrincipal};
 use gateway_core::{
@@ -359,6 +360,11 @@ pub async fn run(
             })
         })
         .unwrap_or_else(|| "0.100.0".into());
+    let turn_metadata = request
+        .headers()
+        .get("x-codex-turn-metadata")
+        .ok()
+        .flatten();
     let capture = Capture::new(request, &bytes, store.clone(), host, context.clone());
     let result = Inference {
         principal,
@@ -367,6 +373,10 @@ pub async fn run(
         context,
         capture: &capture,
         responses,
+        turn: NativeTurn {
+            stream: None,
+            turn_metadata,
+        },
     }
     .execute(
         &bytes,
@@ -393,10 +403,11 @@ struct Inference<'a> {
     context: Rc<Context>,
     capture: &'a Rc<Capture>,
     responses: bool,
+    turn: NativeTurn,
 }
 impl Inference<'_> {
     async fn execute(
-        self,
+        mut self,
         bytes: &[u8],
         catalog: CatalogState,
         client_version: String,
@@ -407,9 +418,16 @@ impl Inference<'_> {
         let document = match parse_http_body(bytes).and_then(SourceRequestDocument::new) {
             Ok(document) => document,
             Err(error) => {
-                return crate::inference_source::error_response(error.into(), self.capture).await;
+                return crate::inference_source::error_response(
+                    error.into(),
+                    self.capture,
+                    &self.turn,
+                )
+                .await;
             }
         };
+        self.turn.stream =
+            gateway_core::source_serialization::member(document.original_source(), "stream");
         let original = RequestContext {
             request_id,
             principal: PrincipalId(crate::lifecycle::principal_id(self.principal)),
@@ -450,7 +468,8 @@ impl Inference<'_> {
             Ok(Start::Response(response)) => return Ok(response),
             Ok(Start::Ordinary(session)) => session,
             Err(error) => {
-                return crate::inference_source::error_response(error, self.capture).await;
+                return crate::inference_source::error_response(error, self.capture, &self.turn)
+                    .await;
             }
         };
 
@@ -467,7 +486,8 @@ impl Inference<'_> {
                     .finish(Default::default())
                     .await
                     .map_err(|error| *error.error)?;
-                return crate::inference_source::error_response(error, self.capture).await;
+                return crate::inference_source::error_response(error, self.capture, &self.turn)
+                    .await;
             }
         };
         self.capture
@@ -546,7 +566,8 @@ impl Inference<'_> {
                     .finish(Default::default())
                     .await
                     .map_err(|error| *error.error)?;
-                return crate::inference_source::error_response(error, self.capture).await;
+                return crate::inference_source::error_response(error, self.capture, &self.turn)
+                    .await;
             }
         };
 
