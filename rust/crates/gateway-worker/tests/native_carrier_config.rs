@@ -162,3 +162,91 @@ fn https_origin_rejects_alternate_authorities_and_nonroot_input() -> TestResult 
     }
     Ok(())
 }
+
+const RENEWAL: &str = r#""live_sideband","owner_renewal","access_publish","supervisor_read""#;
+
+fn with_owners(key: &str, capabilities: &str, owners: &str) -> String {
+    format!(
+        r#"{{"origin":"https://native.example","identity":{},"renewal_owners":[{owners}]}}"#,
+        identity(key, capabilities)
+    )
+}
+
+#[test]
+fn renewal_owner_registry_configures_fixed_codex_custody() -> TestResult {
+    let key = base64url(&[12; 32]);
+    let one = with_owners(
+        &key,
+        RENEWAL,
+        r#"{"owner_id":"vps-a","codex_home":"/home/codex/.codex"}"#,
+    );
+    let two = with_owners(
+        &key,
+        RENEWAL,
+        r#"{"owner_id":"vps-a","codex_home":"/home/codex/.codex"},{"owner_id":"vps-b","codex_home":"/home/codex/.codex-b"}"#,
+    );
+    for raw in [one, two] {
+        let bindings = NativeBindings::from_binding_value(Some(&raw))
+            .map_err(message)?
+            .ok_or("a configured binding")?;
+        assert!(bindings.renewal_owners().is_ok());
+    }
+    // The pre-existing shape remains valid and still grants no renewal ownership.
+    let plain = config(
+        "https://native.example",
+        &identity(&key, r#""live_sideband""#),
+    );
+    let bindings = NativeBindings::from_binding_value(Some(&plain))
+        .map_err(message)?
+        .ok_or("a configured binding")?;
+    assert!(bindings.renewal_owners().is_err());
+    Ok(())
+}
+
+#[test]
+fn renewal_registry_and_capabilities_must_pair_exactly() -> TestResult {
+    let key = base64url(&[13; 32]);
+    let owner = r#"{"owner_id":"vps-a","codex_home":"/home/codex/.codex"}"#;
+    for raw in [
+        // A registry without both renewal capabilities.
+        with_owners(&key, r#""live_sideband""#, owner),
+        with_owners(&key, r#""owner_renewal""#, owner),
+        with_owners(&key, r#""access_publish""#, owner),
+        // Renewal capabilities without a registry would silently disable refresh.
+        config(
+            "https://native.example",
+            &identity(&key, r#""owner_renewal","access_publish""#),
+        ),
+        config(
+            "https://native.example",
+            &identity(&key, r#""owner_renewal""#),
+        ),
+        with_owners(&key, RENEWAL, ""),
+    ] {
+        assert_eq!(error_code(&raw)?.as_deref(), INVALID, "accepted {raw}");
+    }
+    Ok(())
+}
+
+#[test]
+fn renewal_registry_entries_fail_closed() -> TestResult {
+    let key = base64url(&[14; 32]);
+    let a = r#"{"owner_id":"vps-a","codex_home":"/home/codex/.codex"}"#;
+    for owners in [
+        r#"{"owner_id":"vps-a","codex_home":"relative/.codex"}"#.to_owned(),
+        r#"{"owner_id":"","codex_home":"/home/codex/.codex"}"#.to_owned(),
+        r#"{"owner_id":"vps-a","codex_home":"/home/codex/.codex","extra":1}"#.to_owned(),
+        r#"{"owner_id":"vps-a"}"#.to_owned(),
+        // A duplicate owner id or a duplicate home.
+        format!(r#"{a},{{"owner_id":"vps-a","codex_home":"/home/codex/.codex-b"}}"#),
+        format!(r#"{a},{{"owner_id":"vps-b","codex_home":"/home/codex/.codex"}}"#),
+        // More than the two independent owners the authority registry admits.
+        format!(
+            r#"{a},{{"owner_id":"vps-b","codex_home":"/b"}},{{"owner_id":"vps-c","codex_home":"/c"}}"#
+        ),
+    ] {
+        let raw = with_owners(&key, RENEWAL, &owners);
+        assert_eq!(error_code(&raw)?.as_deref(), INVALID, "accepted {owners}");
+    }
+    Ok(())
+}
