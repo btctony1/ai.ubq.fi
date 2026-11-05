@@ -27,8 +27,22 @@ use std::{
     sync::Arc,
     task::{Context, Poll, Waker},
 };
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+/// Converts a missing value or a failed result into the test's error instead of a panic.
+trait Must<T> {
+    fn must(self) -> TestResult<T>;
+}
+impl<T> Must<T> for Option<T> {
+    fn must(self) -> TestResult<T> {
+        self.ok_or_else(|| "missing value".into())
+    }
+}
+impl<T, E: std::fmt::Debug> Must<T> for Result<T, E> {
+    fn must(self) -> TestResult<T> {
+        self.map_err(|error| format!("{error:?}").into())
+    }
+}
 
-type TestResult = Result<(), Box<dyn std::error::Error>>;
 const VERSION: &str = "0.170.0";
 
 fn run<T>(future: impl Future<Output = T>) -> T {
@@ -110,7 +124,11 @@ impl QueryStore for Store {
                 entries.push(QueryEntry { key, record });
             }
         }
-        entries.sort_by_key(|row| TupleKey::from_record_key(&row.key).unwrap());
+        let mut keyed = (entries.into_iter())
+            .map(|row| Ok((TupleKey::from_record_key(&row.key)?, row)))
+            .collect::<Result<Vec<_>, GatewayError>>()?;
+        keyed.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut entries: Vec<_> = keyed.into_iter().map(|(_, row)| row).collect();
         if request.reverse {
             entries.reverse();
         }
@@ -194,7 +212,7 @@ impl CatalogHost for Host {
     async fn fetch(&self, request: CatalogFetch) -> Result<CatalogFetchResponse, GatewayError> {
         self.requests.borrow_mut().push(request);
         let next = self.responses.borrow_mut().pop_front();
-        Ok(next.expect("unexpected catalog fetch"))
+        next.ok_or_else(|| GatewayError::new(500, "fixture response queue is empty", None))
     }
     fn schedule_refresh(&self, job: LeasedRefresh) -> Option<LeasedRefresh> {
         self.scheduled.borrow_mut().push(job);
@@ -205,14 +223,14 @@ impl CatalogHost for Host {
 fn catalog(id: &str) -> Value {
     json!({"models":[{"slug":id}]})
 }
-fn ids(response: &CatalogResponse) -> Vec<String> {
-    let body: Value = serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
-    let models = body["models"].as_array().unwrap();
-    models
+fn ids(response: &CatalogResponse) -> TestResult<Vec<String>> {
+    let body: Value = serde_json::from_str(response.body.as_ref().must()?).must()?;
+    let models = body["models"].as_array().must()?;
+    Ok(models
         .iter()
         .filter_map(|r| r["slug"].as_str())
         .map(str::to_owned)
-        .collect()
+        .collect())
 }
 fn lease_held(store: &Store) -> bool {
     store.live(&catalog_store::lease_key(VERSION)).is_some()
@@ -230,7 +248,7 @@ fn stale_cache_returns_before_its_background_refresh_settles() -> TestResult {
         stale.headers["Cache-Control"],
         "private, max-age=300, stale-while-revalidate=86400"
     );
-    assert_eq!(ids(&stale), ["stale"]);
+    assert_eq!(ids(&stale)?, ["stale"]);
     // The answer precedes any upstream request; the scheduled refresh still owns the lease.
     assert!(host.requests.borrow().is_empty());
     assert!(lease_held(&store));
@@ -241,7 +259,7 @@ fn stale_cache_returns_before_its_background_refresh_settles() -> TestResult {
         catalog("refreshed").to_string(),
     ));
     let settled = run(runtime.refresh_leased(&store, &host, &job, None))?;
-    assert_eq!(ids(&settled), ["refreshed"]);
+    assert_eq!(ids(&settled)?, ["refreshed"]);
     assert!(!lease_held(&store));
     let requests = host.requests.borrow().clone();
     assert!(matches!(
@@ -251,7 +269,7 @@ fn stale_cache_returns_before_its_background_refresh_settles() -> TestResult {
 
     let refreshed = run(runtime.versioned_models(&store, &host, VERSION, None))?;
     assert_eq!(refreshed.headers["x-uos-cache"], "hit");
-    assert_eq!(ids(&refreshed), ["refreshed"]);
+    assert_eq!(ids(&refreshed)?, ["refreshed"]);
     assert!(host.scheduled.borrow().is_empty());
     Ok(())
 }
@@ -263,16 +281,16 @@ fn failed_background_refresh_retains_stale_body_and_releases_lease() -> TestResu
     let runtime = CatalogRuntime::new();
     store.seed_stale("stale", None)?;
     let response = run(runtime.versioned_models(&store, &host, VERSION, None))?;
-    assert_eq!(ids(&response), ["stale"]);
+    assert_eq!(ids(&response)?, ["stale"]);
     assert_eq!(response.headers["x-uos-cache"], "stale");
     host.queue(CatalogFetchResponse::json(503, "{}"));
     let recovered = run(runtime.refresh_leased(&store, &host, &host.take_job(), None))?;
-    assert_eq!(ids(&recovered), ["stale"]);
+    assert_eq!(ids(&recovered)?, ["stale"]);
     assert_eq!(recovered.headers["x-uos-cache"], "stale");
     assert!(!lease_held(&store));
     // The retained stale body still answers, and the next request schedules a new refresh.
     let again = run(runtime.versioned_models(&store, &host, VERSION, None))?;
-    assert_eq!(ids(&again), ["stale"]);
+    assert_eq!(ids(&again)?, ["stale"]);
     assert!(lease_held(&store));
     host.take_job();
     Ok(())
@@ -286,14 +304,14 @@ fn cold_miss_still_waits_for_the_upstream_catalog() -> TestResult {
     host.queue(CatalogFetchResponse::json(200, catalog("cold").to_string()));
     let response = run(runtime.versioned_models(&store, &host, VERSION, None))?;
     assert_eq!(response.headers["x-uos-cache"], "miss");
-    assert_eq!(ids(&response), ["cold"]);
+    assert_eq!(ids(&response)?, ["cold"]);
     assert!(host.scheduled.borrow().is_empty());
     assert!(!lease_held(&store));
     Ok(())
 }
 
 #[test]
-fn single_account_evidence_retains_trimmed_units_and_distinguishes_escape_text() {
+fn single_account_evidence_retains_trimmed_units_and_distinguishes_escape_text() -> TestResult {
     let store = Store::new();
     let host = Host::new(&store);
     let runtime = CatalogRuntime::new();
@@ -303,12 +321,13 @@ fn single_account_evidence_retains_trimmed_units_and_distinguishes_escape_text()
     host.queue(response);
     // A blank row rejects the catalog body, but the account evidence is published first.
     let _rejected = run(runtime.versioned_models(&store, &host, VERSION, None));
-    let evidence = store.live(&state::account_models_key()).unwrap();
-    let document = decode_source_control_record(&evidence).unwrap();
-    let accounts = source::member(&document, "accounts").unwrap();
-    let account = source::member(&accounts, "account-a").unwrap();
+    let evidence = store.live(&state::account_models_key()).must()?;
+    let document = decode_source_control_record(&evidence).must()?;
+    let accounts = source::member(&document, "accounts").must()?;
+    let account = source::member(&accounts, "account-a").must()?;
     assert_eq!(
         source::member(&account, "slugs"),
-        Some(SourceJson::parse(r#"["\ud800","\\ud800","\udc00"]"#).unwrap())
+        Some(SourceJson::parse(r#"["\ud800","\\ud800","\udc00"]"#).must()?)
     );
+    Ok(())
 }

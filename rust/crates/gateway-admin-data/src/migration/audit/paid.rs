@@ -10,6 +10,14 @@ use gateway_core::{
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+const REQUEST_FACTS: [&str; 6] = [
+    "key_id",
+    "request_id",
+    "window_reset_at_ms",
+    "reserved_microcredits",
+    "billing_state",
+    "spend_microcredits",
+];
 /// Validate the existing source paid-request shape without a model/effort Value transcript.
 pub fn valid_source_paid_request(v: &SourceJson) -> bool {
     source::equals(v, "v", &serde_json::json!(3))
@@ -169,54 +177,7 @@ impl PaidAudit {
         let p = &row.parts;
         let id = p.get(4).and_then(Value::as_str).unwrap_or("");
         if segment == "request" {
-            let value = decode_source_control_record(&row.record)?;
-            if p.len() != 6
-                || !api_id(p.get(4))
-                || !api_id(p.get(5))
-                || !valid_source_paid_request(&value)
-                || !source::equals(&value, "key_id", &p[4])
-                || !source::equals(&value, "request_id", &p[5])
-            {
-                a.errors.push(
-                    format!("paid fallback V3 request is malformed: {}", reference(p))
-                        .as_str()
-                        .into(),
-                );
-                return Ok(());
-            }
-            self.orphans[index].push((
-                a.errors.len(),
-                id.to_owned(),
-                format!(
-                    "paid fallback V3 request is orphaned: {id}/{}",
-                    p[5].as_str().unwrap_or("")
-                )
-                .as_str()
-                .into(),
-            ));
-            // Full request validation above precedes this exact scalar projection.
-            self.requests.insert(
-                reference(&p[4..]),
-                gateway_core::source_serialization::object(
-                    [
-                        "key_id",
-                        "request_id",
-                        "window_reset_at_ms",
-                        "reserved_microcredits",
-                        "billing_state",
-                        "spend_microcredits",
-                    ]
-                    .into_iter()
-                    .map(|field| {
-                        (
-                            field,
-                            source::member(&value, field).expect("validated request fact"),
-                        )
-                    })
-                    .collect(),
-                )?,
-            );
-            return Ok(());
+            return self.accept_request(index, row);
         }
         let v = row.value()?;
         let diagnostic = match segment {
@@ -296,6 +257,38 @@ impl PaidAudit {
             }
             _ => {}
         }
+        Ok(())
+    }
+    fn accept_request(&mut self, index: usize, row: &ObservedRow) -> Result<(), GatewayError> {
+        let (a, p) = (&mut self.groups[index].0, &row.parts);
+        let id = p.get(4).and_then(Value::as_str).unwrap_or("");
+        let value = decode_source_control_record(&row.record)?;
+        let facts = (p.len() == 6
+            && api_id(p.get(4))
+            && api_id(p.get(5))
+            && valid_source_paid_request(&value)
+            && source::equals(&value, "key_id", &p[4])
+            && source::equals(&value, "request_id", &p[5]))
+        .then(|| {
+            REQUEST_FACTS
+                .into_iter()
+                .map(|field| source::member(&value, field).map(|fact| (field, fact)))
+                .collect::<Option<Vec<_>>>()
+        })
+        .flatten();
+        let Some(facts) = facts else {
+            let message = format!("paid fallback V3 request is malformed: {}", reference(p));
+            a.errors.push(message.as_str().into());
+            return Ok(());
+        };
+        let orphan = format!(
+            "paid fallback V3 request is orphaned: {id}/{}",
+            p[5].as_str().unwrap_or("")
+        );
+        self.orphans[index].push((a.errors.len(), id.to_owned(), orphan.as_str().into()));
+        // Full request validation above precedes this exact scalar projection.
+        let projection = gateway_core::source_serialization::object(facts)?;
+        self.requests.insert(reference(&p[4..]), projection);
         Ok(())
     }
     pub(super) fn finish(

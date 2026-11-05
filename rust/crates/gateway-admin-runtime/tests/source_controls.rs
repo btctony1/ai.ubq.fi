@@ -29,6 +29,21 @@ use std::{
     sync::OnceLock,
     task::{Context, Poll, Waker},
 };
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+/// Converts a missing value or a failed result into the test's error instead of a panic.
+trait Must<T> {
+    fn must(self) -> TestResult<T>;
+}
+impl<T> Must<T> for Option<T> {
+    fn must(self) -> TestResult<T> {
+        self.ok_or_else(|| "missing value".into())
+    }
+}
+impl<T, E: std::fmt::Debug> Must<T> for Result<T, E> {
+    fn must(self) -> TestResult<T> {
+        self.map_err(|error| format!("{error:?}").into())
+    }
+}
 const NOW: i64 = 1_000_000;
 fn run<F: Future>(future: F) -> F::Output {
     let mut context = Context::from_waker(Waker::noop());
@@ -616,7 +631,7 @@ impl RuntimeCapabilities for RefreshProbe {
     }
 }
 #[test]
-fn quota_refresh_requires_string_selectors_before_the_passive_owner_read() {
+fn quota_refresh_requires_string_selectors_before_the_passive_owner_read() -> TestResult {
     let cases: [(&str, u16, Option<&str>); 6] = [
         (
             r#"{"account_id":"a","account_cohort_id":"c"}"#,
@@ -630,6 +645,7 @@ fn quota_refresh_requires_string_selectors_before_the_passive_owner_read() {
         (r#"{"account_id":"a","account_cohort_id":null}"#, 400, None),
     ];
     for (body, status, cohort) in cases {
+        let document = SourceJson::parse(body).must()?;
         run(async {
             let store = Store::default();
             let host = Host::default();
@@ -642,10 +658,7 @@ fn quota_refresh_requires_string_selectors_before_the_passive_owner_read() {
                 config: &config,
             };
             let response = runtime
-                .execute(
-                    AdminOperation::ClaudeQuotaRefresh,
-                    input(SourceJson::parse(body).unwrap()),
-                )
+                .execute(AdminOperation::ClaudeQuotaRefresh, input(document))
                 .await
                 .unwrap_or_else(|error| AuthResponse::json(error.status, json!({})));
             assert_eq!(response.status, status, "{body}");
@@ -658,4 +671,5 @@ fn quota_refresh_requires_string_selectors_before_the_passive_owner_read() {
             assert!(store.rows.borrow().is_empty());
         });
     }
+    Ok(())
 }

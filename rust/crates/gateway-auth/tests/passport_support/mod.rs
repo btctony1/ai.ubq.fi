@@ -27,6 +27,22 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+/// Converts a missing value or a failed result into the test's error instead of a panic.
+pub trait Must<T> {
+    fn must(self) -> TestResult<T>;
+}
+impl<T> Must<T> for Option<T> {
+    fn must(self) -> TestResult<T> {
+        self.ok_or_else(|| "missing value".into())
+    }
+}
+impl<T, E: std::fmt::Debug> Must<T> for Result<T, E> {
+    fn must(self) -> TestResult<T> {
+        self.map_err(|error| format!("{error:?}").into())
+    }
+}
+
 pub const PRIVATE_PEM: &str = "-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC2KZoerxCpwvKR
 /jhLxhtSgAwXFc024RC923ofAAkWD2O1OFDdktMX1i7/gHqE1kyquoSCTPM8AJvG
@@ -67,28 +83,31 @@ pub fn run<F: Future>(future: F) -> F::Output {
     }
 }
 
-pub fn private() -> RsaPrivateKey {
-    RsaPrivateKey::from_pkcs8_pem(PRIVATE_PEM).unwrap()
+pub fn private() -> TestResult<RsaPrivateKey> {
+    RsaPrivateKey::from_pkcs8_pem(PRIVATE_PEM).must()
 }
 
-pub fn public_jwk(kid: &str) -> Value {
-    let public = private().to_public_key();
-    json!({
+pub fn public_jwk(kid: &str) -> TestResult<Value> {
+    let public = private()?.to_public_key();
+    Ok(json!({
         "kty":"RSA",
         "kid":kid,
         "alg":"RS256",
         "use":"sig",
         "n":base64url(&public.n().to_bytes_be()),
         "e":base64url(&public.e().to_bytes_be()),
-    })
+    }))
 }
 
-pub fn jwt(header: Value, claims: &Value) -> String {
-    let header = base64url(serde_json::to_string(&header).unwrap().as_bytes());
-    let payload = base64url(serde_json::to_string(claims).unwrap().as_bytes());
-    let signing = SigningKey::<Sha256>::new(private());
+pub fn jwt(header: Value, claims: &Value) -> TestResult<String> {
+    let header = base64url(serde_json::to_string(&header).must()?.as_bytes());
+    let payload = base64url(serde_json::to_string(claims).must()?.as_bytes());
+    let signing = SigningKey::<Sha256>::new(private()?);
     let signature = signing.sign(format!("{header}.{payload}").as_bytes());
-    format!("{header}.{payload}.{}", base64url(&signature.to_vec()))
+    Ok(format!(
+        "{header}.{payload}.{}",
+        base64url(&signature.to_vec())
+    ))
 }
 
 pub fn claims() -> Value {
@@ -107,7 +126,7 @@ pub fn claims() -> Value {
     })
 }
 
-pub fn token(claims: &Value) -> String {
+pub fn token(claims: &Value) -> TestResult<String> {
     jwt(json!({"alg":"RS256","typ":"JWT","kid":"key-a"}), claims)
 }
 
@@ -141,18 +160,18 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(jwks: Vec<Value>, access_token: String) -> Self {
+    pub fn new(jwks: Vec<Value>, access_token: String) -> TestResult<Self> {
         let grant = bound(
             json!({"token":GRANT,"subject":"user-123","createdAt":"2026-01-01T00:00:00.000Z"}),
         );
-        Self {
+        Ok(Self {
             now: Cell::new(1_500_000),
-            jwks: RefCell::new(serde_json::to_vec(&json!({"keys":jwks})).unwrap()),
+            jwks: RefCell::new(serde_json::to_vec(&json!({"keys":jwks})).must()?),
             exchange: RefCell::new(
                 serde_json::to_vec(
                     &json!({"accessToken":access_token,"tokenType":"Bearer","appSession":grant}),
                 )
-                .unwrap(),
+                .must()?,
             ),
             jwks_status: Cell::new(200),
             exchange_status: Cell::new(200),
@@ -162,13 +181,14 @@ impl Host {
             session_status: Cell::new(200),
             session_admin: Cell::new(true),
             session_calls: RefCell::new(Vec::new()),
-        }
+        })
     }
     fn session_reply(&self, request: &AuthUpstreamRequest) -> AuthUpstreamResponse {
         let headers = request.headers().into_iter().collect::<BTreeMap<_, _>>();
         assert_eq!(headers["authorization"], format!("Bearer {GRANT}"));
-        let body: Value = serde_json::from_slice(&request.body().unwrap()).unwrap();
-        assert_eq!(body, bound(json!({})));
+        let body = request.body().ok();
+        let body = body.and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        assert_eq!(body, Some(bound(json!({}))));
         self.session_calls.borrow_mut().push(request.url());
         let status = self.session_status.get();
         if request.url().ends_with("/revoke") {
@@ -181,9 +201,12 @@ impl Host {
         let session = bound(json!({"subject":"user-123","createdAt":"2026-01-01T00:00:00.000Z"}));
         let user = json!({"id":"user-123","handle":"alice","isAdmin":self.session_admin.get(),"scopes":["ai"]});
         let body = json!({"authenticated":true,"session":session,"user":user});
-        AuthUpstreamResponse {
-            status,
-            body: serde_json::to_vec(&body).unwrap(),
+        match serde_json::to_vec(&body) {
+            Ok(body) => AuthUpstreamResponse { status, body },
+            Err(_) => AuthUpstreamResponse {
+                status: 500,
+                body: Vec::new(),
+            },
         }
     }
 }
@@ -320,27 +343,30 @@ pub fn with_cookie(mut request: AuthRequest, name: &str, value: &str) -> AuthReq
     request
 }
 
-pub fn cookie_value(header: &str, name: &str) -> String {
-    let pair = header.split(';').next().unwrap();
-    pair.strip_prefix(&format!("{name}=")).unwrap().to_owned()
+pub fn cookie_value(header: &str, name: &str) -> TestResult<String> {
+    let pair = header.split(';').next().must()?;
+    Ok(pair.strip_prefix(&format!("{name}=")).must()?.to_owned())
 }
 
 /// Begins a real login and returns the callback request carrying its cookies.
-pub fn begin(passport: &PassportService<'_, Store, Host>, return_to: &str) -> AuthRequest {
-    let mut login = url::Url::parse("https://ai.ubq.fi/auth/login").unwrap();
+pub fn begin(
+    passport: &PassportService<'_, Store, Host>,
+    return_to: &str,
+) -> TestResult<AuthRequest> {
+    let mut login = url::Url::parse("https://ai.ubq.fi/auth/login").must()?;
     login.query_pairs_mut().append_pair("return_to", return_to);
-    let response = run(passport.login(&request("GET", login.as_str()))).unwrap();
+    let response = run(passport.login(&request("GET", login.as_str()))).must()?;
     let cookies = response
         .set_cookies
         .iter()
-        .map(|value| value.split(';').next().unwrap().to_owned())
-        .collect::<Vec<_>>()
+        .map(|value| value.split(';').next().map(str::to_owned).must())
+        .collect::<TestResult<Vec<_>>>()?
         .join("; ");
-    let state = cookie_value(&response.set_cookies[0], PASSPORT_STATE_COOKIE);
+    let state = cookie_value(&response.set_cookies[0], PASSPORT_STATE_COOKIE)?;
     let mut callback = request(
         "GET",
         &format!("https://ai.ubq.fi/auth/callback?state={state}&code=code-1"),
     );
     callback.headers.insert("cookie".into(), cookies);
-    callback
+    Ok(callback)
 }

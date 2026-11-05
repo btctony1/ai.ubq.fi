@@ -16,18 +16,18 @@ mod passport_support;
 use passport_support::*;
 
 #[test]
-fn login_redirect_contains_the_exact_fixed_authorize_contract() {
+fn login_redirect_contains_the_exact_fixed_authorize_contract() -> TestResult {
     reset_jwks_cache();
-    let host = Host::new(vec![public_jwk("key-a")], token(&claims()));
+    let host = Host::new(vec![public_jwk("key-a")?], token(&claims())?)?;
     let store = Store::default();
     let passport = PassportService {
         store: &store,
         host: &host,
         config: &PassportConfig::production(),
     };
-    let response = run(passport.login(&request("GET", "https://ai.ubq.fi/auth/login"))).unwrap();
+    let response = run(passport.login(&request("GET", "https://ai.ubq.fi/auth/login"))).must()?;
     assert_eq!(response.status, 302);
-    let location = url::Url::parse(&response.headers["location"]).unwrap();
+    let location = url::Url::parse(&response.headers["location"]).must()?;
     assert_eq!(
         location.origin().ascii_serialization(),
         "https://passport.ubq.fi"
@@ -48,38 +48,40 @@ fn login_redirect_contains_the_exact_fixed_authorize_contract() {
             "{PASSPORT_STATE_COOKIE}={state}; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax"
         )
     );
-    let verifier = cookie_value(&response.set_cookies[1], PASSPORT_VERIFIER_COOKIE);
+    let verifier = cookie_value(&response.set_cookies[1], PASSPORT_VERIFIER_COOKIE)?;
     assert!(response.set_cookies[1].ends_with("; Max-Age=600; HttpOnly; Secure; SameSite=Lax"));
     assert_eq!(verifier.len(), 43);
     assert_eq!(
         query["code_challenge"],
         gateway_passport_session::binding::pkce_challenge(&verifier)
     );
+    Ok(())
 }
 
 #[test]
-fn callback_rejects_exchange_status_and_malformed_token() {
+fn callback_rejects_exchange_status_and_malformed_token() -> TestResult {
     reset_jwks_cache();
-    let host = Host::new(vec![public_jwk("key-a")], "not-a-jwt".into());
+    let host = Host::new(vec![public_jwk("key-a")?], "not-a-jwt".into())?;
     let store = Store::default();
     let passport = PassportService {
         store: &store,
         host: &host,
         config: &PassportConfig::production(),
     };
-    let request = begin(&passport, "/admin");
-    assert_eq!(run(passport.callback(&request)).unwrap().status, 401);
+    let request = begin(&passport, "/admin")?;
+    assert_eq!(run(passport.callback(&request)).must()?.status, 401);
     host.exchange_status.set(400);
-    assert_eq!(run(passport.callback(&request)).unwrap().status, 401);
+    assert_eq!(run(passport.callback(&request)).must()?.status, 401);
+    Ok(())
 }
 
 #[test]
-fn claim_signature_and_algorithm_failures_fail_closed() {
+fn claim_signature_and_algorithm_failures_fail_closed() -> TestResult {
     reset_jwks_cache();
     let config = PassportConfig::production();
-    let public = private().to_public_key();
+    let public = private()?.to_public_key();
     let keys = BTreeMap::from([("key-a".to_owned(), public)]);
-    let valid = token(&claims());
+    let valid = token(&claims())?;
     assert!(verify_jwt(&valid, &config, 1_500, &keys).is_ok());
 
     let mut cases = Vec::new();
@@ -96,10 +98,10 @@ fn claim_signature_and_algorithm_failures_fail_closed() {
     cases.push(("empty-jti", mutate("jti", json!(""))));
     cases.push(("exp-before-iat", mutate("exp", json!(999))));
     let mut missing = claims();
-    missing.as_object_mut().unwrap().remove("jti");
+    missing.as_object_mut().must()?.remove("jti");
     cases.push(("missing-jti", missing));
     for (name, claims) in cases {
-        let token = token(&claims);
+        let token = token(&claims)?;
         assert!(
             verify_jwt(&token, &config, 1_500, &keys).is_err(),
             "{name} must fail"
@@ -116,51 +118,53 @@ fn claim_signature_and_algorithm_failures_fail_closed() {
         json!({"alg":"RS256","typ":"JWT"}),
         json!({"alg":"RS256","kid":"key-a"}),
     ] {
-        assert!(verify_jwt(&jwt(header, &claims()), &config, 1_500, &keys).is_err());
+        assert!(verify_jwt(&jwt(header, &claims())?, &config, 1_500, &keys).is_err());
     }
     let tampered = valid
         .rsplit_once('.')
         .map(|(prefix, _)| format!("{prefix}.AAAA"))
-        .unwrap();
+        .must()?;
     assert!(verify_jwt(&tampered, &config, 1_500, &keys).is_err());
+    Ok(())
 }
 
 #[test]
-fn jwks_cache_refreshes_exactly_once_for_an_unknown_kid() {
+fn jwks_cache_refreshes_exactly_once_for_an_unknown_kid() -> TestResult {
     reset_jwks_cache();
-    let token_a = token(&claims());
+    let token_a = token(&claims())?;
     let mut token_b_claims = claims();
     token_b_claims["jti"] = json!("jti-2");
     token_b_claims["sub"] = json!("user-456");
     let token_b = jwt(
         json!({"alg":"RS256","typ":"JWT","kid":"key-b"}),
         &token_b_claims,
-    );
-    let host = Host::new(vec![public_jwk("key-a")], token_a.clone());
+    )?;
+    let host = Host::new(vec![public_jwk("key-a")?], token_a.clone())?;
     let store = Store::default();
     let passport = PassportService {
         store: &store,
         host: &host,
         config: &PassportConfig::production(),
     };
-    assert_eq!(run(passport.bearer(&token_a)).unwrap().sub, "user-123");
+    assert_eq!(run(passport.bearer(&token_a)).must()?.sub, "user-123");
     assert_eq!(host.jwks_fetches.get(), 1);
     assert!(run(passport.bearer(&token_a)).is_ok());
     assert_eq!(host.jwks_fetches.get(), 1);
     // Rotation publishes the new key; one refresh serves key-b.
     *host.jwks.borrow_mut() =
-        serde_json::to_vec(&json!({"keys":[public_jwk("key-a"),public_jwk("key-b")]})).unwrap();
+        serde_json::to_vec(&json!({"keys":[public_jwk("key-a")?,public_jwk("key-b")?]})).must()?;
     assert!(run(passport.bearer(&token_b)).is_ok());
     assert_eq!(host.jwks_fetches.get(), 2);
-    let unknown = jwt(json!({"alg":"RS256","typ":"JWT","kid":"key-c"}), &claims());
+    let unknown = jwt(json!({"alg":"RS256","typ":"JWT","kid":"key-c"}), &claims())?;
     assert!(run(passport.bearer(&unknown)).is_err());
     assert_eq!(host.jwks_fetches.get(), 3);
+    Ok(())
 }
 
 #[test]
-fn jwks_transport_failure_and_non_success_status_are_unavailable() {
+fn jwks_transport_failure_and_non_success_status_are_unavailable() -> TestResult {
     reset_jwks_cache();
-    let host = Host::new(vec![public_jwk("key-a")], token(&claims()));
+    let host = Host::new(vec![public_jwk("key-a")?], token(&claims())?)?;
     *host.jwks.borrow_mut() = b"not json".to_vec();
     assert!(
         run(PassportService {
@@ -168,21 +172,22 @@ fn jwks_transport_failure_and_non_success_status_are_unavailable() {
             host: &host,
             config: &PassportConfig::production()
         }
-        .bearer(&token(&claims())))
+        .bearer(&token(&claims())?))
         .is_err()
     );
     reset_jwks_cache();
     host.jwks_status.set(302);
-    *host.jwks.borrow_mut() = serde_json::to_vec(&json!({"keys":[public_jwk("key-a")]})).unwrap();
+    *host.jwks.borrow_mut() = serde_json::to_vec(&json!({"keys":[public_jwk("key-a")?]})).must()?;
     assert!(
         run(PassportService {
             store: &Store::default(),
             host: &host,
             config: &PassportConfig::production()
         }
-        .bearer(&token(&claims())))
+        .bearer(&token(&claims())?))
         .is_err()
     );
+    Ok(())
 }
 
 fn assert_unauthorized(result: Result<gateway_auth::types::AuthPrincipal, GatewayError>) {
@@ -194,10 +199,10 @@ fn assert_unauthorized(result: Result<gateway_auth::types::AuthPrincipal, Gatewa
 }
 
 #[test]
-fn cookie_and_bearer_principals_map_to_the_passport_subject() {
+fn cookie_and_bearer_principals_map_to_the_passport_subject() -> TestResult {
     reset_jwks_cache();
-    let token = token(&claims());
-    let host = Host::new(vec![public_jwk("key-a")], token.clone());
+    let token = token(&claims())?;
+    let host = Host::new(vec![public_jwk("key-a")?], token.clone())?;
     let store = Store::default();
     let config = config();
     let auth = AuthService::new(&store, &host, &config);
@@ -206,7 +211,7 @@ fn cookie_and_bearer_principals_map_to_the_passport_subject() {
         PASSPORT_COOKIE,
         &token,
     );
-    let principal = run(auth.authenticate_client(&cookie)).unwrap();
+    let principal = run(auth.authenticate_client(&cookie)).must()?;
     assert!(matches!(
         principal.method,
         AuthMethod::PassportSession { .. }
@@ -219,7 +224,7 @@ fn cookie_and_bearer_principals_map_to_the_passport_subject() {
     bearer
         .headers
         .insert("authorization".into(), format!("Bearer {token}"));
-    let principal = run(auth.authenticate_client(&bearer)).unwrap();
+    let principal = run(auth.authenticate_client(&bearer)).must()?;
     assert!(matches!(
         principal.method,
         AuthMethod::PassportBearer { .. }
@@ -228,17 +233,18 @@ fn cookie_and_bearer_principals_map_to_the_passport_subject() {
         principal.method.principal_id(None),
         "passport-user:user-123"
     );
-    let response = run(auth.handle_auth_route(&cookie)).unwrap().unwrap();
-    let body: Value = serde_json::from_slice(&response.body.to_bytes().unwrap()).unwrap();
+    let response = run(auth.handle_auth_route(&cookie)).must()?.must()?;
+    let body: Value = serde_json::from_slice(&response.body.to_bytes().must()?).must()?;
     assert_eq!(body["auth"]["principal"], "passport-user:user-123");
     assert_eq!(body["auth"]["method"]["kind"], "passport_session");
     assert_eq!(body["auth"]["token"]["present"], false);
+    Ok(())
 }
 
 #[test]
-fn invalid_jwt_shaped_bearer_never_falls_through_to_admin() {
+fn invalid_jwt_shaped_bearer_never_falls_through_to_admin() -> TestResult {
     reset_jwks_cache();
-    let host = Host::new(vec![public_jwk("key-a")], token(&claims()));
+    let host = Host::new(vec![public_jwk("key-a")?], token(&claims())?)?;
     let store = Store::default();
     let config = AuthConfig {
         admin_tokens: vec![gateway_auth::crypto::Secret::new("fixture-admin".into())],
@@ -246,7 +252,7 @@ fn invalid_jwt_shaped_bearer_never_falls_through_to_admin() {
         ..Default::default()
     };
     let auth = AuthService::new(&store, &host, &config);
-    let bad = jwt(json!({"alg":"HS256","typ":"JWT","kid":"key-a"}), &claims());
+    let bad = jwt(json!({"alg":"HS256","typ":"JWT","kid":"key-a"}), &claims())?;
     let mut request = request("GET", "https://ai.ubq.fi/uos/auth");
     request
         .headers
@@ -256,17 +262,18 @@ fn invalid_jwt_shaped_bearer_never_falls_through_to_admin() {
     let mut valid_bearer = request.clone();
     valid_bearer.headers.insert(
         "authorization".into(),
-        format!("Bearer {}", token(&claims())),
+        format!("Bearer {}", token(&claims())?),
     );
     assert!(run(auth.authenticate_client(&valid_bearer)).is_ok());
     assert_unauthorized(run(auth.authenticate_admin(&valid_bearer)));
+    Ok(())
 }
 
 #[test]
-fn admin_cookie_requires_isadmin_and_same_origin_mutations() {
+fn admin_cookie_requires_isadmin_and_same_origin_mutations() -> TestResult {
     reset_jwks_cache();
-    let admin_token = token(&claims());
-    let host = Host::new(vec![public_jwk("key-a")], admin_token.clone());
+    let admin_token = token(&claims())?;
+    let host = Host::new(vec![public_jwk("key-a")?], admin_token.clone())?;
     let store = Store::default();
     let config = config();
     let auth = AuthService::new(&store, &host, &config);
@@ -286,7 +293,7 @@ fn admin_cookie_requires_isadmin_and_same_origin_mutations() {
         .headers
         .insert("origin".into(), "https://evil.example".into());
     assert_eq!(
-        run(auth.authenticate_admin(&foreign)).unwrap_err().status,
+        run(auth.authenticate_admin(&foreign)).err().must()?.status,
         403
     );
     let mut same = with_cookie(
@@ -300,22 +307,23 @@ fn admin_cookie_requires_isadmin_and_same_origin_mutations() {
 
     let mut non_admin = claims();
     non_admin["isAdmin"] = json!(false);
-    let non_admin = token(&non_admin);
+    let non_admin = token(&non_admin)?;
     host.exchange.borrow_mut();
-    *host.jwks.borrow_mut() = serde_json::to_vec(&json!({"keys":[public_jwk("key-a")]})).unwrap();
+    *host.jwks.borrow_mut() = serde_json::to_vec(&json!({"keys":[public_jwk("key-a")?]})).must()?;
     let request = with_cookie(
         request("GET", "https://ai.ubq.fi/admin"),
         PASSPORT_COOKIE,
         &non_admin,
     );
     assert_eq!(
-        run(auth.authenticate_admin(&request)).unwrap_err().status,
+        run(auth.authenticate_admin(&request)).err().must()?.status,
         403
     );
+    Ok(())
 }
 
 #[test]
-fn same_origin_mutation_rejects_foreign_browser_markers() {
+fn same_origin_mutation_rejects_foreign_browser_markers() -> TestResult {
     let mut request = request("POST", "https://ai.ubq.fi/admin/api");
     assert!(same_origin_mutation(&request));
     request
@@ -332,10 +340,11 @@ fn same_origin_mutation_rejects_foreign_browser_markers() {
         .headers
         .insert("referer".into(), "https://evil.example/page".into());
     assert!(same_origin_mutation(&request));
+    Ok(())
 }
 
 #[test]
-fn preview_client_config_is_explicit_and_fail_closed() {
+fn preview_client_config_is_explicit_and_fail_closed() -> TestResult {
     let config = AuthConfig::default();
     let candidate = request("GET", "https://rust-candidate.ai.ubq.fi/auth/login");
     assert!(gateway_auth::passport::config_for_request(&config, &candidate).is_none());
@@ -355,21 +364,23 @@ fn preview_client_config_is_explicit_and_fail_closed() {
         gateway_auth::passport::config_for_request(&config, &production),
         Some(PassportConfig::production())
     );
+    Ok(())
 }
 
 #[test]
-fn claims_serde_keeps_the_required_wire_metadata() {
-    let parsed: PassportClaims = serde_json::from_value(claims()).unwrap();
+fn claims_serde_keeps_the_required_wire_metadata() -> TestResult {
+    let parsed: PassportClaims = serde_json::from_value(claims()).must()?;
     assert_eq!(parsed.sub, "user-123");
     assert!(parsed.is_admin);
     assert_eq!(parsed.client_id, "ai");
     assert_eq!(parsed.agent_token_id, None);
     let shaped = gateway_auth::passport::method_json(&parsed, false);
     assert_eq!(shaped["principal"], "passport-user:user-123");
+    Ok(())
 }
 
 #[test]
-fn preview_config_never_defaults_to_the_production_client() {
+fn preview_config_never_defaults_to_the_production_client() -> TestResult {
     assert_eq!(PassportConfig::from_values(&BTreeMap::new()), None);
     let mut values = BTreeMap::from([
         ("UOS_AI_PASSPORT_CLIENT_ID".to_owned(), "preview".to_owned()),
@@ -397,13 +408,15 @@ fn preview_config_never_defaults_to_the_production_client() {
         "http://preview.example".to_owned(),
     );
     assert_eq!(PassportConfig::from_values(&values), None);
+    Ok(())
 }
 
 #[test]
-fn jwt_shape_requires_three_parts_and_an_algorithm_header() {
+fn jwt_shape_requires_three_parts_and_an_algorithm_header() -> TestResult {
     let header = base64url(br#"{"alg":"RS256"}"#);
     assert!(jwt_shaped(&format!("{header}.payload.signature")));
     assert!(!jwt_shaped("opaque"));
     assert!(!jwt_shaped("a.b"));
     assert!(!jwt_shaped(".."));
+    Ok(())
 }

@@ -55,5 +55,5 @@ pub fn get(value: &SourceJson, name: &str) -> Option<SourceJson> {
         .flatten()
 }
 pub fn null() -> SourceJson {
-    SourceJson::parse("null").expect("null is JSON")
+    SourceJson::null()
 }

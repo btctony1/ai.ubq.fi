@@ -768,54 +768,53 @@ impl<S: QueryStore, H: ObservabilityHost> ObservabilityRuntime<S, H> {
         ))
     }
     pub async fn claude_capacity_history(&self, at: i64) -> SourceJson {
-        let base=source::canonical(&SourceJson::from_serializable(&json!({"v":1,"scan":"unavailable","truncated":false,"bucket_ms":BUCKET_MS,"retention_ms":RETENTION_MS,"stale_after_ms":STALE_MS,"points":[]})).expect("finite history base")).expect("finite history base");
-        let read: Result<SourceJson, GatewayError> = async {
-            let cutoff = (at - RETENTION_MS).max(0);
-            let first = cutoff / BUCKET_MS * BUCKET_MS;
-            let end = at / BUCKET_MS * BUCKET_MS + BUCKET_MS;
-            let selector = QuerySelector::Range {
-                start: claude_key("history", json!([first])),
-                end: claude_key("history", json!([end])),
-            };
-            let rows =
-                store::scan_selector(self.store.as_ref(), selector, true, at, LIMIT + 1).await?;
-            let mut points = Vec::new();
-            let mut truncated = rows.len() > LIMIT;
-            for entry in rows.into_iter().take(LIMIT) {
-                let value = claude_history_bucket_record_source(&entry.key, &entry.record)?;
-                let bucket: Bucket = value.deserialize()?;
-                for point in bucket.points.into_iter().rev() {
-                    let p: Point = point.deserialize()?;
-                    if p.sampled_at_ms > at as f64 || p.clock() < cutoff as f64 {
-                        continue;
-                    }
-                    if points.len() >= LIMIT {
-                        truncated = true;
-                        break;
-                    }
-                    points.push((point, p.clock() as i64));
+        let base=SourceJson::from_serializable(&json!({"v":1,"scan":"unavailable","truncated":false,"bucket_ms":BUCKET_MS,"retention_ms":RETENTION_MS,"stale_after_ms":STALE_MS,"points":[]})).and_then(|v| source::canonical(&v)).unwrap_or_else(|_| SourceJson::null());
+        self.read_claude_history(at, &base).await.unwrap_or(base)
+    }
+    async fn read_claude_history(
+        &self,
+        at: i64,
+        base: &SourceJson,
+    ) -> Result<SourceJson, GatewayError> {
+        let cutoff = (at - RETENTION_MS).max(0);
+        let first = cutoff / BUCKET_MS * BUCKET_MS;
+        let end = at / BUCKET_MS * BUCKET_MS + BUCKET_MS;
+        let selector = QuerySelector::Range {
+            start: claude_key("history", json!([first])),
+            end: claude_key("history", json!([end])),
+        };
+        let rows = store::scan_selector(self.store.as_ref(), selector, true, at, LIMIT + 1).await?;
+        let mut points = Vec::new();
+        let mut truncated = rows.len() > LIMIT;
+        for entry in rows.into_iter().take(LIMIT) {
+            let value = claude_history_bucket_record_source(&entry.key, &entry.record)?;
+            let bucket: Bucket = value.deserialize()?;
+            for point in bucket.points.into_iter().rev() {
+                let p: Point = point.deserialize()?;
+                if p.sampled_at_ms > at as f64 || p.clock() < cutoff as f64 {
+                    continue;
                 }
-                if points.len() >= LIMIT && truncated {
+                if points.len() >= LIMIT {
+                    truncated = true;
                     break;
                 }
+                points.push((point, p.clock() as i64));
             }
-            points.sort_by_key(|(_, at)| *at);
-            let mut out = SourceObject::parse(&base)?;
-            out.set("scan", "ok")?;
-            out.set("truncated", &truncated)?;
-            out.set(
-                "points",
-                &points.into_iter().map(|(p, _)| p).collect::<Vec<_>>(),
-            )?;
-            out.source_json()
+            if points.len() >= LIMIT && truncated {
+                break;
+            }
         }
-        .await;
-        read.unwrap_or(base)
+        points.sort_by_key(|(_, at)| *at);
+        let mut out = SourceObject::parse(base)?;
+        out.set("scan", "ok")?;
+        out.set("truncated", &truncated)?;
+        let points: Vec<_> = points.into_iter().map(|(p, _)| p).collect();
+        out.set("points", &points)?;
+        out.source_json()
     }
     /// Source `listClaudeUsageRollups`: the separate direct-meter namespace, read only.
     pub async fn claude_usage_rollups(&self, since: i64, at: i64) -> SourceJson {
-        let base = SourceJson::parse(r#"{"scan":"unavailable","truncated":false,"points":[]}"#)
-            .expect("finite rollup base");
+        let base = unavailable_rollups();
         let read: Result<SourceJson, GatewayError> = async {
             let (first, last) = (since / HOUR_MS * HOUR_MS, at / HOUR_MS * HOUR_MS);
             let selector = QuerySelector::Range {
@@ -848,8 +847,7 @@ impl<S: QueryStore, H: ObservabilityHost> ObservabilityRuntime<S, H> {
         read.unwrap_or(base)
     }
     pub async fn claude_capacity_rollups(&self, since: i64, at: i64) -> SourceJson {
-        let base = SourceJson::parse(r#"{"scan":"unavailable","truncated":false,"points":[]}"#)
-            .expect("finite rollup base");
+        let base = unavailable_rollups();
         let read: Result<SourceJson, GatewayError> = async {
             let first = since / HOUR_MS * HOUR_MS;
             let last = at / HOUR_MS * HOUR_MS;
@@ -873,13 +871,15 @@ impl<S: QueryStore, H: ObservabilityHost> ObservabilityRuntime<S, H> {
             let mut out = SourceObject::parse(&base)?;
             out.set("scan", "ok")?;
             out.set("truncated", &truncated)?;
-            out.set(
-                "points",
-                &points.into_iter().map(|(p, _)| p).collect::<Vec<_>>(),
-            )?;
+            let points: Vec<_> = points.into_iter().map(|(p, _)| p).collect();
+            out.set("points", &points)?;
             out.source_json()
         }
         .await;
         read.unwrap_or(base)
     }
+}
+fn unavailable_rollups() -> SourceJson {
+    SourceJson::parse(r#"{"scan":"unavailable","truncated":false,"points":[]}"#)
+        .unwrap_or_else(|_| SourceJson::null())
 }

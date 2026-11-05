@@ -91,10 +91,7 @@ pub fn parse_catalog(body: &str) -> Option<SourceJson> {
     Some(parsed)
 }
 pub(crate) fn source_stringify(value: &SourceJson) -> String {
-    source::canonical(value)
-        .expect("source catalog value")
-        .as_str()
-        .to_owned()
+    source::canonical(value).map_or_else(|_| value.as_str().to_owned(), |v| v.as_str().to_owned())
 }
 pub fn gzip(body: &str) -> Result<Vec<u8>, GatewayError> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());

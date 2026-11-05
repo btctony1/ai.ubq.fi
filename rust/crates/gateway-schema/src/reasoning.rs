@@ -86,7 +86,8 @@ impl ModelReasoning {
         Self {
             levels,
             default_level,
-            wire_efforts: source::object_keys(wire_efforts).expect("source effort-map object"),
+            wire_efforts: source::object_keys(wire_efforts)
+                .unwrap_or_else(|_| control::object(Vec::new())),
         }
     }
     pub fn wire_effort(&self, effort: &JsString16) -> Option<JsString16> {
