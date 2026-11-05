@@ -11,23 +11,14 @@ use serde_json::{Value, json};
 pub(crate) fn key(name: &str) -> RecordKey {
     store::key(json!(["uos_ai", "provider_capacity", "v1", name]))
 }
+fn capacity_key(parts: Value) -> RecordKey {
+    store::prefixed(&["uos_ai", "provider_capacity", "v1"], parts)
+}
 fn history_key(point: &Value) -> RecordKey {
-    store::key(json!([
-        "uos_ai",
-        "provider_capacity",
-        "v1",
-        "history",
-        point["bucket_start_at_ms"]
-    ]))
+    capacity_key(json!(["history", point["bucket_start_at_ms"]]))
 }
 fn available_key(slot: u8) -> RecordKey {
-    store::key(json!([
-        "uos_ai",
-        "provider_capacity",
-        "v1",
-        "last_available",
-        slot
-    ]))
+    capacity_key(json!(["last_available", slot]))
 }
 fn observation(value: &Value) -> Option<Value> {
     let at = store::safe_i64(&value["sampled_at_ms"])?;
@@ -267,13 +258,7 @@ impl<S: QueryStore, H: ObservabilityHost> ObservabilityRuntime<S, H> {
             .expect("validated source bucket")
             / shape::HOUR_MS
             * shape::HOUR_MS;
-        let rollup_key = store::key(json!([
-            "uos_ai",
-            "provider_capacity",
-            "v1",
-            "rollup",
-            bucket
-        ]));
+        let rollup_key = capacity_key(json!(["rollup", bucket]));
         let rollup = self.store.read(&rollup_key).await.ok();
         let mut checks = vec![store::check(&key("lease"), Some(lease))];
         let expiry = Some(at + shape::RETENTION_MS);
@@ -322,10 +307,7 @@ impl<S: QueryStore, H: ObservabilityHost> ObservabilityRuntime<S, H> {
         if preserve && let Some(old) = previous_history {
             writes.push(store::put(
                 self.host.as_ref(),
-                store::key(json!([
-                    "uos_ai",
-                    "provider_capacity",
-                    "v1",
+                capacity_key(json!([
                     "history",
                     point["bucket_start_at_ms"],
                     "transition",
@@ -439,20 +421,8 @@ impl<S: QueryStore, H: ObservabilityHost> ObservabilityRuntime<S, H> {
         let first = since.max(0) / shape::HOUR_MS * shape::HOUR_MS;
         let last = at.max(since) / shape::HOUR_MS * shape::HOUR_MS;
         let selector = QuerySelector::Range {
-            start: store::key(json!([
-                "uos_ai",
-                "provider_capacity",
-                "v1",
-                "rollup",
-                first
-            ])),
-            end: store::key(json!([
-                "uos_ai",
-                "provider_capacity",
-                "v1",
-                "rollup",
-                last + shape::HOUR_MS
-            ])),
+            start: capacity_key(json!(["rollup", first])),
+            end: capacity_key(json!(["rollup", last + shape::HOUR_MS])),
         };
         let mut rows = Vec::new();
         for entry in store::scan_selector(self.store.as_ref(), selector, false, at, 20000).await? {

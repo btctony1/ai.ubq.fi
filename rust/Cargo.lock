@@ -978,6 +978,7 @@ dependencies = [
  "gateway-auth",
  "gateway-catalog-runtime",
  "gateway-claude-runtime-test-support",
+ "gateway-claude-usage",
  "gateway-core",
  "gateway-providers",
  "gateway-schema",
@@ -998,6 +999,16 @@ dependencies = [
  "gateway-providers",
  "gateway-schema",
  "rusqlite",
+ "serde_json",
+]
+
+[[package]]
+name = "gateway-claude-usage"
+version = "0.1.0"
+dependencies = [
+ "gateway-admin-data",
+ "gateway-core",
+ "serde",
  "serde_json",
 ]
 
@@ -1143,6 +1154,7 @@ dependencies = [
  "gateway-admin-runtime",
  "gateway-auth",
  "gateway-authority",
+ "gateway-claude-usage",
  "gateway-core",
  "gateway-observability-test-support",
  "gateway-schema",

@@ -1,22 +1,22 @@
 {
   "crates": {
-    "gateway-admin": 2469,
+    "gateway-admin": 2468,
     "gateway-admin-data": 4861,
-    "gateway-admin-runtime": 5607,
+    "gateway-admin-runtime": 5389,
     "gateway-auth": 8509,
     "gateway-authority": 32269,
     "gateway-catalog-runtime": 4207,
-    "gateway-claude-runtime": 2211,
+    "gateway-claude-runtime": 2210,
     "gateway-compaction": 3177,
     "gateway-core": 4791,
     "gateway-extras-runtime": 2851,
-    "gateway-migration": 9759,
+    "gateway-migration": 9711,
     "gateway-native": 22320,
-    "gateway-observability": 12243,
+    "gateway-observability": 12237,
     "gateway-providers": 9773,
     "gateway-routing-runtime": 7967,
     "gateway-schema": 7639,
-    "gateway-worker": 20490
+    "gateway-worker": 20485
   },
   "targets": {
     "gateway-admin-runtime/test/contracts": 1509,

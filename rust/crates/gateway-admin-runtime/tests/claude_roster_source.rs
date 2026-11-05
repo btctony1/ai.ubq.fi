@@ -1,5 +1,18 @@
-use super::*;
-use gateway_core::value::ValueEncoding;
+//! Source Claude roster custody vectors (moved from the in-crate test module).
+use gateway_admin_runtime::claude::{source_secret::ClaudeSourceSecret, *};
+use gateway_auth::crypto::sha256_hex;
+use gateway_core::{
+    error::GatewayError,
+    js_string::JsString16,
+    source_json::SourceJson,
+    state::{AuthorityStore, RecordKey, StoredRecord},
+};
+use gateway_core::{
+    source_control::decode_source_control_record, source_serialization as source,
+    state::RecordMutation, value::ValueEncoding,
+};
+use serde_json::json;
+use std::sync::Arc;
 
 fn units(values: &[u16]) -> JsString16 {
     JsString16::from_units(values.to_vec())

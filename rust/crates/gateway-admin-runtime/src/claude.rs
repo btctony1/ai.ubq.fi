@@ -332,7 +332,7 @@ fn credential_source(value: &Credential) -> SourceJson {
     ])
     .expect("named credential source")
 }
-fn roster_source(value: &AccountStore) -> SourceJson {
+pub fn roster_source(value: &AccountStore) -> SourceJson {
     let accounts = value
         .accounts
         .iter()
@@ -430,7 +430,7 @@ pub async fn read_roster<S: AuthorityStore>(
         .transpose()
 }
 
-fn empty(now: i64) -> AccountStore {
+pub fn empty(now: i64) -> AccountStore {
     AccountStore {
         v: 1,
         accounts: Vec::new(),
@@ -484,8 +484,6 @@ pub async fn load_roster<S: AuthorityStore, H: AuthHost>(
         }
         let ck = legacy_credential_key();
         let cr = store.read(&ck).await?;
-        let wk = legacy_workspace_key();
-        let wr = store.read(&wk).await?;
         let credential = source_value(cr.as_ref(), host.now_ms())?
             .and_then(|v| parse_source_credential(&v, "kv"))
             .or_else(|| seed.credential.clone());
@@ -495,6 +493,9 @@ pub async fn load_roster<S: AuthorityStore, H: AuthHost>(
                 revision: None,
             });
         };
+        // Source b9704ef: the legacy workspace is read only once a credential exists.
+        let wk = legacy_workspace_key();
+        let wr = store.read(&wk).await?;
         let workspace = source_value(wr.as_ref(), host.now_ms())?
             .and_then(|v| parse_source_workspace(&v))
             .or_else(|| seed.workspace.clone());
@@ -743,6 +744,3 @@ pub async fn remove_account<S: AuthorityStore, H: AuthHost>(
     }
     Ok(false)
 }
-
-#[cfg(test)]
-mod source_tests;
