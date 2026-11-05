@@ -7,7 +7,7 @@ Crate-size note: `rust:quality` counts every `.rs` line under `src/` (in-file te
 ## Status legend
 
 - Ported: Rust already implements the behavior (evidence cited by the audit).
-- In progress: a `rust-migration` work branch exists (see "Work branches").
+- Ported: implemented on `rust-migration` (branches listed under "Work branches").
 - Open: not ported; owner and estimate recorded.
 - N/A: Bun/`node:http`/systemd specific, dead-export removal, superseded, or TypeScript fixture-only.
 - Decision: parity would change credit, transport or security semantics; owner must confirm.
@@ -30,21 +30,21 @@ Crate-size note: `rust:quality` counts every `.rs` line under `src/` (in-file te
 
 ## Codex, authority and routing area
 
-| Commit                                                                          | Change                                                                               | Status      | Owner / notes                                                                                   |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ----------- | ----------------------------------------------------------------------------------------------- |
-| 0231b78                                                                         | Enabled overage is a concurrent serving path, not a probe lease                      | In progress | gateway-authority `routing.rs`, gateway-routing-runtime `attempt.rs`; conformance test replaced |
-| b4bfbd8, d108082                                                                | Overage after unsubmitted or shadow reset decisions                                  | In progress | Decline reason carried through `CodexRecovery::Declined`; overage fallback wired                |
-| 3878975                                                                         | `Retry-After` capped at 60 s, 429 `codex_quota_blocked`                              | In progress | gateway-routing-runtime errors, gateway-worker inference                                        |
-| fab735a                                                                         | `deepseek-forwarded-payload/v2` summary exemption, prompt admission                  | Open        | New crate (about 450-600 lines) plus hooks in gateway-providers `source_chat.rs`                |
-| 129d8f4                                                                         | `chat-prompt-admission/v3`; Codex `context_length_exceeded` to `response.failed`     | Open        | Build v3 directly (no pre-summary reduction); SSE mapping in gateway-providers `sse.rs`         |
-| 19d9eec                                                                         | Aggregate overflow encoded as `response.created` + `response.failed` on native turns | Open        | Depends on prompt admission crate; waterfall stop rule in gateway-routing-runtime               |
-| cfe8458                                                                         | `POST /v1/decisions` decision models                                                 | Open        | New crate (about 550-750 lines) plus catalog, admission and worker hooks                        |
-| f552e7a                                                                         | Pre-summary history reduction                                                        | N/A         | Superseded by 129d8f4                                                                           |
-| 67dedfe, a9f9b5f                                                                | Automatic banked resets live-only                                                    | Ported      | Rust still parses stored `shadow`/`disabled` modes (optional strict cleanup)                    |
-| d99b772                                                                         | Reset identity from current capacity                                                 | Ported      | Minor `>=` vs `>` and probe-lease class differences noted                                       |
-| 11199e4                                                                         | Manual banked reset with immediate promotion                                         | Ported      |                                                                                                 |
-| 2a48de1, 558a242, 4aacf2b, e81b8bd, 1e64f05, 25c8cf3, 4b48ca5                   | TypeScript-only refactors into shared `native-*` modules                             | N/A         | Rust has its own equivalents                                                                    |
-| fda98ea, f75d82e, e14b9da, f424de7, 6c5ed51, dedf928, d9a45e6, 1c0b054, 86e2062 | TypeScript experimental `NativeAuthority`, runtime v3, `src/worker` adapter          | N/A         | Fixture-only; the deployed Worker is the Rust one                                               |
+| Commit                                                                          | Change                                                                               | Status | Owner / notes                                                                                   |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------ | ----------------------------------------------------------------------------------------------- |
+| 0231b78                                                                         | Enabled overage is a concurrent serving path, not a probe lease                      | Ported | gateway-authority `routing.rs`, gateway-routing-runtime `attempt.rs`; conformance test replaced |
+| b4bfbd8, d108082                                                                | Overage after unsubmitted or shadow reset decisions                                  | Ported | Decline reason carried through `CodexRecovery::Declined`; overage fallback wired                |
+| 3878975                                                                         | `Retry-After` capped at 60 s, 429 `codex_quota_blocked`                              | Ported | gateway-routing-runtime errors, gateway-worker inference                                        |
+| fab735a                                                                         | `deepseek-forwarded-payload/v2` summary exemption, prompt admission                  | Open   | New crate (about 450-600 lines) plus hooks in gateway-providers `source_chat.rs`                |
+| 129d8f4                                                                         | `chat-prompt-admission/v3`; Codex `context_length_exceeded` to `response.failed`     | Open   | Build v3 directly (no pre-summary reduction); SSE mapping in gateway-providers `sse.rs`         |
+| 19d9eec                                                                         | Aggregate overflow encoded as `response.created` + `response.failed` on native turns | Open   | Depends on prompt admission crate; waterfall stop rule in gateway-routing-runtime               |
+| cfe8458                                                                         | `POST /v1/decisions` decision models                                                 | Open   | New crate (about 550-750 lines) plus catalog, admission and worker hooks                        |
+| f552e7a                                                                         | Pre-summary history reduction                                                        | N/A    | Superseded by 129d8f4                                                                           |
+| 67dedfe, a9f9b5f                                                                | Automatic banked resets live-only                                                    | Ported | Rust still parses stored `shadow`/`disabled` modes (optional strict cleanup)                    |
+| d99b772                                                                         | Reset identity from current capacity                                                 | Ported | Minor `>=` vs `>` and probe-lease class differences noted                                       |
+| 11199e4                                                                         | Manual banked reset with immediate promotion                                         | Ported |                                                                                                 |
+| 2a48de1, 558a242, 4aacf2b, e81b8bd, 1e64f05, 25c8cf3, 4b48ca5                   | TypeScript-only refactors into shared `native-*` modules                             | N/A    | Rust has its own equivalents                                                                    |
+| fda98ea, f75d82e, e14b9da, f424de7, 6c5ed51, dedf928, d9a45e6, 1c0b054, 86e2062 | TypeScript experimental `NativeAuthority`, runtime v3, `src/worker` adapter          | N/A    | Fixture-only; the deployed Worker is the Rust one                                               |
 
 ## Runtime, catalog, DeepSeek and auth area
 
@@ -73,3 +73,20 @@ Crate-size note: `rust:quality` counts every `.rs` line under `src/` (in-file te
 ## Work branches
 
 Branches `rust-clippy-nesting`, `rust-claude-native-translator`, `rust-claude-quota-meter`, `rust-catalog-parity`, `rust-passport-parity` and `rust-codex-overage-path` are integrated into `rust-migration` with merge commits. Wave two covers the open prompt-admission, context-failure, decisions and Sentinel-verification items.
+
+## Closure state after integration
+
+Integrated on `rust-migration` at the merge of `rust-clippy-ratchet-closure`. Verified on the merged tree with the pinned 1.98.1 toolchain and Bun 1.4.0: `cargo fmt --all -- --check`, `rust:quality`, the staged Clippy ratchet for both the native and wasm stages, and `cargo test --locked --workspace`. The only failing tests are gateway-native confinement fixtures that report `native_confinement_unavailable` because the verification container has no Landlock ABI; they need a confinement-capable Linux host.
+
+Sentinel items 54cd4cc, the OpenRouter key gating and 7c6ebdb were already ported and now carry explicit tests; 959da4a (stream item-id aliases and terminal dedupe) was ported into the Responses-to-Chat collector; 1227770 and 7fe5848 are fixture-only.
+
+Known residual differences recorded by the implementation agents, each small and outside the ported commits:
+
+- Passport: error responses lack the `Referrer-Policy` and `no-store` headers; cookie clearing on upstream 401 happens only on `/uos/auth`; a 401/502 ordering difference on failed exchange; logout on an unconfigured host returns 404 rather than 401.
+- Overage path: image 429 responses cannot carry `Retry-After` through the extras failure type; an all-invalid-credential Codex last hop still returns 503 `provider_routing_unavailable` rather than 401 `codex_auth_invalid`; no `codex_overage_served` log line.
+- Prompt admission: `forwarding_exemption` and `forwarding_elision` log lines have no Worker sink yet; a changed response id in the Codex re-encoding is ignored rather than raised.
+- Decisions: bodies over 32 MiB get the shared 400 rather than 413 `decisions_request_too_large`; cold OpenRouter catalog gives 400 `param:model` until the background warm completes; usage and health records are not yet persisted by the Worker.
+- Claude usage: `resets_at` parsing accepts ISO-8601 only; health quota field order follows the Rust struct.
+- Catalog stale-while-revalidate: a host without a background scheduler falls back to synchronous refresh.
+
+Owner decisions still pending: banked-reset default parity (`max_per_account_per_day` 0 vs. TS live cap 1), early SSE headers before provider selection (e9b1b90), and whether ec4b326's rejection of `text.format: {type: "text"}` is intended.
