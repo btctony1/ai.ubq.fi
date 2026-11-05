@@ -35,6 +35,8 @@ pub struct Host {
     pub claude_heads: Arc<AtomicU64>,
     pub consumed_heads: Arc<Mutex<BTreeSet<u64>>>,
     pub claude_evidence: Arc<Mutex<Vec<Option<Vec<u16>>>>>,
+    /// The worker's full-pool outcome; `None` is the source decline.
+    pub codex_recovery: Arc<Mutex<Option<CodexRecovery>>>,
 }
 impl Host {
     pub fn new(store: &Store) -> Self {
@@ -50,6 +52,7 @@ impl Host {
             claude_heads: Arc::new(AtomicU64::new(0)),
             consumed_heads: Arc::new(Mutex::new(BTreeSet::new())),
             claude_evidence: Arc::new(Mutex::new(Vec::new())),
+            codex_recovery: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -224,7 +227,12 @@ impl RoutingHost for Host {
         _proof: &CohortProof,
         _model: &gateway_core::model::ModelId,
     ) -> Result<CodexRecovery, GatewayError> {
-        Ok(CodexRecovery::Declined)
+        let configured = self
+            .codex_recovery
+            .lock()
+            .ok()
+            .and_then(|value| value.clone());
+        Ok(configured.unwrap_or(CodexRecovery::Declined))
     }
     async fn lookup_paid(
         &self,

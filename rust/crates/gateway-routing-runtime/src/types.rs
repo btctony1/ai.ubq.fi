@@ -1,7 +1,7 @@
 use gateway_auth::{crypto::Secret, types::AuthPrincipal};
 use gateway_authority::{
     paid_types::{PaidReservation, PaidUsage},
-    routing_types::{AdmittedAccount, CohortProof},
+    routing_types::{AdmittedAccount, CohortProof, UnredeemedReset},
 };
 use gateway_core::{
     error::GatewayError,
@@ -315,6 +315,8 @@ pub enum CodexRecovery {
     Recovered(AdmittedAccount),
     Reselect,
     Declined,
+    /// No reset was redeemed; the authority decides whether one overage attempt may serve.
+    Unredeemed(UnredeemedReset),
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RefreshOutcome {
