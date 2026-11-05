@@ -135,7 +135,7 @@ test("an eligible owner request is served by the subscription with the documente
   });
 });
 
-test("a Codex TUI request with namespaced tools and late developer context is served", async () => {
+test("a Codex TUI request omits enabled hosted web search and still serves namespaced tools with late developer context", async () => {
   await withRouteKv(async () => {
     captured.length = 0;
     const routed = await attemptClaudeCodeSubscription(
@@ -155,7 +155,7 @@ test("a Codex TUI request with namespaced tools and late developer context is se
             description: "Tools for reading time.",
             tools: [{ type: "function", name: "curr_time", strict: false, parameters: { type: "object", properties: {}, additionalProperties: false } }],
           },
-          { type: "web_search", external_web_access: false, user_location: { type: "approximate", country: "US" } },
+          { type: "web_search", external_web_access: true, user_location: { type: "approximate", country: "US" } },
         ],
         input: [
           { type: "message", role: "developer", content: [{ type: "input_text", text: "global instructions" }] },

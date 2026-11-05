@@ -21,6 +21,8 @@ export type SurplusClaudeRequestOptions = Readonly<{
   supportsNativeDisabledThinking?: boolean;
   /** Exact observed effort names for a generation-bound direct native account, not reseller inference. */
   nativeReasoningEfforts?: readonly string[];
+  /** The direct Claude lane omits Codex's unsupported hosted web-search declaration instead of rejecting the turn. */
+  omitHostedWebSearch?: boolean;
 }>;
 
 const isRecord = (value: unknown): value is JsonRecord => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -210,9 +212,9 @@ const collectNativeFunction = (projection: ToolProjection, tool: JsonRecord, nam
   return true;
 };
 
-const collectNativeTool = (projection: ToolProjection, value: unknown): boolean => {
+const collectNativeTool = (projection: ToolProjection, value: unknown, omitHostedWebSearch: boolean): boolean => {
   if (!isRecord(value)) return false;
-  if (value.type === "web_search" && value.external_web_access === false) return true;
+  if (value.type === "web_search") return omitHostedWebSearch || value.external_web_access === false;
   if (value.type === "function") return collectNativeFunction(projection, value, null);
   if (value.type !== "namespace" || !toolName(value.name) || !Array.isArray(value.tools) || value.tools.length === 0) return false;
   for (const nested of value.tools) {
@@ -223,15 +225,17 @@ const collectNativeTool = (projection: ToolProjection, value: unknown): boolean 
 
 /**
  * Flatten Codex namespace tools into native Messages function names and retain
- * the reverse mapping for response translation. A hosted web_search tool is
- * omitted only when the caller explicitly disabled external web access; the
- * native Messages lane has no equivalent hosted tool for that declaration.
+ * the reverse mapping for response translation. The native Messages lane has
+ * no lossless hosted web_search representation. Reseller adapters reject any
+ * enabled declaration; the direct Claude lane omits the hosted declaration so
+ * the otherwise representable turn can run without advertising unavailable
+ * provider-side search.
  */
-const nativeTools = (value: unknown): ToolProjection | null => {
+const nativeTools = (value: unknown, omitHostedWebSearch: boolean): ToolProjection | null => {
   const projection: ToolProjection = { tools: [], toolNames: new Map() };
   if (value === undefined) return projection;
   if (!Array.isArray(value)) return null;
-  for (const tool of value) if (!collectNativeTool(projection, tool)) return null;
+  for (const tool of value) if (!collectNativeTool(projection, tool, omitHostedWebSearch)) return null;
   return projection;
 };
 
@@ -397,7 +401,7 @@ export const buildSurplusClaudeRequest = (
   if (!positiveInteger(maxTokens)) return null;
   const system = body.instructions === undefined || body.instructions === null ? [] : contentBlocks(body.instructions);
   if (!system || system.some((block) => block.type !== "text")) return null;
-  const projection = nativeTools(body.tools);
+  const projection = nativeTools(body.tools, options.omitHostedWebSearch === true);
   if (!projection) return null;
   const messages = nativeRequestMessages(body, system, projection, options);
   if (!messages) return null;

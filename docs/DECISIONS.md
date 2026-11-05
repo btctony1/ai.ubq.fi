@@ -6,6 +6,14 @@ higher authority.
 
 Provider routing decisions are maintained separately in `docs/provider-decision-journal.md`.
 
+## Direct Claude Messages omits the unsupported hosted web_search - 2026-11-05
+
+The direct Claude subscription and native Messages lane omits every hosted `web_search` declaration from the upstream request instead of rejecting the whole turn. This includes Codex's default `external_web_access:true` declaration, which the TUI restores after a per-thread disable. Function, namespace, MCP and other representable tools remain unchanged. Surplus and other reseller adapters retain their existing rejection of an enabled hosted declaration.
+
+Reason: production request `8ed33374-67b5-4a65-9d87-9369a4c3450a` failed before dispatch with `claude_code_request_invalid` solely because the TUI re-enabled its built-in hosted search declaration. A thread-scoped `web_search=disabled` workaround lasted only one turn; the gateway must not depend on clients changing their tool catalog.
+
+Reversal risk: the direct lane no longer advertises provider-side web search to Claude models. They can still use any function, MCP, browser or command tools supplied by the client, but a request that specifically requires the hosted search tool cannot be served on this lane. Reintroducing hosted search requires a real native server-tool translation and response-stream mapping.
+
 ## Native Claude Messages flattens Codex namespace tools - 2026-11-04
 
 The direct Claude subscription and native OpenLux Messages translator now flattens Codex namespace tools as `<namespace>_<tool>`, retains the reverse mapping for Responses output and signed replay, and keeps ordinary function names unchanged. Late developer/system text is preserved in native system blocks because Messages has no interleaved developer role. JSON-schema `text.format` maps to native `output_config.format`. A hosted `web_search` declaration is omitted only when the caller explicitly sets `external_web_access:false`; enabled web search remains unsupported on this lane.
