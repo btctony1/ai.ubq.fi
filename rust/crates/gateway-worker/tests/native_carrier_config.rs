@@ -119,3 +119,46 @@ fn oversized_configuration_is_rejected_before_json_parsing() -> TestResult {
     assert_eq!(error_code(&raw)?.as_deref(), INVALID);
     Ok(())
 }
+
+/// Moved from the in-source `NativeOrigin` tests: every alternate authority or non-root input
+/// fails closed through the one binding parser.
+#[test]
+fn https_origin_rejects_alternate_authorities_and_nonroot_input() -> TestResult {
+    let key = base64url(&[11; 32]);
+    for origin in [
+        "http://native.example",
+        "https:native.example",
+        "https:///native.example",
+        "https://native.example:8443",
+        "https://user@native.example",
+        "https://@native.example",
+        "https://user:password@native.example",
+        "https://native.example/path",
+        "https://native.example/../",
+        "https://native.example/%2e/",
+        "https://native.example//",
+        "https://native.example?target=elsewhere",
+        "https://native.example?",
+        "https://native.example#fragment",
+        "https://native.example#",
+        "https://native.example\\elsewhere",
+        "https://native.example\n",
+        " https://native.example",
+        "",
+    ] {
+        let raw = format!(
+            r#"{{"origin":{},"identity":{}}}"#,
+            serde_json::to_string(origin)?,
+            identity(&key, r#""live_sideband""#)
+        );
+        assert_eq!(error_code(&raw)?.as_deref(), INVALID, "accepted {origin:?}");
+    }
+    for origin in ["https://native.example/", "https://native.example:443/"] {
+        let raw = config(origin, &identity(&key, r#""live_sideband""#));
+        assert!(
+            NativeBindings::from_binding_value(Some(&raw)).is_ok(),
+            "rejected {origin:?}"
+        );
+    }
+    Ok(())
+}

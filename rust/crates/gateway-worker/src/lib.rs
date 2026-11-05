@@ -33,6 +33,7 @@ mod inference_lifecycle;
 mod inference_local;
 mod inference_local_lifecycle;
 pub mod inference_source;
+pub mod inference_wire;
 mod lifecycle;
 mod live_host;
 mod live_http;

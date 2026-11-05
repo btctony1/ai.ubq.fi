@@ -303,29 +303,13 @@ impl Capture {
         observed_terminal: Option<String>,
     ) -> Result<bool, GatewayError> {
         let at = now_ms()?;
-        let terminal = observation
-            .semantic_terminal
-            .map(|terminal| {
-                match terminal {
-                    SemanticTerminal::Completed => "response.completed",
-                    SemanticTerminal::Failed => "response.failed",
-                    SemanticTerminal::Incomplete => "response.incomplete",
-                    SemanticTerminal::Error => "error",
-                }
-                .to_owned()
-            })
-            .or(observed_terminal)
-            .or_else(|| match observation.reader_termination {
-                Some(ReaderTermination::ReadError) => Some("error".into()),
-                Some(ReaderTermination::Deadline) => Some("deadline".into()),
-                Some(ReaderTermination::Eof) if stream => Some("eof".into()),
-                _ => None,
-            });
-        let failure_kind = match observation.reader_termination {
-            Some(ReaderTermination::ReadError) => Some("gateway_stream_read_error".into()),
-            Some(ReaderTermination::Deadline) => Some("gateway_timeout".into()),
-            _ => self.synthetic_failure.borrow().clone(),
-        };
+        let synthetic = self.synthetic_failure.borrow().clone();
+        let (terminal, failure_kind) = crate::inference_wire::admin_terminal(
+            observation,
+            stream,
+            observed_terminal,
+            synthetic,
+        );
         self.runtime
             .record_admin_error(&gateway_observability::ledger::ErrorObservation {
                 request_id: self.request_id.clone(),

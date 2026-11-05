@@ -4,6 +4,7 @@ use super::{
     invalid, observe_event, provider_correlation, set_header,
 };
 use crate::inference_source::{abort_frame, stream_failure};
+use crate::inference_wire::chat_wire_terminal;
 use crate::provider_error::cerebras_error_body;
 use crate::storage::now_ms;
 use crate::transport::stream::FinishHook;
@@ -24,7 +25,7 @@ use gateway_providers::response::decode_response;
 use gateway_providers::types::Headers;
 use gateway_providers::{
     sse::StreamDecoder,
-    types::{ClientSurface, DecodePlan, ProviderEvent},
+    types::{ClientSurface, DecodePlan, ProviderEvent, ResponseDecode},
 };
 use gateway_routing_runtime::types::PreparedWireRequest;
 use std::{collections::VecDeque, rc::Rc};
@@ -42,6 +43,8 @@ pub(super) struct Relay {
     pub(super) lifecycle: Rc<Lifecycle>,
     pub(super) next_sequence: u64,
     pub(super) heartbeat: RelayDelay<worker::Delay>,
+    /// The Chat wire's finish-chunk terminal, published only at `[DONE]`.
+    pub(super) chat_finish: Option<SemanticTerminal>,
 }
 
 impl Relay {
@@ -107,7 +110,11 @@ impl Relay {
                 .field("sequence_number")
                 .and_then(|value| value.deserialize::<u64>().ok())
                 .map_or(self.next_sequence + 1, |number| number + 1);
-            observe_event(&self.observation, &event);
+            if self.plan.decode != ResponseDecode::Chat {
+                observe_event(&self.observation, &event);
+            } else if let Some(terminal) = chat_wire_terminal(&mut self.chat_finish, &event) {
+                self.observation.semantic_terminal(terminal);
+            }
             self.queue.push_back(self.decoder.visible_sse(event));
         }
         let terminal_usage = self.usage.borrow().clone();
@@ -446,6 +453,7 @@ impl Reply<'_> {
             heartbeat: RelayDelay::new(worker::Delay::from(std::time::Duration::from_millis(
                 gateway_providers::sse::KEEPALIVE_INTERVAL_MS,
             ))),
+            chat_finish: None,
         };
         let source = Box::pin(futures_util::stream::unfold(
             relay,
