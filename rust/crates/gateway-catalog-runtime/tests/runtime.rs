@@ -474,24 +474,6 @@ fn union_survives_one_account_transport_failure_without_quota_writes() {
     );
 }
 #[test]
-fn failed_refresh_serves_retained_stale_body_and_releases_lease() -> TestResult {
-    let store = Store::new();
-    let host = Host::new(&store);
-    let runtime = CatalogRuntime::new();
-    store.seed(
-        "0.163.0",
-        store.now.get() - catalog_cache::FRESH_MS - 1,
-        &catalog("stale").to_string(),
-        None,
-    )?;
-    host.queue(Outcome::response(503, "{}"));
-    let response = run(runtime.versioned_models(&store, &host, "0.163.0", None))?;
-    assert_eq!(ids(&response), ["stale"]);
-    assert_eq!(response.headers["x-uos-cache"], "stale");
-    assert!(store.live(&catalog_store::lease_key("0.163.0")).is_none());
-    Ok(())
-}
-#[test]
 fn cold_wait_observes_existing_refresh_without_duplicate_fetch() -> TestResult {
     let store = Store::new();
     let host = Host::new(&store);

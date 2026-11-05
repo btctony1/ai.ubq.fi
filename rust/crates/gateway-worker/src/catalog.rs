@@ -70,36 +70,16 @@ pub fn schedule_warm(
     context: Rc<Context>,
     version: &str,
 ) {
-    let mut host = Host {
+    let host = Host {
         store: store.clone(),
         env: env.clone(),
         platform: platform.clone(),
-        context: context.clone(),
+        context,
     };
-    let service = service();
-    let store = store.clone();
-    let version = version.to_owned();
-    context.wait_until(async move {
-        let cancellation = match crate::transport::outbound::Cancellation::background() {
-            Ok(cancellation) => cancellation,
-            Err(error) => {
-                worker::console_error!(
-                    "Catalog background refresh remains unavailable: {}",
-                    error.envelope.error.message
-                );
-                return;
-            }
-        };
-        host.platform.cancellation = Rc::new(cancellation);
-        if let Err(error) = service
-            .versioned_models(&store, &host, &version, None)
-            .await
-        {
-            worker::console_error!(
-                "Catalog background refresh remains pending: {}",
-                error.envelope.error.message
-            );
-        }
+    let (service, version) = (service(), version.to_owned());
+    host.background("Catalog background refresh", |host| async move {
+        let response = service.versioned_models(&host.store, &host, &version, None);
+        response.await.map(drop)
     });
 }
 

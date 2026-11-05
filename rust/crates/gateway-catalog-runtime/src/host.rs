@@ -218,6 +218,14 @@ pub enum CatalogMaintenance {
     SnapshotPublication,
     VersionPruning,
 }
+/// One exact-version refresh that already owns its lease; only the catalog runtime builds one.
+pub struct LeasedRefresh {
+    pub(crate) version: String,
+    pub(crate) owner: String,
+    pub(crate) generation: String,
+    pub(crate) cached: Option<gateway_schema::catalog_cache::LoadedCatalog>,
+    pub(crate) started: i64,
+}
 /// Implementations own cancellation and actual response bounds. Fetches must bind the
 /// exact current reference before sending; a different credential may not be substituted.
 pub trait CatalogHost {
@@ -233,6 +241,11 @@ pub trait CatalogHost {
         &self,
         request: CatalogFetch,
     ) -> impl Future<Output = Result<CatalogFetchResponse, GatewayError>>;
+    /// Run `CatalogRuntime::refresh_leased` on the request lifetime and return at once.
+    /// The default hands the job back, so the caller refreshes before it answers.
+    fn schedule_refresh(&self, job: LeasedRefresh) -> Option<LeasedRefresh> {
+        Some(job)
+    }
     /// Apply the existing provider-health/capacity sampling or standalone degradation seam.
     /// Optional telemetry never gates catalog serving or becomes quota/capacity proof.
     /// The default explicitly reports missing persistence; adapters may log it.
