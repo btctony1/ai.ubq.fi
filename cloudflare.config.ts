@@ -28,6 +28,15 @@ export default defineConfig({
       SURPLUS_API_KEY: bindings.secret(),
       METERED_API_KEY: bindings.secret(),
       CLAUDE_API_KEY: bindings.secret(),
+      // Admin bearer tokens for /admin and /health/* (gateway-auth bootstrap). The
+      // retained DENO_DEPLOY_TOKEN name identifies the admin credential only.
+      DENO_DEPLOY_TOKEN: bindings.secret(),
+      // Passport browser login. The Worker reads these through secret-then-var
+      // lookup; all three must be set or /auth/login answers passport_not_configured.
+      // UOS_AI_PASSPORT_AUDIENCE stays undeclared and defaults to the production "ai".
+      UOS_AI_PASSPORT_CLIENT_ID: bindings.secret(),
+      UOS_AI_PASSPORT_ORIGIN: bindings.secret(),
+      UOS_AI_PASSPORT_REDIRECT_URI: bindings.secret(),
     },
     assets: { runWorkerFirst: true, notFoundHandling: "none" },
     observability: { enabled: true, traces: { enabled: true } },
