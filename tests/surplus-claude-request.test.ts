@@ -316,3 +316,11 @@ test("Surplus native adapter returns incompatible inputs intact to the existing 
     assert.equal(JSON.stringify(body), before);
   }
 });
+
+test("Direct Claude Code omits enabled hosted web search while reseller adapters reject it", () => {
+  const body = { ...base(), tools: [{ type: "web_search", external_web_access: true, user_location: { type: "approximate", country: "US" } }] };
+  const direct = buildSurplusClaudeRequest(body, undefined, { provider: "claude_code", omitHostedWebSearch: true });
+  assert.ok(direct);
+  assert.equal(direct.body.tools, undefined);
+  assert.equal(buildSurplusClaudeRequest(body), null);
+});
