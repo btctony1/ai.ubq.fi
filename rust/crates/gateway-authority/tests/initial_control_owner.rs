@@ -1,6 +1,13 @@
-use super::*;
 use gateway_auth::native_auth::NativeCapability;
+use gateway_auth::{crypto::sha256_hex, native_auth::NativeTransportIdentity};
+use gateway_authority::initial_control_owner::{
+    InitialAdoptionAccountFacts, InitialAdoptionBinding, InitialAdoptionFacts,
+    InitialControlOwnerDeployment, InitialNativeCustodyBinding, PreparedInitialControlOwner,
+};
+use gateway_authority::keys;
 use gateway_core::state::RecordKey;
+use gateway_core::state::{AtomicTransition, RecordMutation, RevisionCheck, StoredRecord};
+use std::collections::BTreeSet;
 
 const PAYLOAD: &[u8] = b"private exact payload";
 

@@ -16,6 +16,21 @@ use std::{
     future::Future,
     task::{Context, Poll, Waker},
 };
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+/// Converts a missing value or a failed result into the test's error instead of a panic.
+trait Must<T> {
+    fn must(self) -> TestResult<T>;
+}
+impl<T> Must<T> for Option<T> {
+    fn must(self) -> TestResult<T> {
+        self.ok_or_else(|| "missing value".into())
+    }
+}
+impl<T, E: std::fmt::Debug> Must<T> for Result<T, E> {
+    fn must(self) -> TestResult<T> {
+        self.map_err(|error| format!("{error:?}").into())
+    }
+}
 
 const GRANT: &str = "uos_app_session_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -198,8 +213,11 @@ fn sessions<'a>(
     }
 }
 
-fn create(service: &PassportSessions<'_, Store, Host<'_>>, previous: Option<&str>) -> String {
-    run(service.create(Some(&grant()), "fixture-admin", previous)).expect("session is created")
+fn create(
+    service: &PassportSessions<'_, Store, Host<'_>>,
+    previous: Option<&str>,
+) -> TestResult<String> {
+    run(service.create(Some(&grant()), "fixture-admin", previous)).must()
 }
 
 fn status(result: Result<impl Sized, GatewayError>) -> u16 {
@@ -207,13 +225,13 @@ fn status(result: Result<impl Sized, GatewayError>) -> u16 {
 }
 
 #[test]
-fn permanent_sessions_store_a_hashed_local_secret_without_expiry_or_role_snapshot() {
+fn permanent_sessions_store_a_hashed_local_secret_without_expiry_or_role_snapshot() -> TestResult {
     let (store, binding) = (Store::default(), binding());
     let host = Host::new(&store);
     let service = sessions(&store, &host, &binding);
-    let token = create(&service, None);
+    let token = create(&service, None)?;
     assert!(is_persistent_session(&token));
-    let key = session_key(&token).expect("key");
+    let key = session_key(&token).must()?;
     let expected = gateway_core::tuple_key::TupleKey::from_json_parts(&[
         json!("uos_ai"),
         json!("auth"),
@@ -221,32 +239,33 @@ fn permanent_sessions_store_a_hashed_local_secret_without_expiry_or_role_snapsho
         json!("sessions"),
         json!(sha256_hex(token.as_bytes())),
     ])
-    .expect("tuple")
+    .must()?
     .to_record_key();
     assert_eq!(key, expected);
     let rows = store.rows.borrow();
-    let row = rows.get(&key.0).expect("stored");
+    let row = rows.get(&key.0).must()?;
     assert_eq!(row.expires_at_ms, None);
     assert_eq!(
-        serde_json::to_string(row.json_value().expect("json")).ok(),
+        serde_json::to_string(row.json_value().must()?).ok(),
         Some(format!(
             r#"{{"version":1,"subject":"fixture-admin","clientId":"ai","audience":"ai","origin":"https://ai.ubq.fi","redirectUri":"https://ai.ubq.fi/auth/callback","createdAt":"2000-01-01T00:00:00.000Z","appSessionToken":"{GRANT}"}}"#
         ))
     );
     assert!(!key.0.contains(&token));
     drop(rows);
-    let identity = run(service.get(&token)).expect("identity");
+    let identity = run(service.get(&token)).must()?;
     assert!(identity.is_admin);
     assert_eq!(host.reads.get(), 1);
+    Ok(())
 }
 
 #[test]
-fn every_read_uses_current_role_and_a_demotion_is_seen_immediately() {
+fn every_read_uses_current_role_and_a_demotion_is_seen_immediately() -> TestResult {
     let (store, binding) = (Store::default(), binding());
     let host = Host::new(&store);
     let service = sessions(&store, &host, &binding);
-    let token = create(&service, None);
-    assert!(run(service.get(&token)).expect("admin").is_admin);
+    let token = create(&service, None)?;
+    assert!(run(service.get(&token)).must()?.is_admin);
     host.is_admin.set(false);
     assert_eq!(
         run(service.get(&token)).ok(),
@@ -259,14 +278,15 @@ fn every_read_uses_current_role_and_a_demotion_is_seen_immediately() {
     );
     assert_eq!(host.reads.get(), 2);
     assert_eq!(store.rows.borrow().len(), 1);
+    Ok(())
 }
 
 #[test]
-fn unavailable_introspection_keeps_the_local_session_and_recovers() {
+fn unavailable_introspection_keeps_the_local_session_and_recovers() -> TestResult {
     let (store, binding) = (Store::default(), binding());
     let host = Host::new(&store);
     let service = sessions(&store, &host, &binding);
-    let token = create(&service, None);
+    let token = create(&service, None)?;
     host.status.set(503);
     assert_eq!(status(run(service.get(&token))), 503);
     assert_eq!(store.rows.borrow().len(), 1);
@@ -278,32 +298,31 @@ fn unavailable_introspection_keeps_the_local_session_and_recovers() {
     *host.body.borrow_mut() = Some(json!("not an object"));
     assert_eq!(status(run(service.get(&token))), 503);
     *host.body.borrow_mut() = None;
-    assert_eq!(
-        run(service.get(&token)).expect("recovered").subject,
-        "fixture-admin"
-    );
+    assert_eq!(run(service.get(&token)).must()?.subject, "fixture-admin");
+    Ok(())
 }
 
 #[test]
-fn authoritative_revocation_deletes_local_authority() {
+fn authoritative_revocation_deletes_local_authority() -> TestResult {
     let (store, binding) = (Store::default(), binding());
     let host = Host::new(&store);
     let service = sessions(&store, &host, &binding);
-    let token = create(&service, None);
+    let token = create(&service, None)?;
     host.status.set(401);
     assert_eq!(status(run(service.get(&token))), 401);
     assert_eq!(store.rows.borrow().len(), 0);
     host.status.set(200);
     assert_eq!(status(run(service.get(&token))), 401);
     assert_eq!(host.reads.get(), 1);
+    Ok(())
 }
 
 #[test]
-fn creation_rejects_every_wrong_binding_or_subject_without_replacing_a_session() {
+fn creation_rejects_every_wrong_binding_or_subject_without_replacing_a_session() -> TestResult {
     let (store, binding) = (Store::default(), binding());
     let host = Host::new(&store);
     let service = sessions(&store, &host, &binding);
-    let token = create(&service, None);
+    let token = create(&service, None)?;
     for (field, value) in [
         ("clientId", json!("other")),
         ("audience", json!("other")),
@@ -324,18 +343,16 @@ fn creation_rejects_every_wrong_binding_or_subject_without_replacing_a_session()
         503
     );
     assert_eq!(status(run(service.create(Some(&grant()), "", None))), 503);
-    assert_eq!(
-        run(service.get(&token)).expect("kept").subject,
-        "fixture-admin"
-    );
+    assert_eq!(run(service.get(&token)).must()?.subject, "fixture-admin");
+    Ok(())
 }
 
 #[test]
-fn introspection_rejects_substituted_identities_and_bindings() {
+fn introspection_rejects_substituted_identities_and_bindings() -> TestResult {
     let (store, binding) = (Store::default(), binding());
     let host = Host::new(&store);
     let service = sessions(&store, &host, &binding);
-    let token = create(&service, None);
+    let token = create(&service, None)?;
     for (section, field, value) in [
         ("session", "audience", json!("other")),
         ("session", "origin", json!("https://evil.example")),
@@ -350,14 +367,15 @@ fn introspection_rejects_substituted_identities_and_bindings() {
         assert_eq!(status(run(service.get(&token))), 503, "{section}.{field}");
         assert_eq!(store.rows.borrow().len(), 1);
     }
+    Ok(())
 }
 
 #[test]
-fn logout_revokes_locally_first_and_reports_unavailable_upstream_truthfully() {
+fn logout_revokes_locally_first_and_reports_unavailable_upstream_truthfully() -> TestResult {
     let (store, binding) = (Store::default(), binding());
     let host = Host::new(&store);
     let service = sessions(&store, &host, &binding);
-    let token = create(&service, None);
+    let token = create(&service, None)?;
     host.status.set(503);
     assert_eq!(
         run(service.revoke(&token)).ok(),
@@ -365,7 +383,7 @@ fn logout_revokes_locally_first_and_reports_unavailable_upstream_truthfully() {
     );
     assert_eq!(store.rows.borrow().len(), 0);
     assert_eq!(status(run(service.get(&token))), 401);
-    let token = create(&service, None);
+    let token = create(&service, None)?;
     host.status.set(200);
     assert_eq!(
         run(service.revoke(&token)).ok(),
@@ -376,52 +394,56 @@ fn logout_revokes_locally_first_and_reports_unavailable_upstream_truthfully() {
         Some(RevokeOutcome::NotApplicable)
     );
     assert_eq!(RevokeOutcome::Unavailable.as_str(), "unavailable");
+    Ok(())
 }
 
 #[test]
-fn local_store_failure_never_claims_a_logout() {
+fn local_store_failure_never_claims_a_logout() -> TestResult {
     let (store, binding) = (Store::default(), binding());
     let host = Host::new(&store);
     let service = sessions(&store, &host, &binding);
-    let token = create(&service, None);
+    let token = create(&service, None)?;
     store.unavailable.set(true);
     assert_eq!(status(run(service.revoke(&token))), 503);
     assert_eq!(status(run(service.get(&token))), 503);
     store.unavailable.set(false);
     assert_eq!(store.rows.borrow().len(), 1);
     assert_eq!(host.revokes.get(), 0);
+    Ok(())
 }
 
 #[test]
-fn logout_wins_over_an_in_flight_successful_introspection() {
+fn logout_wins_over_an_in_flight_successful_introspection() -> TestResult {
     let (store, binding) = (Store::default(), binding());
     let host = Host::new(&store);
     let service = sessions(&store, &host, &binding);
-    let token = create(&service, None);
+    let token = create(&service, None)?;
     host.revoke_during_read.set(true);
     assert_eq!(status(run(service.get(&token))), 401);
     assert_eq!(store.rows.borrow().len(), 0);
+    Ok(())
 }
 
 #[test]
-fn a_stored_replacement_atomically_removes_the_previous_session() {
+fn a_stored_replacement_atomically_removes_the_previous_session() -> TestResult {
     let (store, binding) = (Store::default(), binding());
     let host = Host::new(&store);
     let service = sessions(&store, &host, &binding);
-    let previous = create(&service, None);
-    let replacement = create(&service, Some(&previous));
+    let previous = create(&service, None)?;
+    let replacement = create(&service, Some(&previous))?;
     assert_ne!(previous, replacement);
     assert_eq!(store.rows.borrow().len(), 1);
     assert_eq!(host.revokes.get(), 1);
     assert_eq!(status(run(service.get(&previous))), 401);
     assert_eq!(
-        run(service.get(&replacement)).expect("replacement").subject,
+        run(service.get(&replacement)).must()?.subject,
         "fixture-admin"
     );
+    Ok(())
 }
 
 #[test]
-fn malformed_tokens_and_corrupt_records_fail_closed() {
+fn malformed_tokens_and_corrupt_records_fail_closed() -> TestResult {
     let (store, binding) = (Store::default(), binding());
     let host = Host::new(&store);
     let service = sessions(&store, &host, &binding);
@@ -429,14 +451,15 @@ fn malformed_tokens_and_corrupt_records_fail_closed() {
         status(run(service.get("uos_ai_passport_session_short"))),
         401
     );
-    let token = create(&service, None);
-    let key = session_key(&token).expect("key");
+    let token = create(&service, None)?;
+    let key = session_key(&token).must()?;
     store
         .rows
         .borrow_mut()
         .insert(key.0, StoredRecord::json("r", json!({"version": 2}), None));
     assert_eq!(status(run(service.get(&token))), 503);
     assert_eq!(host.reads.get(), 0);
+    Ok(())
 }
 
 #[test]

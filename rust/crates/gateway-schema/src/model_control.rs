@@ -12,9 +12,13 @@ pub(crate) fn object(fields: Vec<(&str, SourceJson)>) -> SourceJson {
 }
 pub(crate) fn set(value: &mut SourceJson, key: &str, next: SourceJson) {
     let key = JsString16::from_utf8(key);
-    let mut entries = source::entries(value).expect("model control object");
+    let Some(mut entries) = source::entries(value) else {
+        return;
+    };
     upsert(&mut entries, key, next);
-    *value = source::object_keys(entries).expect("model control members");
+    if let Ok(members) = source::object_keys(entries) {
+        *value = members;
+    }
 }
 pub(crate) fn get(value: &SourceJson, key: &str) -> Option<SourceJson> {
     source::member(value, key)

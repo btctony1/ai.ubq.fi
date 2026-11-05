@@ -20,7 +20,6 @@ pub struct CoreStateRuleCount {
     pub rule: String,
     pub rows: usize,
 }
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CoreStateManifest {
     pub v: u32,
@@ -41,7 +40,6 @@ pub struct CoreStateManifest {
     pub current_paid_unresolved: usize,
     pub current_paid_pending: usize,
 }
-
 impl CoreStateManifest {
     pub fn validate(&self) -> Result<(), MigrationError> {
         let included = self.included.iter().map(|entry| entry.rows).sum::<usize>();
@@ -82,19 +80,16 @@ impl CoreStateManifest {
         Ok(())
     }
 }
-
 #[derive(Clone, Debug)]
 pub struct CoreStateCapture {
     pub capture: NativeCapture,
     pub manifest: CoreStateManifest,
 }
-
 #[derive(Clone, Copy)]
 enum Decision {
     Include(&'static str),
     Exclude(&'static str),
 }
-
 fn rule_counts(counts: BTreeMap<&'static str, usize>) -> Vec<CoreStateRuleCount> {
     counts
         .into_iter()
@@ -104,7 +99,6 @@ fn rule_counts(counts: BTreeMap<&'static str, usize>) -> Vec<CoreStateRuleCount>
         })
         .collect()
 }
-
 fn key_parts(entry: &NativeEntry) -> Result<Vec<Value>, GatewayError> {
     let key = TupleKey::from_sort_bytes(entry.raw_key.clone())?.to_record_key();
     parts(&key)
@@ -177,6 +171,20 @@ fn paid_unresolved(entry: &NativeEntry) -> Result<bool, GatewayError> {
     ))
 }
 
+const UBQ_AI_OPERATIONAL: [&str; 12] = [
+    "api_keys",
+    "claude_code_auth",
+    "claude_code_quota",
+    "claude_code_workspace",
+    "codex_auth",
+    "codex_catalog",
+    "codex_catalog_auth_generation",
+    "codex_catalog_chunk",
+    "codex_catalog_refresh_lease",
+    "codex_catalog_source_chunk",
+    "codex_models",
+    "kernel_auth",
+];
 fn classify(
     entry: &NativeEntry,
     captured_at_ms: i64,
@@ -187,18 +195,9 @@ fn classify(
         return Ok(Decision::Include("default_operational_settings"));
     }
     if starts(&p, &["ubq_ai"]) {
-        if starts(&p, &["ubq_ai", "api_keys"])
-            || starts(&p, &["ubq_ai", "claude_code_auth"])
-            || starts(&p, &["ubq_ai", "claude_code_quota"])
-            || starts(&p, &["ubq_ai", "claude_code_workspace"])
-            || starts(&p, &["ubq_ai", "codex_auth"])
-            || starts(&p, &["ubq_ai", "codex_catalog"])
-            || starts(&p, &["ubq_ai", "codex_catalog_auth_generation"])
-            || starts(&p, &["ubq_ai", "codex_catalog_chunk"])
-            || starts(&p, &["ubq_ai", "codex_catalog_refresh_lease"])
-            || starts(&p, &["ubq_ai", "codex_catalog_source_chunk"])
-            || starts(&p, &["ubq_ai", "codex_models"])
-            || starts(&p, &["ubq_ai", "kernel_auth"])
+        if UBQ_AI_OPERATIONAL
+            .iter()
+            .any(|family| starts(&p, &["ubq_ai", family]))
         {
             return Ok(Decision::Include("ubq_ai_operational_state"));
         }

@@ -130,7 +130,6 @@ pub struct UpstreamHealthEvidence {
     pub claude_subscription: Option<ActiveProbe>,
     pub claude_workspace: Option<SourceJson>,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapacityAccountRef {
     pub slot: u8,

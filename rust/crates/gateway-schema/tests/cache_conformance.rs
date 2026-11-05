@@ -535,11 +535,11 @@ fn gpt_rows(row: impl Fn(&str) -> Value) -> String {
     json!({ "models": models }).to_string()
 }
 fn limits(body: &str) -> Vec<Value> {
-    let parsed: Value = serde_json::from_str(body).unwrap();
+    let parsed: Value = serde_json::from_str(body).unwrap_or_default();
     parsed["models"]
         .as_array()
-        .unwrap()
-        .iter()
+        .into_iter()
+        .flatten()
         .map(|m| m["auto_compact_token_limit"].clone())
         .collect()
 }

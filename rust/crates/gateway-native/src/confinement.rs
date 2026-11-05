@@ -12,15 +12,6 @@ pub struct NativeConfinement {
 
 #[cfg(target_os = "linux")]
 pub fn enforce(policy: &NativeConfinement) -> Result<(), GatewayError> {
-    use landlock::{
-        ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
-        RulesetAttr, RulesetCreatedAttr, RulesetStatus, Scope,
-    };
-    use seccompiler::{
-        BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
-        SeccompRule,
-    };
-    use std::collections::BTreeMap;
     if !policy.replay_directory.is_absolute()
         || policy
             .readonly_paths
@@ -30,6 +21,15 @@ pub fn enforce(policy: &NativeConfinement) -> Result<(), GatewayError> {
     {
         return Err(unavailable());
     }
+    restrict_filesystem(policy)?;
+    deny_new_processes()
+}
+#[cfg(target_os = "linux")]
+fn restrict_filesystem(policy: &NativeConfinement) -> Result<(), GatewayError> {
+    use landlock::{
+        ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
+        RulesetAttr, RulesetCreatedAttr, RulesetStatus, Scope,
+    };
     let abi = ABI::V9;
     let mut rules = Ruleset::default()
         .set_compatibility(CompatLevel::HardRequirement)
@@ -92,6 +92,15 @@ pub fn enforce(policy: &NativeConfinement) -> Result<(), GatewayError> {
     if status.ruleset != RulesetStatus::FullyEnforced || !status.no_new_privs {
         return Err(unavailable());
     }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn deny_new_processes() -> Result<(), GatewayError> {
+    use seccompiler::{
+        BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
+        SeccompRule,
+    };
+    use std::collections::BTreeMap;
     let mut denied = BTreeMap::new();
     for syscall in [
         libc::SYS_execve,

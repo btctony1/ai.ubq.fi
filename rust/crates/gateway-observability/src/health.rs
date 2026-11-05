@@ -66,7 +66,6 @@ impl Drop for HealthCompletion {
         }
     }
 }
-
 pub fn normalize_provider_request_id(value: Option<&str>) -> Option<String> {
     value
         .map(store::trim)
