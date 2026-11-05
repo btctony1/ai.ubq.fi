@@ -13,11 +13,7 @@ pub(crate) fn object(fields: Vec<(&str, SourceJson)>) -> SourceJson {
 pub(crate) fn set(value: &mut SourceJson, key: &str, next: SourceJson) {
     let key = JsString16::from_utf8(key);
     let mut entries = source::entries(value).expect("model control object");
-    if let Some((_, value)) = entries.iter_mut().find(|(name, _)| name == &key) {
-        *value = next;
-    } else {
-        entries.push((key, next));
-    }
+    upsert(&mut entries, key, next);
     *value = source::object_keys(entries).expect("model control members");
 }
 pub(crate) fn get(value: &SourceJson, key: &str) -> Option<SourceJson> {
@@ -40,6 +36,12 @@ pub(crate) fn matches(value: &JsString16, literal: &str) -> bool {
 }
 pub(crate) fn trim(value: &JsString16) -> JsString16 {
     crate::source_request::trim(value)
+}
+pub(crate) fn upsert<K: PartialEq, V>(entries: &mut Vec<(K, V)>, key: K, next: V) {
+    match entries.iter_mut().find(|(name, _)| name == &key) {
+        Some((_, value)) => *value = next,
+        None => entries.push((key, next)),
+    }
 }
 pub(crate) fn push_unique<T: PartialEq>(values: &mut Vec<T>, value: T) {
     if !values.contains(&value) {

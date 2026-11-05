@@ -330,11 +330,14 @@ pub async fn compact<H: CompactionHost>(
                             },
                         )?;
                         let wire = state::json(&local.state)?;
-                        let mut answers = Vec::new();
                         let groups = batches(candidates, local.tokens, options)?;
-                        for group in &groups {
-                            answers.extend(ask_batch(host, &wire, group).await?);
-                        }
+                        let answers = stream::iter(&groups)
+                            .then(|group| ask_batch(host, &wire, group))
+                            .try_collect::<Vec<_>>()
+                            .await?
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>();
                         Ok::<_, CompactionFailure>((
                             index,
                             local.stage,
