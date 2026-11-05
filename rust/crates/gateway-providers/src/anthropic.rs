@@ -17,7 +17,7 @@ pub fn try_native_messages(
     raw: &Value,
     options: &PrepareOptions,
 ) -> Option<gateway_core::source_json::SourceJson> {
-    crate::source_anthropic::native(&crate::source::generated(raw), options)
+    crate::source_anthropic::native(&crate::source::generated(raw), options).map(|(body, _)| body)
 }
 pub fn try_claude_chat(
     raw: &Value,
