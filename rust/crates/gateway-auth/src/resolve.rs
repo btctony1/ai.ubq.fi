@@ -3,6 +3,7 @@ use crate::{
     crypto::{Secret, sha256_base64url, sha256_hex},
     origin::local_bypass,
     passkeys::{PasskeyService, SessionView},
+    passport::{PASSPORT_COOKIE, PassportConfig, PassportService},
     types::{
         AuthConfig, AuthHost, AuthMethod, AuthPrincipal, AuthRequest, AuthResponse, unauthorized,
     },
@@ -40,6 +41,20 @@ impl<'a, S: AuthorityStore, H: AuthHost> AuthService<'a, S, H> {
             host: self.host,
             config: self.config,
         }
+    }
+    fn passport<'b>(&'b self, config: &'b PassportConfig) -> PassportService<'b, S, H> {
+        PassportService {
+            store: self.store,
+            host: self.host,
+            config,
+        }
+    }
+    fn passport_config(
+        &self,
+        request: &AuthRequest,
+        missing: fn() -> GatewayError,
+    ) -> Result<PassportConfig, GatewayError> {
+        crate::passport::config_for_request(self.config, request).ok_or_else(missing)
     }
     fn allowlisted(tokens: &[Secret], token: &str) -> bool {
         tokens.iter().any(|value| value.expose() == token)
@@ -362,15 +377,13 @@ impl<'a, S: AuthorityStore, H: AuthHost> AuthService<'a, S, H> {
         if self.legacy_local(request) {
             return Ok(Self::principal(token, AuthMethod::Disabled, false, false));
         }
-        if crate::passport::cookie(request, crate::passport::PASSPORT_COOKIE).is_some() {
-            let config = crate::passport::config_for_request(self.config, request)
-                .ok_or_else(unauthorized)?;
-            let passport = crate::passport::PassportService {
-                host: self.host,
-                config: &config,
-            };
-            let claims = passport.session(request).await?.ok_or_else(unauthorized)?;
-            return Ok(Self::passport_principal(claims, false));
+        if crate::passport::cookie(request, PASSPORT_COOKIE).is_some() {
+            let config = self.passport_config(request, unauthorized)?;
+            let claims = self.passport(&config).session(request).await?;
+            return Ok(Self::passport_principal(
+                claims.ok_or_else(unauthorized)?,
+                false,
+            ));
         }
         let Some(token) = token else {
             return self
@@ -427,13 +440,8 @@ impl<'a, S: AuthorityStore, H: AuthHost> AuthService<'a, S, H> {
         // A JWT-shaped credential is never an admin or opaque token. Invalid
         // Passport material fails closed instead of reaching the admin path.
         if crate::passport::jwt_shaped(token) {
-            let config = crate::passport::config_for_request(self.config, request)
-                .ok_or_else(unauthorized)?;
-            let passport = crate::passport::PassportService {
-                host: self.host,
-                config: &config,
-            };
-            let claims = passport.bearer(token).await?;
+            let config = self.passport_config(request, unauthorized)?;
+            let claims = self.passport(&config).bearer(token).await?;
             return Ok(Self::passport_principal(claims, true));
         }
         self.admin_token(token).await
@@ -455,19 +463,16 @@ impl<'a, S: AuthorityStore, H: AuthHost> AuthService<'a, S, H> {
         if request.bearer().is_some_and(crate::passport::jwt_shaped) {
             return Err(unauthorized());
         }
-        if crate::passport::cookie(request, crate::passport::PASSPORT_COOKIE).is_some() {
-            let config = crate::passport::config_for_request(self.config, request)
-                .ok_or_else(unauthorized)?;
-            let passport = crate::passport::PassportService {
-                host: self.host,
-                config: &config,
-            };
-            let claims = passport.session(request).await?.ok_or_else(unauthorized)?;
-            if !claims.is_admin {
-                return Err(GatewayError::new(403, "Forbidden", Some("forbidden")));
-            }
+        if crate::passport::cookie(request, PASSPORT_COOKIE).is_some() {
+            let config = self.passport_config(request, unauthorized)?;
+            let claims = self.passport(&config).session(request).await?;
+            let claims = claims.ok_or_else(unauthorized)?;
+            // Source order: an agent token is never an admin session (401).
             if claims.agent_token_id.is_some() {
                 return Err(unauthorized());
+            }
+            if !claims.is_admin {
+                return Err(GatewayError::new(403, "Forbidden", Some("forbidden")));
             }
             if !crate::origin::same_origin_mutation(request) {
                 return Err(GatewayError::new(403, "Forbidden", Some("forbidden")));
@@ -550,7 +555,17 @@ impl<'a, S: AuthorityStore, H: AuthHost> AuthService<'a, S, H> {
                 }
             }
             ("GET", "/uos/auth") => {
-                let mut auth = self.authenticate_client(request).await?;
+                let mut auth = match self.authenticate_client(request).await {
+                    Ok(auth) => auth,
+                    Err(error) if crate::passport::revoked_session(request, &error) => {
+                        let mut response = AuthResponse::error(error);
+                        response
+                            .set_cookies
+                            .push(crate::passport::clear_session_cookie());
+                        return Ok(Some(response));
+                    }
+                    Err(error) => return Err(error),
+                };
                 if (local_bypass(request, self.config) || self.legacy_local(request))
                     && let Ok(admin) = self.authenticate_admin(request).await
                 {
@@ -560,36 +575,31 @@ impl<'a, S: AuthorityStore, H: AuthHost> AuthService<'a, S, H> {
                 let token = auth.token.as_ref().map(Secret::expose);
                 let shape = token.map(token_shape);
                 let principal = auth.method.principal_id(token);
-                AuthResponse::json(
+                let renew = crate::passport::cookie(request, PASSPORT_COOKIE)
+                    .filter(|token| gateway_passport_session::binding::is_persistent_session(token))
+                    .filter(|_| matches!(auth.method, AuthMethod::PassportSession { .. }));
+                let mut response = AuthResponse::json(
                     200,
                     json!({"ok":true,"service":"ai.ubq.fi","auth":{"mode":if local_bypass(request,self.config)||self.legacy_local(request){"disabled"}else{"required"},"is_admin":auth.is_admin,"is_super_admin":auth.is_super_admin,"principal":principal,"method":method,"token":{"present":token.is_some(),"length":token.map(str::len),"shape":shape,"sha256_12":token.map(|token|sha256_hex(token.as_bytes())[..12].to_owned())}}}),
-                )
+                );
+                // Renew browser storage only after the auth report succeeds.
+                response
+                    .set_cookies
+                    .extend(renew.as_deref().map(crate::passport::session_cookie));
+                response
             }
             ("GET", "/auth/login") => {
-                let config = crate::passport::config_for_request(self.config, request)
-                    .ok_or_else(passport_not_configured)?;
-                crate::passport::PassportService {
-                    host: self.host,
-                    config: &config,
-                }
-                .login(request)
-                .await?
+                let config = self.passport_config(request, passport_not_configured)?;
+                self.passport(&config).login(request).await?
             }
             ("GET", "/auth/callback") => {
-                let config = crate::passport::config_for_request(self.config, request)
-                    .ok_or_else(passport_not_configured)?;
-                crate::passport::PassportService {
-                    host: self.host,
-                    config: &config,
-                }
-                .callback(request)
-                .await?
+                let config = self.passport_config(request, passport_not_configured)?;
+                self.passport(&config).callback(request).await?
             }
-            ("POST", "/auth/logout") => crate::passport::PassportService {
-                host: self.host,
-                config: &crate::passport::PassportConfig::production(),
+            ("POST", "/auth/logout") => {
+                let config = self.passport_config(request, passport_not_configured)?;
+                self.passport(&config).logout(request).await?
             }
-            .logout(),
             _ => return Ok(None),
         };
         Ok(Some(result))

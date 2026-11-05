@@ -905,6 +905,7 @@ dependencies = [
  "base64 0.22.1",
  "ciborium",
  "gateway-core",
+ "gateway-passport-session",
  "getrandom 0.2.16",
  "getrandom 0.3.4",
  "hmac 0.12.1",
@@ -1161,6 +1162,18 @@ dependencies = [
  "gateway-core",
  "gateway-observability",
  "gateway-schema",
+]
+
+[[package]]
+name = "gateway-passport-session"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "gateway-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
 ]
 
 [[package]]

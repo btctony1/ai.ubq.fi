@@ -341,8 +341,11 @@ async fn mint<S: AuthorityStore, I: TokenSource>(
         {
             SourceActor::Passport {
                 sub: claims.sub.clone(),
-                jti: claims.jti.clone(),
-                expires_at_ms: claims.exp.checked_mul(1000).ok_or_else(fail)?,
+                jti: claims.jti.clone().ok_or_else(fail)?,
+                expires_at_ms: claims
+                    .exp
+                    .and_then(|exp| exp.checked_mul(1000))
+                    .ok_or_else(fail)?,
             }
         }
         AuthMethod::PassportSession { .. } | AuthMethod::PassportBearer { .. } => {
@@ -667,26 +670,13 @@ fn config_digest(config: &AuthConfig) -> Result<String, GatewayError> {
     )
 }
 /// Source-exact projection; only actual AuthService authentication can mint an actor.
+/// The single shared projection in `AuthMethod::principal_id`.
 pub fn principal_id(principal: &AuthPrincipal) -> String {
-    match &principal.method {
-        AuthMethod::KvApiKey { key_id, .. } => format!("api-key:{key_id}"),
-        AuthMethod::PasskeySession { user_id, .. } => format!("passkey-user:{user_id}"),
-        AuthMethod::PassportSession { claims } | AuthMethod::PassportBearer { claims } => {
-            format!("passport-user:{}", claims.sub)
-        }
-        AuthMethod::GithubToken { owner, repo, .. } => format!(
-            "github-repo:{}/{}",
-            owner.to_lowercase(),
-            repo.to_lowercase()
-        ),
-        AuthMethod::AuthTokensAllowlist => "auth-method:auth_tokens_allowlist".into(),
-        AuthMethod::AdminAllowlist => "auth-method:admin_allowlist".into(),
-        AuthMethod::DenoDeployToken => "auth-method:deno_deploy_token".into(),
-        AuthMethod::Disabled => principal.token.as_ref().map_or_else(
-            || "local-auth-disabled".into(),
-            |token| format!("bearer-sha256:{}", sha256_hex(token.expose().as_bytes())),
-        ),
-    }
+    let token = principal
+        .token
+        .as_ref()
+        .map(gateway_auth::crypto::Secret::expose);
+    principal.method.principal_id(token)
 }
 fn runtime_key() -> RecordKey {
     gateway_auth::store::key(json!(["uos_ai", "runtime_config", "v2"]))
