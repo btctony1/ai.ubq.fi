@@ -64,6 +64,19 @@ pub async fn route(
     {
         return Ok(response);
     }
+    if let Some(operation) =
+        gateway_state_transfer::http::operation(request.method().as_ref(), &path)
+    {
+        return crate::migration_host::state_transfer(
+            &mut request,
+            &auth_request,
+            &auth,
+            &env,
+            operation,
+        )
+        .await
+        .map(Into::into);
+    }
     if path.starts_with("/admin/") {
         return administrative_route(
             &mut request,

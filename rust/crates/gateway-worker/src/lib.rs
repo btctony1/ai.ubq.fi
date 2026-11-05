@@ -37,7 +37,7 @@ pub mod inference_wire;
 mod lifecycle;
 mod live_host;
 mod live_http;
-/// Rust-only fixture composition; no native capture HTTP route is exposed.
+/// Profile/native composition and the authenticated operator state transfer.
 pub mod migration_host;
 mod multipart;
 mod native_authority;

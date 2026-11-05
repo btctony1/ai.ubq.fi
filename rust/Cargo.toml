@@ -39,6 +39,8 @@ members = [
   "crates/gateway-claude-runtime-test-support",
   "crates/gateway-extras-runtime-test-support",
   "crates/gateway-migration-test-support",
+  "crates/gateway-state-transfer",
+  "crates/gateway-state-reverse",
 ]
 exclude = ["vendor/webauthn-rs-core-0.6.1-dev"]
 resolver = "3"
@@ -89,6 +91,8 @@ gateway-admin-test-support = { path = "crates/gateway-admin-test-support" }
 gateway-claude-runtime-test-support = { path = "crates/gateway-claude-runtime-test-support" }
 gateway-extras-runtime-test-support = { path = "crates/gateway-extras-runtime-test-support" }
 gateway-migration-test-support = { path = "crates/gateway-migration-test-support" }
+gateway-state-transfer = { path = "crates/gateway-state-transfer" }
+gateway-state-reverse = { path = "crates/gateway-state-reverse" }
 
 [profile.dev]
 opt-level = 0
