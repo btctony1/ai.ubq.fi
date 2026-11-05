@@ -1,6 +1,6 @@
 {
   "crates": {
-    "gateway-admin": 2471,
+    "gateway-admin": 2469,
     "gateway-admin-data": 4861,
     "gateway-admin-runtime": 5607,
     "gateway-auth": 8509,
@@ -16,7 +16,7 @@
     "gateway-providers": 9773,
     "gateway-routing-runtime": 7967,
     "gateway-schema": 7639,
-    "gateway-worker": 20516
+    "gateway-worker": 20490
   },
   "targets": {
     "gateway-admin-runtime/test/contracts": 1509,

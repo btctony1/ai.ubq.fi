@@ -31,20 +31,18 @@ pub struct KeyChange {
 }
 
 pub fn actor(principal: &AuthPrincipal) -> ChangeActor {
-    let identity =
-        |id: &String, label: &String| ("passkey_user", Some(id.clone()), Some(label.clone()));
-    let (kind, id, label) = match &principal.method {
+    let (kind, identity) = match &principal.method {
         AuthMethod::PasskeySession {
             user_id, handle, ..
-        } => identity(user_id, handle),
-        AuthMethod::PassportSession { claims } => identity(&claims.sub, &claims.handle),
-        AuthMethod::Disabled => ("local_admin", None, None),
-        _ => ("shared_admin_credential", None, None),
+        } => ("passkey_user", Some((user_id, handle))),
+        AuthMethod::PassportSession { claims: c } => ("passkey_user", Some((&c.sub, &c.handle))),
+        AuthMethod::Disabled => ("local_admin", None),
+        _ => ("shared_admin_credential", None),
     };
     ChangeActor {
         kind: kind.into(),
-        principal_id: id,
-        principal_label: label,
+        principal_id: identity.map(|(id, _)| id.clone()),
+        principal_label: identity.map(|(_, label)| label.clone()),
         is_super_admin: principal.is_super_admin,
     }
 }
@@ -133,10 +131,7 @@ pub fn build_event(
 ) -> Result<KeyChange, GatewayError> {
     let id = uuid()?;
     let request_id = input.request_id.trim_matches(js_whitespace);
-    let at_ms = match input.now_ms {
-        Some(value) => value,
-        None => now()?,
-    };
+    let at_ms = input.now_ms.map_or_else(now, Ok)?;
     let actor = input.principal.map(actor).unwrap_or(ChangeActor {
         kind: "unknown".into(),
         principal_id: None,

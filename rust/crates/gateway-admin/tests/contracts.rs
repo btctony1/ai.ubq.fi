@@ -119,6 +119,14 @@ fn actor() -> AuthPrincipal {
     }
 }
 
+fn key_service<'a, S, A>(store: &'a S, host: &'a Host, caps: &'a A) -> KeyService<'a, S, Host, A> {
+    KeyService {
+        store,
+        host,
+        capabilities: caps,
+        release: "fixture",
+    }
+}
 fn kernel_source_policy(scope: &str, repo: Option<&str>) -> Value {
     let mut value = json!({"v":2,"scope":scope,"owner":"owner","usage_limit_requests":"25.9","window_ms":"60000.9","expires_at_ms":0,"created_at_ms":1,"updated_at_ms":2});
     if let Some(repo) = repo {
@@ -451,12 +459,7 @@ fn paid_limit_updates_and_disabling_preserve_source_pricing_without_provider_rei
         let caps = Pricing {
             inputs: RefCell::new(Vec::new()),
         };
-        let service = KeyService {
-            store: &store,
-            host: &host,
-            capabilities: &caps,
-            release: "fixture",
-        };
+        let service = key_service(&store, &host, &caps);
         let created = service
             .create(
                 &source(&json!({"name":"Pricing","paid_fallback_limit_credits":1})),
@@ -692,12 +695,7 @@ fn deletion_cleanup_is_guarded_idempotent_and_preserves_source_error_ordering() 
                 finishes: Cell::new(0),
                 aborts: Cell::new(0),
             };
-            let service = KeyService {
-                store: &store,
-                host: &host,
-                capabilities: &caps,
-                release: "fixture",
-            };
+            let service = key_service(&store, &host, &caps);
             let created = service
                 .create(&source(&json!({"name":"Cleanup"})), &actor(), "create")
                 .await
@@ -955,12 +953,7 @@ impl AuthorityStore for PaidRaceStore<'_> {
                 store: self.store,
                 host: self.host,
             };
-            let service = KeyService {
-                store: self.store,
-                host: self.host,
-                capabilities: &caps,
-                release: "fixture",
-            };
+            let service = key_service(self.store, self.host, &caps);
             service
                 .mutate(
                     AdminOperation::ApiKeysRevoke,
@@ -1003,12 +996,7 @@ fn claimed_deletion_uses_new_guard_revision_and_fences_actual_inflight_paid_admi
         let pricing = Pricing {
             inputs: RefCell::new(Vec::new()),
         };
-        let key = KeyService {
-            store: &store,
-            host: &host,
-            capabilities: &pricing,
-            release: "fixture",
-        }
+        let key = key_service(&store, &host, &pricing)
         .create(
             &source(&json!({"name":"Race","paid_fallback_enabled":true,"paid_fallback_limit_credits":1})),
             &actor(),
@@ -1214,7 +1202,10 @@ fn audit_never_persists_credential_material() {
     let identified = audit::actor(&passport);
     assert_eq!(identified.kind, "passkey_user");
     assert_eq!(identified.principal_id.as_deref(), Some("passport-subject"));
-    assert_eq!(identified.principal_label.as_deref(), Some("passport-handle"));
+    assert_eq!(
+        identified.principal_label.as_deref(),
+        Some("passport-handle")
+    );
 }
 
 #[test]
@@ -1224,10 +1215,8 @@ fn key_creation_commits_identity_policy_window_and_audit_together() {
         let host = Host::default();
         let caps = Capabilities { pending: false };
         let service = KeyService {
-            store: &store,
-            host: &host,
-            capabilities: &caps,
             release: "fixture-release",
+            ..key_service(&store, &host, &caps)
         };
         let result = service
             .create(
@@ -1286,12 +1275,7 @@ fn conflicting_creation_writes_nothing() {
         store.conflict.set(true);
         let host = Host::default();
         let caps = Capabilities { pending: false };
-        let service = KeyService {
-            store: &store,
-            host: &host,
-            capabilities: &caps,
-            release: "fixture",
-        };
+        let service = key_service(&store, &host, &caps);
         assert_eq!(
             service
                 .create(&source(&json!({"name":"Fixture"})), &actor(), "request")
@@ -1310,12 +1294,7 @@ fn malformed_or_unpriced_paid_key_never_writes_state() {
         let store = Store::default();
         let host = Host::default();
         let caps = Capabilities { pending: false };
-        let service = KeyService {
-            store: &store,
-            host: &host,
-            capabilities: &caps,
-            release: "fixture",
-        };
+        let service = key_service(&store, &host, &caps);
         for body in [
             json!({"name":"bad\nkey"}),
             json!({"name":"key","paid_fallback_enabled":true}),
@@ -1343,12 +1322,7 @@ fn revoked_deletion_never_discards_pending_billing() {
         let store = Store::default();
         let host = Host::default();
         let caps = Capabilities { pending: true };
-        let service = KeyService {
-            store: &store,
-            host: &host,
-            capabilities: &caps,
-            release: "fixture",
-        };
+        let service = key_service(&store, &host, &caps);
         let created = service
             .create(&source(&json!({"name":"Fixture"})), &actor(), "create")
             .await
