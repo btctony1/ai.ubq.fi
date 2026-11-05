@@ -1,8 +1,9 @@
 //! Existing stream polling, decoding and terminal observation, without routing decisions.
 use super::{
-    ATTEMPT_DEADLINE_MS, CEREBRAS_RATE_LIMIT_HEADERS, ResponseResult, apply_warnings,
-    cerebras_error_body, copy_headers, invalid, observe_event, provider_correlation, set_header,
+    ATTEMPT_DEADLINE_MS, CEREBRAS_RATE_LIMIT_HEADERS, ResponseResult, apply_warnings, copy_headers,
+    invalid, observe_event, provider_correlation, set_header,
 };
+use crate::inference_source::cerebras_error_body;
 use crate::storage::now_ms;
 use crate::transport::stream::FinishHook;
 use crate::transport::{body, stream::ObservedStream};
@@ -16,6 +17,7 @@ use crate::{
 };
 use futures_util::StreamExt;
 use gateway_core::{error::GatewayError, lifecycle::SemanticTerminal, provider::UpstreamProvider};
+use gateway_prompt_admission::native_http_failure::{SelectedAnswer, reencodes};
 use gateway_providers::response::decode_response;
 use gateway_providers::types::Headers;
 use gateway_providers::{
@@ -222,6 +224,8 @@ pub(super) struct Reply<'a> {
     pub(super) event_stream: bool,
     pub(super) status: u16,
     pub(super) provider: UpstreamProvider,
+    /// Admitted native SSE headers were already committed for this request.
+    pub(super) early: bool,
 }
 impl Reply<'_> {
     pub(super) async fn send(self) -> ResponseResult {
@@ -237,6 +241,10 @@ impl Reply<'_> {
             }
             if self.provider == UpstreamProvider::Cerebras {
                 return self.cerebras_refusal().await;
+            }
+            let content_type = self.headers.get("content-type").map(String::as_str);
+            if self.early && reencodes(self.status, content_type) {
+                return self.late_refusal().await;
             }
             return self.refusal();
         }
@@ -333,6 +341,43 @@ impl Reply<'_> {
         }
         provider_correlation(&mut response, self.provider, &self.headers)?;
         Ok(response)
+    }
+    /// Source `nativeFailureAfterEarlyHeaders`: the selected HTTP error body is read with the
+    /// existing 64 KiB/one-second bound and only its code/message reach the open stream.
+    async fn late_refusal(mut self) -> ResponseResult {
+        let probe = body::refusal_probe(
+            &mut self.upstream,
+            &self.host.cancellation,
+            body::REFUSAL_PROBE_TIMEOUT_MS,
+        )
+        .await;
+        body::discard_response(&mut self.upstream);
+        let answer = SelectedAnswer {
+            status: self.status,
+            headers: &self.headers,
+            body: &probe.bytes,
+            complete: probe.complete,
+        };
+        let frames = match crate::inference_source::late_frames(self.capture, &answer) {
+            Ok(frames) => frames,
+            Err(error) => {
+                self.lifecycle.finish(Default::default(), None).await?;
+                return Err(error);
+            }
+        };
+        self.capture
+            .configure(200, true, self.responses, self.provider);
+        let stream = ObservedStream::new(
+            self.capture
+                .client(futures_util::stream::iter(vec![Ok(frames)])),
+            ObservationHandle::default(),
+            self.context,
+            self.host.cancellation.clone(),
+            Some(self.deadline),
+            self.finish,
+        );
+        let unavailable = |_| invalid("The downstream refusal body is unavailable.");
+        crate::inference_early::sse(stream.into_response().map_err(unavailable)?)
     }
     fn refusal(self) -> ResponseResult {
         let observation = ObservationHandle::default();

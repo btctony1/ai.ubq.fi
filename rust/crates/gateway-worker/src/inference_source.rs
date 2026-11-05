@@ -1,18 +1,27 @@
 //! Authoritative source-wire errors; diagnostics never replace the original body.
-use crate::inference_capture::Capture;
+use crate::{inference_capture::Capture, inference_early::Gate};
 use gateway_core::{error::GatewayError, source_json::SourceJson};
+use gateway_observability::replay_trace::SAFE_HEADERS;
 use gateway_prompt_admission::native_failure::{
     CONTENT_TYPE, encode_native_context_failure, selects_native_encoding,
 };
+use gateway_prompt_admission::native_http_failure::{SelectedAnswer, late_failure, reencodes};
 use gateway_routing_runtime::types::{RoutingError, SourceRefusalBody};
 use std::rc::Rc;
 use worker::Response;
 
-/// Encoding selectors only: neither field grants authority or bypasses validation.
+/// Encoding selectors only: no field grants authority or bypasses validation.
 #[derive(Default)]
 pub struct NativeTurn {
     pub stream: Option<SourceJson>,
     pub turn_metadata: Option<String>,
+    /// Present only for a native Responses turn; committed after a successful dispatch gate.
+    pub early: Option<Rc<Gate>>,
+}
+impl NativeTurn {
+    pub fn early_committed(&self) -> bool {
+        self.early.as_ref().is_some_and(|gate| gate.committed())
+    }
 }
 /// One local refusal answer. A native aggregate overflow is 200 SSE; all else keeps its body.
 pub struct Reply {
@@ -63,6 +72,20 @@ pub(crate) async fn error_response(
     let Some(reply) = reply(&error, turn, mint)? else {
         return Err(*error.error);
     };
+    if !reply.native_context_failure
+        && turn.early_committed()
+        && reencodes(reply.status, Some(reply.content_type))
+    {
+        let mut headers = error.headers;
+        headers.insert("content-type".into(), reply.content_type.into());
+        let answer = SelectedAnswer {
+            status: reply.status,
+            headers: &headers,
+            body: &reply.body,
+            complete: true,
+        };
+        return late_answer(capture, &answer).await;
+    }
     let mut response = Response::from_bytes(reply.body.clone())
         .map_err(|_| unavailable())?
         .with_status(reply.status);
@@ -86,6 +109,43 @@ pub(crate) async fn error_response(
         capture.immediate(reply.status, &reply.body).await;
     }
     Ok(response)
+}
+/// Mints the response id and records the internal evidence; returns the two client frames.
+pub(crate) fn late_frames(
+    capture: &Capture,
+    answer: &SelectedAnswer<'_>,
+) -> Result<Vec<u8>, GatewayError> {
+    let (id, created_at) = mint()?;
+    Ok(capture.late_http_failure(late_failure(answer, SAFE_HEADERS, &id, created_at)?))
+}
+async fn late_answer(
+    capture: &Capture,
+    answer: &SelectedAnswer<'_>,
+) -> Result<Response, GatewayError> {
+    let frames = late_frames(capture, answer)?;
+    capture.local_stream(&frames).await;
+    crate::inference_early::sse(Response::from_bytes(frames).map_err(|_| unavailable())?)
+}
+/// Source `nativeFailureAfterEarlyHeaders` for a gateway error after headers were committed.
+pub(crate) async fn late_error(
+    error: GatewayError,
+    capture: &Capture,
+    cancelled: bool,
+) -> Result<Response, GatewayError> {
+    let headers = [("content-type".to_owned(), "application/json".to_owned())].into();
+    if let Ok(body) = serde_json::to_vec(&error.envelope) {
+        let answer = SelectedAnswer {
+            status: error.status,
+            headers: &headers,
+            body: &body,
+            complete: true,
+        };
+        if let Ok(response) = late_answer(capture, &answer).await {
+            return Ok(response);
+        }
+    }
+    capture.failure(&error, cancelled).await;
+    Err(error)
 }
 fn unavailable() -> GatewayError {
     GatewayError::unavailable(
@@ -113,4 +173,56 @@ pub(crate) fn pricing_metadata(
     fields.retain(|(name, _)| name != &key);
     fields.push((key, SourceJson::from_serializable(&true)?));
     Ok(Some(source::object_keys(fields)?))
+}
+/// Source Cerebras errors forward only message/code from a bounded body.
+fn cerebras_error_detail(bytes: &[u8]) -> (String, String) {
+    let fallback_message = "Cerebras upstream returned an error.".to_owned();
+    let fallback_code = "cerebras_upstream_error".to_owned();
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return (fallback_message, fallback_code);
+    };
+    let error = value.get("error").filter(|value| value.is_object());
+    let text = |name: &str, limit: usize| {
+        error
+            .and_then(|error| error.get(name))
+            .or_else(|| value.get(name))
+            .and_then(serde_json::Value::as_str)
+            .map(|value| {
+                value
+                    .chars()
+                    .take(limit)
+                    .collect::<String>()
+                    .trim()
+                    .to_owned()
+            })
+            .filter(|value| !value.is_empty())
+    };
+    (
+        text("message", 1_000).unwrap_or(fallback_message),
+        text("code", 200).unwrap_or(fallback_code),
+    )
+}
+
+fn cerebras_error_type(status: u16) -> &'static str {
+    if status >= 500 {
+        "server_error"
+    } else if status == 429 {
+        "rate_limit_error"
+    } else {
+        "invalid_request_error"
+    }
+}
+
+pub fn cerebras_error_body(status: u16, bytes: &[u8]) -> Vec<u8> {
+    let (message, code) = cerebras_error_detail(bytes);
+    serde_json::to_vec(&serde_json::json!({
+        "error": {
+            "message": message,
+            "type": cerebras_error_type(status),
+            "code": code,
+        }
+    }))
+    .unwrap_or_else(|_| {
+        br#"{"error":{"message":"Cerebras upstream returned an error.","type":"invalid_request_error","code":"cerebras_upstream_error"}}"#.to_vec()
+    })
 }

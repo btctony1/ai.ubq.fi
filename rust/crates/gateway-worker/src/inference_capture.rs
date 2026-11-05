@@ -20,7 +20,10 @@ use gateway_observability::{
     replay_producer::{ClientFailureObservation, FailureObservation, should_persist},
     replay_trace::{AttemptTrace, TraceProvider, TraceRecorder, TraceTerminal},
 };
-use gateway_prompt_admission::native_failure::{FAILURE_KIND, TERMINAL_TYPE};
+use gateway_prompt_admission::{
+    native_failure::{FAILURE_KIND, TERMINAL_TYPE},
+    native_http_failure::{LateFailure, NativeHttpFailure},
+};
 use gateway_providers::sse::{
     MAX_CHAT_EVENT_BYTES, MAX_RESPONSES_EVENT_BYTES, SseFrame, SseParser,
 };
@@ -40,8 +43,10 @@ pub struct Capture {
     trace_valid: Cell<bool>,
     finished: Cell<bool>,
     local_completed: Cell<bool>,
-    /// Gateway-built aggregate context overflow; nonsemantic and never quota proof.
-    context_overflow: Cell<bool>,
+    /// Failure kind of a gateway-built `response.failed` (aggregate overflow or a late native
+    /// HTTP failure); nonsemantic and never quota proof.
+    synthetic_failure: RefCell<Option<String>>,
+    native_http_failure: RefCell<Option<NativeHttpFailure>>,
     terminal_request: RefCell<Option<TerminalRequest>>,
     provider_request_id: RefCell<Option<String>>,
     client: RefCell<ClientWire>,
@@ -87,7 +92,8 @@ impl Capture {
             trace_valid: Cell::new(true),
             finished: Cell::new(false),
             local_completed: Cell::new(false),
-            context_overflow: Cell::new(false),
+            synthetic_failure: RefCell::new(None),
+            native_http_failure: RefCell::new(None),
             terminal_request: RefCell::new(None),
             provider_request_id: RefCell::new(None),
             client: RefCell::new(ClientWire {
@@ -197,6 +203,7 @@ impl Capture {
                 wire.terminal.clone(),
             )
         };
+        self.log_native_http_failure(&request.context.route, status, &provider);
         let extracted = gateway_core::source_usage::extract_usage_tokens(usage);
         let completed = self.local_completed.get() || source_completed(observation);
         let mut event = gateway_observability::prompt::PromptEvent {
@@ -317,7 +324,7 @@ impl Capture {
         let failure_kind = match observation.reader_termination {
             Some(ReaderTermination::ReadError) => Some("gateway_stream_read_error".into()),
             Some(ReaderTermination::Deadline) => Some("gateway_timeout".into()),
-            _ => self.overflow(FAILURE_KIND),
+            _ => self.synthetic_failure.borrow().clone(),
         };
         self.runtime
             .record_admin_error(&gateway_observability::ledger::ErrorObservation {
@@ -495,13 +502,50 @@ impl Capture {
     }
     /// Source `chatResponsesProjectionFailure`: an incomplete, usage-free streamed terminal.
     pub(crate) async fn native_context_failure(&self, body: &[u8]) {
-        self.context_overflow.set(true);
+        *self.synthetic_failure.borrow_mut() = Some(FAILURE_KIND.into());
+        self.local_stream(body).await;
+    }
+    /// A gateway-built, usage-free streamed terminal that is already fully known.
+    pub(crate) async fn local_stream(&self, body: &[u8]) {
         self.configure_local(200, true, false);
         self.bytes(body);
         self.finish_local(TransportObservation::default()).await;
     }
-    fn overflow(&self, value: &str) -> Option<String> {
-        self.context_overflow.get().then(|| value.into())
+    /// Source `nativeFailureAfterEarlyHeaders`: keeps the evidence and returns the client frames.
+    pub(crate) fn late_http_failure(&self, failure: LateFailure) -> Vec<u8> {
+        self.synthetic_failure
+            .borrow_mut()
+            .get_or_insert(failure.code);
+        *self.native_http_failure.borrow_mut() = Some(failure.evidence);
+        failure.body.into_bytes()
+    }
+    fn synthetic_terminal(&self) -> Option<String> {
+        self.synthetic_failure
+            .borrow()
+            .as_ref()
+            .map(|_| TERMINAL_TYPE.into())
+    }
+    /// Source terminal log `native_http_failure`; Rust records only the fields it owns.
+    fn log_native_http_failure(&self, route: &str, status: u16, provider: &str) {
+        #[derive(serde::Serialize)]
+        struct Terminal<'a> {
+            request_id: &'a str,
+            native_http_failure: &'a NativeHttpFailure,
+            route: &'a str,
+            status: u16,
+            provider: &'a str,
+        }
+        if let Some(failure) = self.native_http_failure.borrow().as_ref()
+            && let Ok(line) = serde_json::to_string(&Terminal {
+                request_id: &self.request_id,
+                native_http_failure: failure,
+                route,
+                status,
+                provider,
+            })
+        {
+            worker::console_log!("[ai.ubq.fi] request_terminal {line}");
+        }
     }
     async fn persist(&self, observation: TransportObservation) -> Result<(), GatewayError> {
         let (internal, client) = {
@@ -537,7 +581,7 @@ impl Capture {
             let failure = match observation.reader_termination {
                 Some(ReaderTermination::ReadError) => Some("gateway_stream_read_error".into()),
                 Some(ReaderTermination::Deadline) => Some("gateway_timeout".into()),
-                _ => self.overflow(FAILURE_KIND),
+                _ => self.synthetic_failure.borrow().clone(),
             };
             let internal = FailureObservation {
                 status: wire.status,
@@ -545,7 +589,7 @@ impl Capture {
                 completed,
                 terminal_type: terminal,
                 failure_kind: failure,
-                synthetic_terminal_type: self.overflow(TERMINAL_TYPE),
+                synthetic_terminal_type: self.synthetic_terminal(),
                 provider_route: wire.provider.clone(),
             };
             let mut client = ClientFailureObservation::from_internal(&internal);
