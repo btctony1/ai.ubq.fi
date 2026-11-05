@@ -36,7 +36,7 @@ fn common_fields(row: &mut SourceJson, priority: i64, forwarding: bool) {
             row,
             "forwarding_policy",
             c::object(vec![
-                ("version", c::json("deepseek-forwarded-payload/v1")),
+                ("version", c::json("deepseek-forwarded-payload/v2")),
                 ("mode", c::json("bytes")),
                 ("per_message_limit", c::json(&65_536)),
             ]),

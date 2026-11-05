@@ -5,6 +5,7 @@ members = [
   "crates/gateway-core",
   "crates/gateway-compaction",
   "crates/gateway-schema",
+  "crates/gateway-prompt-admission",
   "crates/gateway-providers",
   "crates/gateway-authority",
   "crates/gateway-admission",
@@ -55,6 +56,7 @@ wasm-bindgen = "=0.2.129"
 gateway-core = { path = "crates/gateway-core" }
 gateway-compaction = { path = "crates/gateway-compaction" }
 gateway-schema = { path = "crates/gateway-schema" }
+gateway-prompt-admission = { path = "crates/gateway-prompt-admission" }
 gateway-providers = { path = "crates/gateway-providers" }
 gateway-authority = { path = "crates/gateway-authority" }
 gateway-admission = { path = "crates/gateway-admission" }

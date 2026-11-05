@@ -97,7 +97,7 @@ impl Relay {
                 .and_then(|value| value.deserialize::<u64>().ok())
                 .map_or(self.next_sequence + 1, |number| number + 1);
             observe_event(&self.observation, &event);
-            self.queue.push_back(event.encode_sse().into_bytes());
+            self.queue.push_back(self.decoder.visible_sse(event));
         }
         let terminal_usage = self.usage.borrow().clone();
         let terminal = self.observation.snapshot().semantic_terminal;
