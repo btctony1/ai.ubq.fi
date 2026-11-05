@@ -51,7 +51,7 @@ impl NativeBindings {
         Self::from_binding_value(raw.as_deref())
     }
 
-    fn from_binding_value(raw: Option<&str>) -> Result<Option<Self>, GatewayError> {
+    pub fn from_binding_value(raw: Option<&str>) -> Result<Option<Self>, GatewayError> {
         let Some(raw) = raw else {
             return Ok(None);
         };
@@ -96,6 +96,10 @@ impl NativeBindings {
 
     pub(crate) fn transport(&self) -> Result<&NativeTransport, GatewayError> {
         self.transport.as_ref().ok_or_else(unavailable)
+    }
+
+    pub fn transport_identity(&self) -> Result<&NativeTransportIdentity, GatewayError> {
+        self.transport().map(|transport| &transport.identity)
     }
 
     pub(crate) fn renewal_owners(
@@ -547,126 +551,4 @@ fn invalid_configuration() -> GatewayError {
         "Native carrier configuration is invalid",
         "native_configuration_invalid",
     )
-}
-
-#[cfg(test)]
-mod carrier_config_tests {
-    use super::*;
-
-    fn identity(key: &str, capabilities: &str) -> String {
-        format!(
-            r#"{{"key_id":"native-key","owner_id":"native-owner","owner_epoch":"native-epoch","key_base64url":"{key}","capabilities":[{capabilities}]}}"#
-        )
-    }
-
-    fn config(origin: &str, identity: &str) -> String {
-        format!(r#"{{"origin":"{origin}","identity":{identity}}}"#)
-    }
-
-    fn code(error: GatewayError) -> Option<String> {
-        error.envelope.error.code
-    }
-
-    fn error_code(raw: &str) -> Option<String> {
-        match NativeBindings::from_binding_value(Some(raw)) {
-            Ok(_) => panic!("invalid carrier configuration was accepted"),
-            Err(error) => code(error),
-        }
-    }
-
-    #[test]
-    fn exact_binding_parses_a_fixed_https_transport_identity() {
-        let key = base64url(&[7; 32]);
-        let raw = config(
-            "https://native.example",
-            &identity(&key, r#""live_sideband","supervisor_read""#),
-        );
-        let bindings = NativeBindings::from_binding_value(Some(&raw))
-            .unwrap()
-            .unwrap();
-        let transport = bindings.transport().unwrap();
-        assert_eq!(transport.identity.key_id(), "native-key");
-        assert_eq!(transport.identity.owner_id(), "native-owner");
-        assert_eq!(transport.identity.owner_epoch(), "native-epoch");
-    }
-
-    #[test]
-    fn absent_binding_leaves_the_capability_unavailable() {
-        assert!(NativeBindings::from_binding_value(None).unwrap().is_none());
-    }
-
-    #[test]
-    fn unknown_fields_and_capabilities_fail_closed() {
-        let key = base64url(&[8; 32]);
-        let unknown_capability = config(
-            "https://native.example",
-            &identity(&key, r#""live_sideband","future_capability""#),
-        );
-        let unknown_field = config(
-            "https://native.example",
-            &format!(
-                r#"{{"key_id":"native-key","owner_id":"native-owner","owner_epoch":"native-epoch","key_base64url":"{key}","capabilities":["live_sideband"],"extra":true}}"#
-            ),
-        );
-        for raw in [unknown_capability, unknown_field] {
-            assert_eq!(
-                error_code(&raw).as_deref(),
-                Some("native_configuration_invalid")
-            );
-        }
-    }
-
-    #[test]
-    fn malformed_origins_and_keys_fail_closed() {
-        let key = base64url(&[9; 32]);
-        for origin in [
-            "http://native.example",
-            "https://native.example:8443",
-            "https://user@native.example",
-            "https://native.example/path",
-            "https://native.example?target=elsewhere",
-            "https://native.example#fragment",
-        ] {
-            let raw = config(origin, &identity(&key, r#""live_sideband""#));
-            assert_eq!(
-                error_code(&raw).as_deref(),
-                Some("native_configuration_invalid")
-            );
-        }
-        let short = base64url(&[9; 31]);
-        let raw = config(
-            "https://native.example",
-            &identity(&short, r#""live_sideband""#),
-        );
-        assert_eq!(
-            error_code(&raw).as_deref(),
-            Some("native_configuration_invalid")
-        );
-    }
-
-    #[test]
-    fn empty_or_partial_identity_is_rejected() {
-        let key = base64url(&[10; 32]);
-        for raw in [
-            config(
-                "https://native.example",
-                &identity(&key, r#""live_sideband""#),
-            )
-            .replace(r#","owner_id":"native-owner""#, ""),
-            config("https://native.example", &identity(&key, "")),
-            config("https://native.example", "{}"),
-            String::new(),
-        ] {
-            assert!(NativeBindings::from_binding_value(Some(&raw)).is_err());
-        }
-    }
-
-    #[test]
-    fn oversized_configuration_is_rejected_before_json_parsing() {
-        let raw = "x".repeat(NATIVE_CARRIER_CONFIG_MAX_BYTES + 1);
-        assert_eq!(
-            error_code(&raw).as_deref(),
-            Some("native_configuration_invalid")
-        );
-    }
 }

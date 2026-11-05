@@ -1,12 +1,15 @@
 //! Authoritative source-wire errors; diagnostics never replace the original body.
 use crate::{inference_capture::Capture, inference_early::Gate};
+use gateway_core::provider::UpstreamProvider;
 use gateway_core::{error::GatewayError, source_json::SourceJson};
 use gateway_observability::replay_trace::SAFE_HEADERS;
 use gateway_prompt_admission::native_failure::{
     CONTENT_TYPE, encode_native_context_failure, selects_native_encoding,
 };
 use gateway_prompt_admission::native_http_failure::{SelectedAnswer, late_failure, reencodes};
+use gateway_providers::types::{ClientSurface, ProviderEvent};
 use gateway_routing_runtime::types::{RoutingError, SourceRefusalBody};
+use serde_json::json;
 use std::rc::Rc;
 use worker::Response;
 
@@ -225,4 +228,40 @@ pub fn cerebras_error_body(status: u16, bytes: &[u8]) -> Vec<u8> {
     .unwrap_or_else(|_| {
         br#"{"error":{"message":"Cerebras upstream returned an error.","type":"invalid_request_error","code":"cerebras_upstream_error"}}"#.to_vec()
     })
+}
+/// Source `chatStreamErrorValue` and the Responses `response.failed` frame of `failStream`,
+/// with each relay adapter's own `streamErrorCode`.
+pub fn stream_failure(
+    provider: UpstreamProvider,
+    surface: ClientSurface,
+    response_id: &str,
+    sequence: u64,
+) -> ProviderEvent {
+    let code = match provider {
+        UpstreamProvider::Deepseek => "deepseek_upstream_stream_error",
+        UpstreamProvider::Lithos => "lithos_upstream_stream_error",
+        UpstreamProvider::Openrouter => "openrouter_upstream_stream_error",
+        _ => "upstream_stream_error",
+    };
+    let message = "Upstream Chat Completions stream failed.";
+    if surface == ClientSurface::Chat {
+        return ProviderEvent::chat(
+            json!({"error":{"message":message,"type":"server_error","code":code,"param":null}}),
+        );
+    }
+    let error = json!({"code":code,"message":message});
+    ProviderEvent::responses(
+        json!({"type":"response.failed","response":{"id":response_id,"object":"response","status":"failed","error":error},"sequence_number":sequence}),
+    )
+}
+/// Source `failStream`: the caller's own cancellation ends with no frame; any other abort
+/// (the gateway deadline) writes the declared failure frame before the body closes.
+pub fn abort_frame(
+    client: bool,
+    provider: UpstreamProvider,
+    surface: ClientSurface,
+    response_id: &str,
+    sequence: u64,
+) -> Option<ProviderEvent> {
+    (!client).then(|| stream_failure(provider, surface, response_id, sequence))
 }
