@@ -268,8 +268,9 @@ pub(crate) async fn load_state<S: QueryStore>(
         );
     }
     let openrouter = input.rows("openrouter").to_vec();
+    let index = providers::OpenrouterIndex::new(&openrouter);
     for id in ids {
-        if let Some(row) = providers::match_openrouter(&openrouter, &id) {
+        if let Some(row) = index.find(&id) {
             input.enrichment.insert(
                 id,
                 gateway_schema::metadata::MetadataHint::from_openrouter(row),

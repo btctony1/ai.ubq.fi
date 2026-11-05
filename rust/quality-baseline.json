@@ -5,7 +5,7 @@
     "gateway-admin-runtime": 5389,
     "gateway-auth": 8282,
     "gateway-authority": 32011,
-    "gateway-catalog-runtime": 4174,
+    "gateway-catalog-runtime": 4172,
     "gateway-claude-runtime": 2210,
     "gateway-compaction": 3168,
     "gateway-core": 4749,
@@ -15,7 +15,7 @@
     "gateway-observability": 12237,
     "gateway-providers": 9715,
     "gateway-routing-runtime": 7486,
-    "gateway-schema": 7544,
+    "gateway-schema": 7539,
     "gateway-worker": 20225
   },
   "targets": {
@@ -24,7 +24,7 @@
     "gateway-authority/test/conformance": 5498,
     "gateway-catalog-runtime/test/admin": 1020,
     "gateway-catalog-runtime/test/control": 1306,
-    "gateway-catalog-runtime/test/runtime": 1502,
+    "gateway-catalog-runtime/test/runtime": 1496,
     "gateway-extras-runtime/test/runtime": 1001,
     "gateway-migration/example/worker-custody-fixture": 1922,
     "gateway-migration/test/copied_store_inverse": 1075,

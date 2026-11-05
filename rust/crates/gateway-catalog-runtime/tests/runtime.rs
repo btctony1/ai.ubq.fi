@@ -990,35 +990,29 @@ fn public_openrouter_enrichment_does_not_require_routing_credentials() -> TestRe
     Ok(())
 }
 #[test]
-fn openrouter_empty_failure_retains_cache_and_ambiguous_matches_are_unknown() {
+fn openrouter_empty_failure_retains_cache_and_ambiguous_matches_are_unknown() -> TestResult {
     let rows = vec![
         source_catalog::json(&json!({"id":"a/model","context_window_tokens":1})),
-        SourceJson::from_serializable(&json!({"id":"b/model","context_window_tokens":2})).unwrap(),
+        SourceJson::from_serializable(&json!({"id":"b/model","context_window_tokens":2}))?,
     ];
-    assert!(providers::match_openrouter(&rows, &"model".into()).is_none());
-    assert_eq!(
-        providers::match_openrouter(&rows, &"a/model".into())
-            .unwrap()
-            .deserialize::<Value>()
-            .unwrap()["context_window_tokens"],
-        1
-    );
+    let index = providers::OpenrouterIndex::new(&rows);
+    assert!(index.find(&"model".into()).is_none());
+    let matched = index.find(&"a/model".into()).ok_or("expected a/model")?;
+    assert_eq!(matched.deserialize::<Value>()?["context_window_tokens"], 1);
     let store = Store::new();
     let host = Host::new(&store);
     let runtime = CatalogRuntime::new();
     host.queue(Outcome::json(json!({"data":[{"id":"a/model"}]})));
-    run(runtime.refresh_provider(&store, &host, CatalogProvider::Openrouter, false)).unwrap();
+    run(runtime.refresh_provider(&store, &host, CatalogProvider::Openrouter, false))?;
     store.now.set(store.now.get() + 300001);
     host.queue(Outcome::json(json!({"data":[]})));
-    let retained = run(runtime.refresh_provider(&store, &host, CatalogProvider::Openrouter, false))
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        retained.models[0].deserialize::<Value>().unwrap()["id"],
-        "a/model"
-    );
-    run(runtime.refresh_provider(&store, &host, CatalogProvider::Openrouter, false)).unwrap();
+    let retained =
+        run(runtime.refresh_provider(&store, &host, CatalogProvider::Openrouter, false))?
+            .ok_or("expected retained catalog")?;
+    assert_eq!(retained.models[0].deserialize::<Value>()?["id"], "a/model");
+    run(runtime.refresh_provider(&store, &host, CatalogProvider::Openrouter, false))?;
     assert_eq!(host.requests.borrow().len(), 2);
+    Ok(())
 }
 
 #[test]
