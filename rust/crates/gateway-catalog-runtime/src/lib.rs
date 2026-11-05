@@ -15,7 +15,7 @@ use host::{
 };
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     rc::Rc,
 };
 
@@ -487,6 +487,7 @@ impl CatalogRuntime {
     ) -> Result<Vec<SourceJson>, GatewayError> {
         let started = host.now_ms();
         let mut all = Vec::<SourceJson>::new();
+        let mut positions = HashMap::new();
         let mut cursors = BTreeSet::new();
         let mut cursor = None;
         for _ in 0..if provider == CatalogProvider::ClaudeCode {
@@ -528,12 +529,11 @@ impl CatalogRuntime {
                 .map_err(|_| unavailable("Provider model discovery did not return JSON"))?;
             let (rows, next) = providers::parse_page(provider, &parsed)?;
             for row in rows {
-                if let Some(old) = all.iter_mut().find(|old| {
-                    source::member(old, "id").as_ref().and_then(source::string)
-                        == source::member(&row, "id").as_ref().and_then(source::string)
-                }) {
-                    *old = row;
+                let id = source::member(&row, "id").as_ref().and_then(source::string);
+                if let Some(&index) = positions.get(&id) {
+                    all[index] = row;
                 } else {
+                    positions.insert(id, all.len());
                     all.push(row);
                 }
             }
