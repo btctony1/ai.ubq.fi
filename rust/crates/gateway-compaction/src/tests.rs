@@ -234,16 +234,9 @@ impl CompactionHost for Host {
                 };
             }
             if self.mode == "outside" {
-                value = if id == 1 {
-                    if name_text.starts_with("call_") {
-                        2.0
-                    } else {
-                        -1.0
-                    }
-                } else if id == 2 {
-                    2.0
-                } else {
-                    -1.0
+                value = match (id, name_text.starts_with("call_")) {
+                    (1, true) | (2, _) => 2.0,
+                    _ => -1.0,
                 };
             }
             let number = if self.mode == "nonfinite" && name_text == "result_t1" {

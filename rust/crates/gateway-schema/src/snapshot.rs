@@ -104,23 +104,21 @@ pub fn normalize_snapshot(
             "auto_compact_token_limit",
             "effective_context_window_percent",
         ] {
-            if let Some(value) = c::get(item, key) {
-                if value.as_str() == "null" {
-                    c::set(&mut model, key, value);
-                } else if let Some(n) = gateway_core::source_serialization::number(&value)
-                    .filter(|n| n.is_finite() && *n >= 0.0)
-                {
-                    let n = n.trunc();
-                    c::set(
-                        &mut model,
-                        key,
-                        if n <= crate::util::MAX_SAFE_INTEGER {
-                            c::json(&(n as i64))
-                        } else {
-                            c::json(&n)
-                        },
-                    );
-                }
+            let Some(value) = c::get(item, key) else {
+                continue;
+            };
+            if value.as_str() == "null" {
+                c::set(&mut model, key, value);
+            } else if let Some(n) = gateway_core::source_serialization::number(&value)
+                .filter(|n| n.is_finite() && *n >= 0.0)
+            {
+                let n = n.trunc();
+                let n = if n <= crate::util::MAX_SAFE_INTEGER {
+                    c::json(&(n as i64))
+                } else {
+                    c::json(&n)
+                };
+                c::set(&mut model, key, n);
             }
         }
         if let Some(v) = c::get(item, "default_reasoning_level") {
@@ -143,20 +141,16 @@ pub fn normalize_snapshot(
             }
             let mut wire = Vec::new();
             for level in raw_levels {
-                if let Some(effort) = advertised_effort(&level) {
-                    let upstream = if c::matches(&effort, "ultra") {
-                        Some("max".into())
-                    } else {
-                        c::normalized(c::get(&level, "wire_effort").as_ref())
-                    };
-                    if let Some(upstream) = upstream.filter(|s| s != &effort) {
-                        let value = c::json(&upstream);
-                        if let Some((_, old)) = wire.iter_mut().find(|(key, _)| key == &effort) {
-                            *old = value;
-                        } else {
-                            wire.push((effort, value));
-                        }
-                    }
+                let Some(effort) = advertised_effort(&level) else {
+                    continue;
+                };
+                let upstream = if c::matches(&effort, "ultra") {
+                    Some("max".into())
+                } else {
+                    c::normalized(c::get(&level, "wire_effort").as_ref())
+                };
+                if let Some(upstream) = upstream.filter(|s| s != &effort) {
+                    c::upsert(&mut wire, effort, c::json(&upstream));
                 }
             }
             if !wire.is_empty() {

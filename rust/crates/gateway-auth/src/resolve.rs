@@ -302,6 +302,49 @@ impl<'a, S: AuthorityStore, H: AuthHost> AuthService<'a, S, H> {
             true,
         ))
     }
+    async fn local_development(&self, token: Option<&str>) -> Result<AuthPrincipal, GatewayError> {
+        let disabled = Ok(Self::principal(token, AuthMethod::Disabled, false, false));
+        let Some(row) = self
+            .store
+            .read(&api_keys::id_key("local-development"))
+            .await?
+        else {
+            return disabled;
+        };
+        row.validate_version()?;
+        // This one named ID row can now hold source name/model
+        // metadata. Keep the original peer/origin gate and separate
+        // model-free hash policy read; data decoding grants no role.
+        let metadata = gateway_core::source_control::decode_source_control_record(&row)?;
+        let member = |key| gateway_core::source_serialization::member(&metadata, key);
+        let text = |key| member(key).and_then(|value| value.deserialize::<String>().ok());
+        let (true, Some(hash), Some(id)) = (
+            member("revoked_at_ms").is_some_and(|value| value.as_str() == "null"),
+            text("hash"),
+            text("id"),
+        ) else {
+            return disabled;
+        };
+        let Some(hash_row) = self.store.read(&api_keys::hash_key(&hash)).await? else {
+            return disabled;
+        };
+        hash_row.validate_version()?;
+        let record = serde_json::from_value(hash_row.json_value()?.clone()).map_err(|_| {
+            GatewayError::unavailable(
+                "Local API key quota migration is incomplete",
+                "server_error",
+            )
+        })?;
+        let policy = api_keys::policy_from_record(hash.to_owned(), record, self.host.now_ms())?;
+        if id != "local-development" {
+            return disabled;
+        }
+        let method = AuthMethod::KvApiKey {
+            key_id: id.to_owned(),
+            policy,
+        };
+        Ok(Self::principal(token, method, false, false))
+    }
     pub async fn authenticate_client(
         &self,
         request: &AuthRequest,
@@ -309,55 +352,7 @@ impl<'a, S: AuthorityStore, H: AuthHost> AuthService<'a, S, H> {
         let token = request.bearer();
         if local_bypass(request, self.config) {
             // Only the checked native listener can resolve the existing local-development principal.
-            let row = self
-                .store
-                .read(&api_keys::id_key("local-development"))
-                .await?;
-            if let Some(row) = row {
-                row.validate_version()?;
-                // This one named ID row can now hold source name/model
-                // metadata. Keep the original peer/origin gate and separate
-                // model-free hash policy read; data decoding grants no role.
-                let metadata = gateway_core::source_control::decode_source_control_record(&row)?;
-                if gateway_core::source_serialization::member(&metadata, "revoked_at_ms")
-                    .is_some_and(|value| value.as_str() == "null")
-                    && let (Some(hash), Some(id)) = (
-                        gateway_core::source_serialization::member(&metadata, "hash")
-                            .and_then(|value| value.deserialize::<String>().ok()),
-                        gateway_core::source_serialization::member(&metadata, "id")
-                            .and_then(|value| value.deserialize::<String>().ok()),
-                    )
-                {
-                    let hash_row = self.store.read(&api_keys::hash_key(&hash)).await?;
-                    if let Some(hash_row) = hash_row {
-                        hash_row.validate_version()?;
-                        let record = serde_json::from_value(hash_row.json_value()?.clone())
-                            .map_err(|_| {
-                                GatewayError::unavailable(
-                                    "Local API key quota migration is incomplete",
-                                    "server_error",
-                                )
-                            })?;
-                        let policy = api_keys::policy_from_record(
-                            hash.to_owned(),
-                            record,
-                            self.host.now_ms(),
-                        )?;
-                        if id == "local-development" {
-                            return Ok(Self::principal(
-                                token,
-                                AuthMethod::KvApiKey {
-                                    key_id: id.to_owned(),
-                                    policy,
-                                },
-                                false,
-                                false,
-                            ));
-                        }
-                    }
-                }
-            }
-            return Ok(Self::principal(token, AuthMethod::Disabled, false, false));
+            return self.local_development(token).await;
         }
         if self.legacy_local(request) {
             return Ok(Self::principal(token, AuthMethod::Disabled, false, false));
@@ -594,6 +589,32 @@ impl<'a, S: AuthorityStore, H: AuthHost> AuthService<'a, S, H> {
         };
         Ok(Some(result))
     }
+    async fn key_usage(
+        &self,
+        key_id: &str,
+        policy: &api_keys::ApiKeyPolicy,
+    ) -> Result<i64, GatewayError> {
+        let wk = crate::store::key(json!([
+            "uos_ai",
+            "api_key_usage",
+            "v3",
+            "window",
+            key_id,
+            policy.policy_version,
+            policy.window_start_ms
+        ]));
+        let Some(row) = self.store.read(&wk).await? else {
+            return Ok(0);
+        };
+        row.validate_version()?;
+        row.json_value()?
+            .get("committed_requests")
+            .and_then(Value::as_i64)
+            .filter(|n| *n >= 0)
+            .ok_or_else(|| {
+                GatewayError::unavailable("API key quota ledger is unavailable", "server_error")
+            })
+    }
     async fn method_wire(&self, method: &AuthMethod) -> Result<Value, GatewayError> {
         Ok(match method {
             AuthMethod::PasskeySession {
@@ -619,31 +640,7 @@ impl<'a, S: AuthorityStore, H: AuthHost> AuthService<'a, S, H> {
                 if let Some(row) = self.store.read(&api_keys::id_key(key_id)).await? {
                     row.validate_version()?;
                     let record = row.json_value()?.clone();
-                    let wk = crate::store::key(json!([
-                        "uos_ai",
-                        "api_key_usage",
-                        "v3",
-                        "window",
-                        key_id,
-                        policy.policy_version,
-                        policy.window_start_ms
-                    ]));
-                    let usage = match self.store.read(&wk).await? {
-                        None => 0,
-                        Some(row) => {
-                            row.validate_version()?;
-                            row.json_value()?
-                                .get("committed_requests")
-                                .and_then(Value::as_i64)
-                                .filter(|n| *n >= 0)
-                                .ok_or_else(|| {
-                                    GatewayError::unavailable(
-                                        "API key quota ledger is unavailable",
-                                        "server_error",
-                                    )
-                                })?
-                        }
-                    };
+                    let usage = self.key_usage(key_id, policy).await?;
                     key = json!({"id":key_id,"name":record.get("name"),"prefix":record.get("prefix"),"created_at_ms":record.get("created_at_ms"),"expires_at_ms":policy.expires_at_ms,"revoked_at_ms":record.get("revoked_at_ms"),"usage_limit_requests":policy.usage_limit_requests,"usage_requests":usage,"usage_reset_at_ms":policy.usage_reset_at_ms,"window_ms":policy.window_ms});
                 }
                 json!({"kind":"kv_api_key","key":key})

@@ -3,11 +3,11 @@
     "gateway-admin": 2469,
     "gateway-admin-data": 4861,
     "gateway-admin-runtime": 5607,
-    "gateway-auth": 8509,
+    "gateway-auth": 8506,
     "gateway-authority": 32269,
     "gateway-catalog-runtime": 4207,
     "gateway-claude-runtime": 2211,
-    "gateway-compaction": 3177,
+    "gateway-compaction": 3173,
     "gateway-core": 4791,
     "gateway-extras-runtime": 2851,
     "gateway-migration": 9759,
@@ -15,7 +15,7 @@
     "gateway-observability": 12243,
     "gateway-providers": 9773,
     "gateway-routing-runtime": 7967,
-    "gateway-schema": 7639,
+    "gateway-schema": 7630,
     "gateway-worker": 20490
   },
   "targets": {
