@@ -525,12 +525,12 @@ fn native_body(raw: &SourceJson, options: &NativeBodyOptions<'_>) -> Option<(Sou
     if !base(raw) || !policy(raw) {
         return None;
     }
-    // TS `structuredOutputFormat`: only JSON-schema output; `strict`/`name` are typed then dropped.
+    // TS `structuredOutputFormat`: `{"type":"text"}` is no format; else only JSON schema (`strict`/`name` typed, dropped).
     let format = match s::present(raw, "text") {
         Some(text) if !only(&text, &["format"]) => return None,
         Some(text) => match s::present(&text, "format") {
-            Some(format) => Some(structured_format(&format)?),
-            None => None,
+            Some(format) if !eq(&format, r#"{"type":"text"}"#) => Some(structured_format(&format)?),
+            _ => None,
         },
         None => None,
     };

@@ -212,11 +212,46 @@ fn openlux_native_messages_preserves_json_schema_output_config() -> TestResult {
 }
 
 #[test]
+fn default_text_format_is_no_structured_output_on_the_direct_lane() -> TestResult {
+    let text = json!({"format":{"type":"text"}});
+    let raw = base(json!({"reasoning":{"effort":"high"},"text":text}));
+    let body = direct(raw, ClaudeCredentialKind::ApiKey, &["high"])?;
+    assert_eq!(body["output_config"], json!({"effort":"high"}));
+    let body = direct(
+        base(json!({"text":text})),
+        ClaudeCredentialKind::ApiKey,
+        &["high"],
+    )?;
+    assert_eq!(body.get("output_config"), None);
+    let unknown = base(json!({"text":{"format":{"type":"json_object"}}}));
+    assert!(direct(unknown, ClaudeCredentialKind::ApiKey, &["high"]).is_err());
+    Ok(())
+}
+
+#[test]
+fn openlux_native_messages_treat_the_default_text_format_as_absent() -> TestResult {
+    let text = json!({"format":{"type":"text"}});
+    let body =
+        openlux_native(json!({"text":text}))?.ok_or("default text format must stay native")?;
+    assert_eq!(body.get("output_config"), None);
+    let plain = openlux_native(json!({}))?.ok_or("plain request must stay native")?;
+    assert_eq!(body, plain);
+    // OpenLux disables native effort, so effort keeps Responses whether or not the default format is present.
+    let with_effort = openlux(json!({"reasoning":{"effort":"high"},"text":text}))?;
+    assert_eq!(
+        with_effort.url,
+        openlux(json!({"reasoning":{"effort":"high"}}))?.url
+    );
+    Ok(())
+}
+
+#[test]
 fn unrepresentable_text_formats_keep_the_original_responses_request() -> TestResult {
     for format in [
         json!({"type":"json_schema"}),
         json!("text"),
-        json!({"type":"text"}),
+        json!({"type":"json_object"}),
+        json!({"type":"text","schema":{"type":"object"}}),
         json!({"type":"json_schema","schema":{"type":"object"},"strict":"yes"}),
         json!({"type":"json_schema","schema":{"type":"object"},"name":7}),
     ] {
