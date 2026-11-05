@@ -1,12 +1,13 @@
-use super::*;
-use super::{completion::*, result::*};
-use crate::{
+use gateway_auth::native_import::authority::{completion::*, result::*, *};
+use gateway_auth::{
     crypto::base64url,
     native::{NATIVE_MAX_BODY_BYTES, NATIVE_RENEWAL_AUTHORITY_PATH, signature_input},
     native_control::{
-        NATIVE_AUTHORITY_MAX_BYTES, NATIVE_CONTROL_MAX_BYTES, authority_response_input,
+        NATIVE_AUTHORITY_MAX_BYTES, NATIVE_CONTROL_ERROR_MAX_BYTES, NATIVE_CONTROL_MAX_BYTES,
+        authority_response_input,
     },
 };
+use gateway_core::identity::MAX_SAFE_INTEGER;
 fn nonce() -> String {
     base64url(&[9; 32])
 }
