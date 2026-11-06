@@ -242,11 +242,15 @@ const json = (path: string): ObjectValue => {
   if (!isObject(value)) throw new Error(`${path} is not a JSON object`);
   return value;
 };
-export const transportFromEnvironment = (origin: string, environment: Record<string, string | undefined>, fetcher: Fetch = fetch): Transport => {
+const exactOrigin = (origin: string): string => {
   const url = new URL(origin);
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost";
   if (url.origin !== origin || (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)))
     throw new Error("--origin must be an exact https origin");
+  return origin;
+};
+export const transportFromEnvironment = (origin: string, environment: Record<string, string | undefined>, fetcher: Fetch = fetch): Transport => {
+  exactOrigin(origin);
   const adminToken = environment.UOS_STATE_TRANSFER_ADMIN_TOKEN;
   const intent = environment.UOS_STATE_TRANSFER_INTENT;
   if (!adminToken || !intent) throw new Error("UOS_STATE_TRANSFER_ADMIN_TOKEN and UOS_STATE_TRANSFER_INTENT must be set for this one command");
@@ -321,37 +325,164 @@ const exportCommand = async (values: Map<string, string>, environment: Environme
   return receipt;
 };
 
-const verifyCommand = (values: Map<string, string>): ObjectValue => {
+const VERIFY_INPUT_MAX_BYTES = 4096;
+const VERIFY_INPUT_SCHEMA = 'verify requires private stdin JSON {"v":1,"import_intent":"<import intent>","export_intent":"<export intent>"}';
+type VerificationIntents = Readonly<{ v: 1; import_intent: string; export_intent: string }>;
+const verificationIntents = (text: string | undefined): VerificationIntents => {
+  if (!text || Buffer.byteLength(text) > VERIFY_INPUT_MAX_BYTES) throw new Error(VERIFY_INPUT_SCHEMA);
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error(VERIFY_INPUT_SCHEMA);
+  }
+  if (
+    !isObject(value) ||
+    Object.keys(value).length !== 3 ||
+    value.v !== 1 ||
+    typeof value.import_intent !== "string" ||
+    typeof value.export_intent !== "string"
+  )
+    throw new Error(VERIFY_INPUT_SCHEMA);
+  if (
+    !/^uos-state-transfer-v1\.import\.[a-f0-9]{64}\.[a-f0-9]{64}$/.test(value.import_intent) ||
+    !/^uos-state-transfer-v1\.export\.[a-f0-9]{64}$/.test(value.export_intent)
+  )
+    throw new Error("Verification intents have invalid or swapped scopes");
+  return value as VerificationIntents;
+};
+
+/** Private verification input is bounded before JSON parsing and never read from an environment token. */
+export const readVerificationInput = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.length;
+      if (bytes > VERIFY_INPUT_MAX_BYTES) throw new Error(VERIFY_INPUT_SCHEMA);
+      chunks.push(next.value);
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
+  }
+};
+
+const archiveManifest = (row: unknown, manifest: unknown, captureId: string): boolean => {
+  if (!isObject(row) || typeof row.key !== "string" || !isObject(row.record)) throw new Error("Export archive row is malformed");
+  return row.record.revision === `capture:${captureId}` && canonical(row.record.value) === canonical(manifest);
+};
+const verifyArchive = (archive: Uint8Array, receipt: ObjectValue, manifest: unknown, captureId: string): void => {
+  if (receipt.archive_sha256 !== sha256(archive) || receipt.archive_bytes !== archive.length) throw new Error("Export archive hash or size differs");
+  const text = Buffer.from(archive).toString("utf8");
+  if (!text.endsWith("\n") || !Array.isArray(receipt.pages)) throw new Error("Export archive or page inventory is malformed");
+  const pages = text.slice(0, -1).split("\n");
+  if (pages.length !== receipt.pages.length) throw new Error("Export archive page inventory differs");
+  let records = 0;
+  let manifests = 0;
+  for (const [index, page] of pages.entries()) {
+    const fact: unknown = receipt.pages[index];
+    const rows: unknown = JSON.parse(page);
+    if (!isObject(fact) || fact.sha256 !== sha256(page) || !Array.isArray(rows) || fact.count !== rows.length)
+      throw new Error("Export archive page hash or count differs");
+    records += rows.length;
+    for (const row of rows) manifests += Number(archiveManifest(row, manifest, captureId));
+  }
+  if (records !== receipt.records || manifests !== 1) throw new Error("Export archive count or capture manifest differs");
+};
+
+const verifyCommand = (values: Map<string, string>, privateInput: string | undefined): ObjectValue => {
+  const intents = verificationIntents(privateInput);
   const stage = json(required(values, "frames-receipt"));
   const imported = json(required(values, "import-receipt"));
   const exported = json(required(values, "export-receipt"));
+  if (!verifyReceipt(intents.import_intent, imported) || !verifyReceipt(intents.export_intent, exported)) throw new Error("Receipt signature differs");
+  const origin = exactOrigin(required(values, "origin"));
+  if (imported.origin !== origin || exported.origin !== origin) throw new Error("Receipt origin differs from the expected target");
   const summary = isObject(stage.summary) ? stage.summary : {};
+  if (stage.kind !== "m20_stage_frames" || !Number.isSafeInteger(stage.frames) || !Number.isSafeInteger(summary.records) || Number(summary.records) < 0)
+    throw new Error("Stage frames receipt is invalid");
+  const bytes = privateFile(required(values, "frames"));
+  const parsed = parseFrames(bytes, required(values, "frames-sha256"), Number(stage.frames));
+  const begin = JSON.parse(parsed.frames[0].raw) as { data: { manifest: unknown; records: number } };
+  if (
+    stage.frame_file_bytes !== bytes.length ||
+    summary.capture_id !== parsed.captureId ||
+    summary.records !== begin.data.records ||
+    stage.owner_frame !== (parsed.frames.at(-1)?.stage === "bind_owner")
+  )
+    throw new Error("Stage receipt differs from the actual frames");
+  if (!intents.import_intent.startsWith(`uos-state-transfer-v1.import.${parsed.captureId}.`)) throw new Error("Import intent names another capture");
+  if (
+    imported.v !== 1 ||
+    imported.kind !== "state_transfer_import" ||
+    exported.v !== 1 ||
+    exported.kind !== "state_transfer_export" ||
+    imported.activation_authorized !== false ||
+    exported.activation_authorized !== false
+  )
+    throw new Error("Receipt kinds or activation evidence are invalid");
+  if (
+    imported.capture_id !== parsed.captureId ||
+    imported.frames_sha256 !== sha256(bytes) ||
+    imported.frames !== parsed.frames.length ||
+    imported.expected_records !== summary.records
+  )
+    throw new Error("Import receipt capture, frame hash or inventory differs");
+  const status = isObject(imported.status) ? imported.status : {};
+  if (
+    status.state !== "sealed" ||
+    status.capture_id !== parsed.captureId ||
+    status.received_records !== summary.records ||
+    status.expected_records !== summary.records ||
+    status.activation_authorized !== false
+  )
+    throw new Error("Import receipt does not prove a sealed complete capture");
+  if (!Number.isSafeInteger(exported.stable_passes) || Number(exported.stable_passes) < 2 || Number(exported.stable_passes) > 5)
+    throw new Error("Export receipt requires at least two stable passes");
   // Immediately after import: every staged record, plus the sealed manifest, plus an owner row if bound.
-  const expected = Number(summary.records) + 1 + (stage.owner_frame === true ? 1 : 0);
-  if (imported.capture_id !== summary.capture_id || imported.kind !== "state_transfer_import" || exported.kind !== "state_transfer_export")
-    throw new Error("Receipts name different captures or kinds");
+  const expected = summary.records + 1 + (stage.owner_frame ? 1 : 0);
   if (exported.records !== expected) throw new Error(`Export has ${String(exported.records)} records; the staged import implies ${expected}`);
-  return { v: 1, kind: "state_transfer_verify", capture_id: summary.capture_id, records: expected, archive_sha256: exported.archive_sha256, matched: true };
+  verifyArchive(privateFile(required(values, "archive")), exported, begin.data.manifest, parsed.captureId);
+  return {
+    v: 1,
+    kind: "state_transfer_verify",
+    origin,
+    capture_id: parsed.captureId,
+    records: expected,
+    frames_sha256: sha256(bytes),
+    archive_sha256: exported.archive_sha256,
+    stable_passes: exported.stable_passes,
+    matched: true,
+  };
 };
 
-export const main = async (args: readonly string[], environment: Environment, fetcher: Fetch = fetch): Promise<ObjectValue> => {
+export const main = async (args: readonly string[], environment: Environment, fetcher: Fetch = fetch, privateInput?: string): Promise<ObjectValue> => {
   const [command, ...rest] = args;
   const values = flags(rest);
   if (command === "intent") return intentCommand(values);
   if (command === "import") return await importCommand(values, environment, fetcher);
   if (command === "export") return await exportCommand(values, environment, fetcher);
-  if (command === "verify") return verifyCommand(values);
+  if (command === "verify") return verifyCommand(values, privateInput);
   throw new Error("usage: state-transfer.ts intent|import|export|verify --flag value ...");
 };
 
 if (import.meta.main) {
-  main(Bun.argv.slice(2), process.env).then(
-    (receipt) => {
-      console.log(JSON.stringify(receipt, null, 2));
-    },
-    (error: unknown) => {
-      console.error(error instanceof Error ? error.message : "State transfer failed");
-      process.exitCode = 1;
-    }
-  );
+  const args = Bun.argv.slice(2);
+  const input = args[0] === "verify" && !process.stdin.isTTY ? readVerificationInput(Bun.stdin.stream()) : Promise.resolve(undefined);
+  input
+    .then((privateInput) => main(args, process.env, fetch, privateInput))
+    .then(
+      (receipt) => {
+        console.log(JSON.stringify(receipt, null, 2));
+      },
+      (error: unknown) => {
+        console.error(error instanceof Error ? error.message : "State transfer failed");
+        process.exitCode = 1;
+      }
+    );
 }

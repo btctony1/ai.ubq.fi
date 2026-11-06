@@ -12,6 +12,7 @@ import {
   main,
   mintIntent,
   parseFrames,
+  readVerificationInput,
   resumeIndex,
   sha256,
   signReceipt,
@@ -76,7 +77,7 @@ class FakeWorker {
     if (body.stage === "seal") {
       if (this.sequence !== this.appends) throw new Error("409");
       this.state = "sealed";
-      this.rows.push({ key: "manifest", record: {} });
+      this.rows.push({ key: "manifest", record: { revision: `capture:${CAPTURE}`, value: { capture_id: CAPTURE } } });
       return { outcome: "applied" };
     }
     throw new Error("409");
@@ -202,7 +203,7 @@ test("export pages verify every page hash and count, and receipts are intent-sig
   assert.ok(!verifyReceipt("other", signed));
 });
 
-test("the CLI mints a private intent, imports, exports twice and verifies counts", async () => {
+test("the CLI verifies signed transfer evidence and rejects unbound or tampered receipts", async () => {
   const directory = mkdtempSync(join(tmpdir(), "uos-state-transfer-"));
   try {
     chmodSync(directory, 0o700);
@@ -275,14 +276,116 @@ test("the CLI mints a private intent, imports, exports twice and verifies counts
     );
     assert.equal(exported.records, 4);
     assert.equal(exported.archive_sha256, sha256(readFileSync(join(directory, "archive.ndjson"))));
-    const verified = await main(
-      ["verify", "--frames-receipt", stageReceipt, "--import-receipt", join(directory, "import.json"), "--export-receipt", join(directory, "export.json")],
-      {}
-    );
+    const verifyArgs = [
+      "verify",
+      ...common,
+      "--frames",
+      framesPath,
+      "--frames-sha256",
+      sha256(text),
+      "--archive",
+      join(directory, "archive.ndjson"),
+      "--frames-receipt",
+      stageReceipt,
+      "--import-receipt",
+      join(directory, "import.json"),
+      "--export-receipt",
+      join(directory, "export.json"),
+    ];
+    const privateInput = JSON.stringify({ v: 1, import_intent: token, export_intent: exportToken });
+    const verify = (input = privateInput) => main(verifyArgs, {}, worker.fetch, input);
+    const verified = await verify();
     assert.equal(verified.matched, true);
+    assert.equal(verified.stable_passes, 2);
+    assert.equal(verified.origin, common[1]);
+    const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", "tools/cloudflare/state-transfer.ts", ...verifyArgs], {
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await child.stdin.write(privateInput);
+    await child.stdin.end();
+    const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    assert.equal(code, 0, errors);
+    assert.equal((JSON.parse(output) as { matched: boolean }).matched, true);
+    assert.ok(!output.includes(token) && !output.includes(exportToken));
+    await assert.rejects(main(verifyArgs, environment), /private stdin JSON/);
+    for (const input of ["", "{", " ".repeat(4097), JSON.stringify({ v: 1, import_intent: token, export_intent: exportToken, extra: true })])
+      await assert.rejects(verify(input), /private stdin JSON/);
+    await assert.rejects(verify(JSON.stringify({ v: 1, import_intent: exportToken, export_intent: token })), /swapped scopes/);
+    await assert.rejects(
+      verify(JSON.stringify({ v: 1, import_intent: mintIntent({ kind: "import", captureId: CAPTURE }).token, export_intent: exportToken })),
+      /signature differs/
+    );
+    const resign = (receipt: Record<string, unknown>, intent: string, change: Record<string, unknown>) => {
+      const body = { ...receipt };
+      delete body.hmac_sha256;
+      return signReceipt(intent, { ...body, ...change });
+    };
+    const writeReceipt = (name: string, value: unknown) => {
+      writeFileSync(join(directory, name), JSON.stringify(value), { mode: 0o600 });
+    };
+    for (const [change, message] of [
+      [{ origin: "https://other.example" }, /origin differs/],
+      [{ capture_id: "d".repeat(64) }, /capture, frame hash/],
+      [{ frames_sha256: "d".repeat(64) }, /capture, frame hash/],
+      [{ frames: 4 }, /capture, frame hash/],
+      [{ status: { ...(imported.status as Record<string, unknown>), state: "staging" } }, /sealed complete/],
+    ] as const) {
+      writeReceipt("import.json", resign(imported, token, change));
+      await assert.rejects(verify(), message);
+    }
+    writeReceipt("import.json", { ...imported, frames: 4 });
+    await assert.rejects(verify(), /signature differs/);
+    writeReceipt("import.json", imported);
+    for (const [change, message] of [
+      [{ origin: "https://other.example" }, /origin differs/],
+      [{ archive_sha256: "d".repeat(64) }, /archive hash or size/],
+      [{ stable_passes: 1 }, /at least two stable passes/],
+      [{ records: 5 }, /staged import implies/],
+    ] as const) {
+      writeReceipt("export.json", resign(exported, exportToken, change));
+      await assert.rejects(verify(), message);
+    }
+    writeReceipt("export.json", { ...exported, stable_passes: 1 });
+    await assert.rejects(verify(), /signature differs/);
+    writeReceipt("export.json", exported);
+    writeFileSync(framesPath, `${text} `);
+    await assert.rejects(verify(), /hash differs/);
+    writeFileSync(framesPath, text);
+    const archivePath = join(directory, "archive.ndjson");
+    const archive = readFileSync(archivePath);
+    writeFileSync(archivePath, Buffer.concat([archive, Buffer.from(" ")]));
+    await assert.rejects(verify(), /archive hash or size/);
+    writeFileSync(archivePath, archive);
+    const wrongCapture = archive.toString().replace(CAPTURE, "d".repeat(64));
+    const pageLines = wrongCapture.trimEnd().split("\n");
+    writeFileSync(archivePath, wrongCapture);
+    writeReceipt(
+      "export.json",
+      resign(exported, exportToken, {
+        archive_sha256: sha256(wrongCapture),
+        archive_bytes: Buffer.byteLength(wrongCapture),
+        pages: pageLines.map((page) => ({ sha256: sha256(page), count: (JSON.parse(page) as unknown[]).length })),
+      })
+    );
+    await assert.rejects(verify(), /capture manifest differs/);
     await assert.rejects(main(["import", "--origin", "http://candidate.example"], environment), /exact https origin/);
     await assert.rejects(main(["export", ...common], {}), /must be set/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("private verification stdin is bounded before parsing", async () => {
+  const stream = (text: string) =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Buffer.from(text));
+        controller.close();
+      },
+    });
+  assert.equal(await readVerificationInput(stream("fixture")), "fixture");
+  await assert.rejects(readVerificationInput(stream(" ".repeat(4097))), /private stdin JSON/);
 });

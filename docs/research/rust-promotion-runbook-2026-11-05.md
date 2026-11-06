@@ -463,18 +463,21 @@ Claims required: a DECISIONS entry authorizing production cutover. A green CI an
 
 ### Step I. Rollback
 
-1. **Route flip back** (seconds): restore the script-less exclusion route.
+1. **Freeze Worker writes and restore the origin route.** Use the previously rehearsed write-freeze mechanism to reject new state-changing requests across the production hostname, `workers.dev` and every other ingress, stop native-owner publications, and drain admitted requests and their durable settlement/background writes. Keep the authenticated export route available to the operator. A route change alone does not quiesce the Worker. If that complete freeze cannot be established, stop the rollback here. Keep the VPS service stopped, then restore the saved script-less exclusion route; public requests may be unavailable until the latest-state restore completes.
 
    ```sh
    curl -sS -X PUT -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
      "https://api.cloudflare.com/client/v4/zones/$ZONE/workers/routes/$ROUTE" -d '{"pattern":"ai.ubq.fi/*"}'
+   ```
+
+2. **Recover the latest state before restarting the VPS.** Restarting on the original stopped database would discard every write the Worker accepted after H5, including API-key quota windows, paid-fallback accounting, new keys and passkey counters. While the Worker remains frozen and the VPS remains stopped, export the latest Worker state with two matching full passes, reverse with the current step G custody registrations, and run `kv:restore-native` into a NEW codec-marked Bun file. Validate its raw keys, revisions, exact absolute expiries and typed values, preserve the original stopped database and private receipts, and place only the validated NEW store at `.data/kv-bun.sqlite3` under the held deployment lock (state-migration runbook step 6). Close the transfer intent after recovery. If any export, reverse, validation or placement fails, keep the VPS stopped and retain all evidence; never start the stale original store. Rehearse this complete path before H.
+3. **Start and verify the recovered VPS.** Only after I2 succeeds, start `ai-ubq-fi.service` and check its localhost health. Verify `https://ai.ubq.fi/health` shows the retained VPS release's full SHA and `vps-<sha>` in the body and both identity headers, then send one authenticated Mac-to-VPS request through `curl --resolve ai.ubq.fi:443:$VPS_IP` with the Cloudflare Origin CA root trusted (`ops/README.md` "DNS and TLS"). Retain the frozen Worker and recovery artifacts until acceptance.
+
+   ```sh
    ssh "$VPS" "sudo systemctl start ai-ubq-fi.service && curl --fail -sS http://127.0.0.1:7999/health"
    ```
 
-   Then verify `https://ai.ubq.fi/health` shows `vps-<sha>` in the body and both headers, and send one authenticated Mac-to-VPS request through `curl --resolve ai.ubq.fi:443:$VPS_IP` with the Cloudflare Origin CA root trusted (`ops/README.md` "DNS and TLS").
-
-2. **Data.** Restarting the VPS on its stopped database discards every write the Worker accepted after step H5: API-key quota windows, paid-fallback accounting, new keys and passkey counters. AGENTS.md forbids restoring a stale state as rollback, by analogy with the codec rule "restoring a stale backup loses writes". A loss-free rollback uses the B5 path: quiesce the Worker (I1), export, reverse with the step G custody registrations, `kv:restore-native` into a NEW file, and place it while the service is stopped (state-migration runbook step 6). It must be rehearsed before H.
-3. The Bun/Deno codec rules are unaffected. The VPS keeps `.data/kv-bun.sqlite3` (Bun/JSC marker). Returning the VPS itself to Deno still needs the stopped-state `bun-to-deno` conversion with `.data/bun-rollback-receipt.json` (`ops/README.md` "Bun runtime and offline cutover"). That procedure is independent of this Worker.
+4. The Bun/Deno codec rules are unaffected. The VPS keeps `.data/kv-bun.sqlite3` (Bun/JSC marker). Returning the VPS itself to Deno still needs the stopped-state `bun-to-deno` conversion with `.data/bun-rollback-receipt.json` (`ops/README.md` "Bun runtime and offline cutover"). That procedure is independent of this Worker.
 
 ### 2.2 Pre-step checklist
 

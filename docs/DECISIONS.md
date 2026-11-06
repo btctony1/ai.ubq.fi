@@ -6,6 +6,12 @@ higher authority.
 
 Provider routing decisions are maintained separately in `docs/provider-decision-journal.md`.
 
+## Managed native adoption preserves one stopped-source auth-pool lifetime - 2026-11-06
+
+The source-only managed adoption planner and transaction protocol reconcile one already-existing secondary account with its independently verified newer managed native generation. They preserve the sibling, account order and all state outside the auth-pool key, require a private backup and write-ahead intent before exactly one version-fenced CAS, re-read the resulting state and reconcile an unknown outcome without another mutation. They perform no credential refresh or upstream inference. Existing strict staging custody equality and physical-native versus access-projection generations remain unchanged.
+
+This foundation is not a live operator or a custody grant. A future private immutable launcher must own the fixed account/home/database selection, actual stopped-service and exclusive-holder proof, deployment lock, native artifact binding and genuine passive peer/account proof on the same physical Unix connection. Caller booleans, unbound stdin paths and separate peer-probe connections cannot provide that authority. The pinned Bun runtime's public native-FD handoff must pass its real platform test before a WebSocket adapter can be accepted; a missing capability keeps that adapter unavailable. Live credential writes, service actions and production migration remain separately gated.
+
 ## Direct Claude Messages omits the unsupported hosted web_search - 2026-11-05
 
 The direct Claude subscription and native Messages lane omits every hosted `web_search` declaration from the upstream request instead of rejecting the whole turn. This includes Codex's default `external_web_access:true` declaration, which the TUI restores after a per-thread disable. Function, namespace, MCP and other representable tools remain unchanged. Surplus and other reseller adapters retain their existing rejection of an enabled hosted declaration.

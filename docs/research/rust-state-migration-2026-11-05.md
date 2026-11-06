@@ -82,12 +82,15 @@ bun --no-env-file run state:transfer intent --scope export --out "$TASK/private/
 printf %s '<sha256 from above>' | w secret put UOS_STATE_TRANSFER_INTENT_SHA256 --name "$WORKER"
 UOS_STATE_TRANSFER_ADMIN_TOKEN="$(cat "$TASK/candidate-admin-token")" UOS_STATE_TRANSFER_INTENT="$(cat "$TASK/private/export.intent")" \
   bun --no-env-file run state:transfer export --origin "$ORIGIN" --archive "$TASK/private/after-import.ndjson" --receipt "$TASK/private/after-import.receipt.json"
-bun --no-env-file run state:transfer verify --frames-receipt "$TASK/private/frames.receipt.json" \
+bun --no-env-file --no-install -e 'const [a,b]=Bun.argv.slice(-2); console.log(JSON.stringify({v:1,import_intent:await Bun.file(a).text(),export_intent:await Bun.file(b).text()}))' \
+  "$TASK/private/import.intent" "$TASK/private/export.intent" | \
+  bun --no-env-file --no-install run state:transfer verify --origin "$ORIGIN" --frames "$TASK/private/frames.ndjson" --frames-sha256 "$FRAMES_SHA256" \
+  --archive "$TASK/private/after-import.ndjson" --frames-receipt "$TASK/private/frames.receipt.json" \
   --import-receipt "$TASK/private/import.receipt.json" --export-receipt "$TASK/private/after-import.receipt.json"
 w secret delete UOS_STATE_TRANSFER_INTENT_SHA256 --name "$WORKER"     # close the routes
 ```
 
-`verify` requires exported records = staged records + 1 sealed manifest (+1 when an owner frame was bound) immediately after import. For a stronger check, run step 6 on this archive and compare the reverse capture with the step 2 selected capture.
+`verify` requires bounded private stdin JSON `{v:1,import_intent,export_intent}`, both scoped receipt signatures, the explicitly expected origin, actual frame/archive hashes and page inventory, a sealed complete import, at least two stable export passes and the matching capture manifest. Exported records must equal staged records + 1 sealed manifest (+1 when an owner frame was bound) immediately after import. The old counts-only invocation without private stdin and actual evidence now fails closed; environment credentials cannot substitute for the two intent keys. The pipeline above passes synthetic or real intent values only through private stdin, never command arguments or printed output. For full typed-state equality, also run step 6 on this archive and compare the reverse capture with the step 2 selected capture.
 
 ### 5. Optional local acceptance of the same artifact
 
