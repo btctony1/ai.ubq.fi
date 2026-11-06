@@ -122,16 +122,29 @@ impl Connector for OnceConnector {
     }
 }
 
-pub(crate) struct PrivateHttps {
+pub struct PrivateHttps {
     target: String,
     agent: ureq::Agent,
+    loss: Option<crate::lifecycle::FailureSignal>,
 }
-pub(crate) struct PrivateResponse {
+pub struct PrivateResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
 impl PrivateHttps {
+    /// Only the native owner attaches a process-lifetime signal. Ordinary transports retain their original behavior.
+    pub fn with_failure_signal(mut self, signal: crate::lifecycle::FailureSignal) -> Self {
+        self.loss = Some(signal);
+        self
+    }
+    fn unknown(&self) -> GatewayError {
+        if let Some(loss) = &self.loss {
+            loss.fail();
+        }
+        unknown()
+    }
+
     /// The caller prepares the connected FD before the real OS profile. The
     /// configured TLS roots and hostname are still independently verified.
     pub fn from_connected(
@@ -154,7 +167,7 @@ impl PrivateHttps {
         Self::connected_url(url, socket, roots)
     }
     /// Only the native import ModelsValidation operation may use this fixed GET/query target.
-    pub(crate) fn models_connected(
+    pub fn models_connected(
         socket: TcpStream,
         roots: ureq::tls::RootCerts,
         client_version: &str,
@@ -193,10 +206,11 @@ impl PrivateHttps {
         Ok(Self {
             target: url.into(),
             agent,
+            loss: None,
         })
     }
     /// Fixed models GET only. This does not widen any old POST target or old response limit.
-    pub(crate) fn get_models(
+    pub fn get_models(
         &self,
         headers: &[(String, String)],
         deadline: Instant,
@@ -222,7 +236,7 @@ impl PrivateHttps {
             .timeout_global(Some(remaining))
             .build()
             .call()
-            .map_err(|_| unknown())?;
+            .map_err(|_| self.unknown())?;
         let status = response.status().as_u16();
         let headers = response
             .headers()
@@ -231,7 +245,7 @@ impl PrivateHttps {
                 value
                     .to_str()
                     .map(|value| (name.as_str().to_owned(), value.to_owned()))
-                    .map_err(|_| unknown())
+                    .map_err(|_| self.unknown())
             })
             .collect::<Result<Vec<_>, _>>()?;
         // The original upload validation buffers response.text() without a new numeric raw-body cap.
@@ -241,7 +255,7 @@ impl PrivateHttps {
             .with_config()
             .limit(u64::MAX)
             .read_to_vec()
-            .map_err(|_| unknown())?;
+            .map_err(|_| self.unknown())?;
         Ok(PrivateResponse {
             status,
             headers,
@@ -258,7 +272,7 @@ impl PrivateHttps {
         self.send_bounded(headers, body, deadline, max_response, max_response)
     }
     /// Only this fully decoded new operation obtains the versioned derived success cap.
-    pub(crate) fn send_import_publication(
+    pub fn send_import_publication(
         &self,
         headers: &[(String, String)],
         body: &[u8],
@@ -304,7 +318,7 @@ impl PrivateHttps {
             .timeout_global(Some(remaining))
             .build()
             .send(body)
-            .map_err(|_| unknown())?;
+            .map_err(|_| self.unknown())?;
         let status = response.status().as_u16();
         let headers = response
             .headers()
@@ -313,7 +327,7 @@ impl PrivateHttps {
                 value
                     .to_str()
                     .map(|value| (name.as_str().to_owned(), value.to_owned()))
-                    .map_err(|_| unknown())
+                    .map_err(|_| self.unknown())
             })
             .collect::<Result<Vec<_>, _>>()?;
         let body = response
@@ -325,7 +339,7 @@ impl PrivateHttps {
                 max_error
             } as u64)
             .read_to_vec()
-            .map_err(|_| unknown())?;
+            .map_err(|_| self.unknown())?;
         Ok(PrivateResponse {
             status,
             headers,
@@ -345,6 +359,3 @@ fn unknown() -> GatewayError {
         "native_control_outcome_unknown",
     )
 }
-
-#[cfg(test)]
-mod import_tests;

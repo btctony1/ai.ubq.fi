@@ -6,6 +6,7 @@ use crate::owned_case::{
     Must, TestResult, ThreadResult, observe_kernel_contract, run_owned_case, text,
 };
 use gateway_auth::{crypto::base64url, native_auth::AuthenticatedNativeOwner};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::BTreeSet, path::PathBuf, sync::atomic::AtomicU64};
 
 struct Fixture {

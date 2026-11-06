@@ -57,8 +57,6 @@ pub mod owner_control;
 #[cfg(unix)]
 pub mod owner_renewal;
 #[cfg(unix)]
-mod private_https;
-#[cfg(unix)]
 pub mod publication_http;
 pub mod supervisor;
 #[cfg(unix)]

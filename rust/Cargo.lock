@@ -1125,6 +1125,7 @@ dependencies = [
  "gateway-authority",
  "gateway-core",
  "gateway-native-supervisor-read",
+ "gateway-native-runtime",
  "gateway-publication",
  "gateway-publication-policy",
  "gateway-publication-transport",
@@ -1144,6 +1145,18 @@ dependencies = [
  "ureq",
  "url",
  "webpki-roots",
+]
+
+[[package]]
+name = "gateway-native-runtime"
+version = "0.1.0"
+dependencies = [
+ "gateway-auth",
+ "gateway-core",
+ "rustix",
+ "rustls",
+ "ureq",
+ "url",
 ]
 
 [[package]]

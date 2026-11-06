@@ -11,7 +11,7 @@
     "gateway-core": 4749,
     "gateway-extras-runtime": 2851,
     "gateway-migration": 9710,
-    "gateway-native": 22276,
+    "gateway-native": 21926,
     "gateway-observability": 12237,
     "gateway-providers": 9715,
     "gateway-routing-runtime": 7486,

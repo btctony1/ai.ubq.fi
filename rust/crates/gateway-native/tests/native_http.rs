@@ -363,3 +363,129 @@ fn actual_confined_daemon_serves_authenticated_http_sse_and_persistent_replay_fe
     );
     Ok(())
 }
+
+use gateway_auth::{
+    native::NATIVE_CONTROL_PATH,
+    native_auth::AuthenticatedNativeOwner,
+    native_control::{
+        NativeControlDisposition, NativeControlEnvelope, NativeControlReason, NativeControlRequest,
+        NativeControlResponse,
+    },
+};
+use gateway_core::error::GatewayError;
+use gateway_native::{
+    http_server::NativeHttpService,
+    nonce_sqlite::SqliteNonceStore,
+    owner_control::{NativeControlContext, NativeOwnerRenewalHandler},
+    supervisor_data::SupervisorData,
+};
+use gateway_native_runtime::lifecycle::Recovery;
+use std::{net::TcpListener, sync::Mutex};
+
+#[test]
+fn owner_loss_drains_started_control_once_before_closing_listener() -> TestResult {
+    struct Pending {
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+        calls: Arc<AtomicUsize>,
+    }
+    impl NativeOwnerRenewalHandler for Pending {
+        fn renew(
+            &self,
+            _: &AuthenticatedNativeOwner,
+            request: &NativeControlEnvelope,
+            _: &[u8],
+            _: &NativeControlContext<'_>,
+        ) -> Result<NativeControlResponse, GatewayError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let failed =
+                || GatewayError::unavailable("Fixture channel failed", "fixture_channel_failed");
+            self.entered.send(()).map_err(|_| failed())?;
+            self.release
+                .lock()
+                .map_err(|_| failed())?
+                .recv()
+                .map_err(|_| failed())?;
+            Ok(NativeControlResponse {
+                v: 1,
+                operation_id: request.operation_id.clone(),
+                disposition: NativeControlDisposition::Unknown,
+                publication_revision: None,
+                reason: Some(NativeControlReason::OutcomeUnknown),
+            })
+        }
+    }
+    let fixture = Fixture::new()?;
+    let auth = fixture.0.join("auth.synthetic");
+    fs::write(&auth, "synthetic")?;
+    let upstream_listener = TcpListener::bind("127.0.0.1:0")?;
+    let upstream = TcpStream::connect(upstream_listener.local_addr()?)?;
+    let peer = upstream_listener.accept()?.0;
+    let recovery = Recovery::prepare(&[auth], &[&upstream])?;
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let identity = NativeTransportIdentity::new(
+        "fixture-key".into(),
+        "fixture-owner".into(),
+        "fixture-epoch".into(),
+        [11; 32],
+        BTreeSet::from([NativeCapability::OwnerRenewal]),
+    )
+    .must()?;
+    let (entered, ready) = mpsc::channel();
+    let (release, wait) = mpsc::channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = NativeHttpService::configured(
+        identity,
+        SqliteNonceStore::open(&fixture.0.join("replay/nonces.sqlite3")).must()?,
+        SupervisorData::configured(vec![]).must()?,
+    )
+    .with_owner_renewal(Pending {
+        entered,
+        release: Mutex::new(wait),
+        calls: calls.clone(),
+    });
+    let (finished, result) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let _ = finished.send(service.serve_recoverable(listener, Some(recovery)));
+    });
+    let frame = serde_json::to_value(NativeControlEnvelope {
+        v: 1,
+        operation_id: "fixture-started-operation".into(),
+        request: NativeControlRequest::CodexRenewAccess {
+            action_ref: "fixture-action".into(),
+        },
+    })?;
+    let request = signed_request(NATIVE_CONTROL_PATH, &frame, 91, false)?;
+    let client = thread::spawn(move || -> std::io::Result<Vec<u8>> {
+        let mut stream = TcpStream::connect(address)?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        stream.write_all(&request)?;
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    });
+    ready.recv_timeout(Duration::from_secs(3)).must()?;
+    drop(peer);
+    assert!(matches!(
+        result.recv_timeout(Duration::from_millis(250)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    assert!(TcpStream::connect(address).is_err());
+    release.send(()).must()?;
+    let bytes = client.join().must()?.must()?;
+    assert_eq!(response(&bytes)?.1["disposition"], "unknown");
+    let error = result
+        .recv_timeout(Duration::from_secs(3))
+        .must()?
+        .err()
+        .must()?;
+    assert_eq!(
+        error.envelope.error.code.as_deref(),
+        Some("native_owner_lifetime_lost")
+    );
+    server.join().must()?;
+    assert!(TcpStream::connect(address).is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
