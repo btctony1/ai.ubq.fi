@@ -48,56 +48,16 @@ export type CodexBankedResetConfig = Readonly<{
   maxPerAccountPerWindow: number;
 }>;
 
-const getEnv = (key: string): string | undefined => {
-  try {
-    return process.env[key];
-  } catch {
-    return undefined;
-  }
-};
-
-const parseStrictBoolean = (value: string | undefined, defaultValue: boolean): boolean =>
-  value === undefined ? defaultValue : value.trim().toLowerCase() === "true";
-
-const parseNonNegativeInteger = (value: string | undefined, defaultValue: number): number => {
-  if (value === undefined) return defaultValue;
-  const normalized = value.trim();
-  if (!/^\d+$/.test(normalized)) return 0;
-  const parsed = Number(normalized);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
-};
-
-const parseMode = (value: string | undefined): CodexBankedResetMode => {
-  if (value === undefined) return "shadow";
-  switch (value.trim().toLowerCase()) {
-    case "shadow":
-      return "shadow";
-    case "live":
-      return "live";
-    case "disabled":
-      return "disabled";
-    default:
-      return "disabled";
-  }
-};
-
 /**
- * This is intentionally read at use time rather than module load time. A
- * configuration update can kill new claims immediately without deleting an
- * existing submitted/unknown record that still requires reconciliation.
+ * Preserve the established live policy: one submission per account per UTC
+ * day and quota window. Fresh per-account KV consent gates every submission.
  */
-export const parseCodexBankedResetConfig = (readEnv: (key: string) => string | undefined = getEnv): CodexBankedResetConfig => ({
-  // Shadow telemetry never consumes a credit. A spend still requires
-  // explicit live mode, valid caps, and an approved provider contract.
-  enabled: parseStrictBoolean(readEnv("CODEX_BANKED_RESET_ENABLED"), true),
-  mode: parseMode(readEnv("CODEX_BANKED_RESET_MODE")),
-  // The retired CODEX_BANKED_RESET_MAX_GLOBAL_PER_DAY environment is no longer read.
-  // Fail closed like the retired global cap: an absent cap disables live submissions until an explicit 1 is configured.
-  maxPerAccountPerDay: parseNonNegativeInteger(readEnv("CODEX_BANKED_RESET_MAX_PER_ACCOUNT_PER_DAY"), 0),
-  maxPerAccountPerWindow: parseNonNegativeInteger(readEnv("CODEX_BANKED_RESET_MAX_PER_ACCOUNT_PER_WINDOW"), 1),
+export const loadCodexBankedResetConfig = (): CodexBankedResetConfig => ({
+  enabled: true,
+  mode: "live",
+  maxPerAccountPerDay: 1,
+  maxPerAccountPerWindow: 1,
 });
-
-export const loadCodexBankedResetConfig = (): CodexBankedResetConfig => parseCodexBankedResetConfig();
 
 /**
  * The usage gate that every path writing a durable submission passes through.
@@ -106,8 +66,10 @@ export const loadCodexBankedResetConfig = (): CodexBankedResetConfig => parseCod
  */
 const readUsageGate = async (
   kv: Kv,
-  accountIdHash: string
+  accountIdHash: string,
+  authorization?: CodexBankedResetCandidate["authorization"]
 ): Promise<Readonly<{ kind: "allowed"; entries: readonly KvEntryMaybe<unknown>[] }> | Readonly<{ kind: "failure"; code: string }>> => {
+  if (authorization?.kind === "manual_admin" && authorization.accountIdHash === accountIdHash) return { kind: "allowed", entries: [] };
   let usage: Awaited<ReturnType<typeof readBankedResetUsage>>;
   try {
     usage = await readBankedResetUsage(kv, accountIdHash);
@@ -170,6 +132,8 @@ const defaultTelemetry: CodexBankedResetTelemetry = {
 export type CodexBankedResetCandidate = Readonly<{
   /** Raw account id is passed only to the provider; it is never persisted or logged. */
   accountId: string;
+  /** Server-created authorization for one authenticated manual action; never read from inference input. */
+  authorization?: Readonly<{ kind: "manual_admin"; accountIdHash: string }>;
   /**
    * An opaque routing credential fence. It is hashed before it reaches a
    * durable record, provider context, or telemetry sink.
@@ -209,11 +173,6 @@ export type CodexBankedResetDependencies = Readonly<{
   newOwnerToken?: () => string;
   hash?: (value: string) => Promise<string>;
   telemetry?: CodexBankedResetTelemetry;
-  /**
-   * Hermetic integration-test seam for pre-shadow legacy fixtures. Production
-   * never supplies this and always requires a matching shadow decision.
-   */
-  allowLiveWithoutShadowForTest?: boolean;
 }>;
 
 export type CodexBankedResetOutcome = Readonly<{
@@ -455,15 +414,15 @@ const safeOwnerToken = (source: () => string): string | null => {
   }
 };
 
-const policyReason = (config: CodexBankedResetConfig): string | null => {
+const policyReason = (config: CodexBankedResetConfig, manual = false): string | null => {
   try {
     if (!config.enabled) return "feature_disabled";
     if (config.mode === "disabled") return "mode_disabled";
     // This single-candidate state-machine seam makes no provider call in
     // shadow. The production cohort evaluator requires a positive cap before
     // its bounded inventory reads.
-    if (config.mode === "shadow") return null;
-    if (config.maxPerAccountPerDay <= 0) return "per_account_day_limit_invalid";
+    if (config.mode === "shadow" && !manual) return null;
+    if (config.maxPerAccountPerDay <= 0 || (manual && config.maxPerAccountPerDay !== 1)) return "per_account_day_limit_invalid";
     // The non-negotiable at-most-once rule is stronger than a mutable setting.
     if (config.maxPerAccountPerWindow !== 1) return "per_account_window_limit_invalid";
     return null;
@@ -478,8 +437,8 @@ const policyReason = (config: CodexBankedResetConfig): string | null => {
  * response can never be reconciled; every other live provider still fails
  * closed instead of handing out a second daily submission.
  */
-const providerPolicyReason = (config: CodexBankedResetConfig, provider: CodexUsageResetProvider): string | null => {
-  if (config.mode !== "live" || config.maxPerAccountPerDay === 1) return null;
+const providerPolicyReason = (config: CodexBankedResetConfig, provider: CodexUsageResetProvider, manual = false): string | null => {
+  if ((!manual && config.mode !== "live") || config.maxPerAccountPerDay === 1) return null;
   return providerTreatsRedeemOutcomeAsFinal(provider) ? "terminal_outcome_account_day_limit_must_be_one" : "per_account_day_limit_invalid";
 };
 

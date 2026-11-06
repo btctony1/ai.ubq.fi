@@ -3,7 +3,7 @@
 // OpenRouter exposes both OpenAI-compatible wires, so this route forwards the
 // client's own body with the model swapped and default web tools for OpenAI
 // models, then relays the upstream payload. The catalogue, capabilities, and dispatch
-// all read `openRouterServableModelIds()`, so the offered set and the served
+// all read `openRouterTextModelIds()`, so the offered set and the served
 // set can never disagree, and a new upstream model becomes callable as soon as
 // the cached public list refreshes.
 
@@ -308,7 +308,7 @@ export const handleOpenRouterResponses = async (
   const hasAnswerBearingOutput = responsesPayloadHasAnswerBearingOutput(payload);
   if (hasAnswerBearingOutput) markChatSemanticOutput(usageContext);
   const usage = extractUsageTokens(payload.usage);
-  if (payload.status !== "incomplete" && !hasAnswerBearingOutput)
+  if (payload.status === "completed" && !hasAnswerBearingOutput)
     return respondOpenRouterEmptyBufferedCompletion(usageContext, usage, dispatched.providerRequestId);
   let terminalType: ResponseStreamTerminalType = "response.completed";
   if (payload.status === "incomplete") terminalType = "response.incomplete";

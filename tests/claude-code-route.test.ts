@@ -135,6 +135,49 @@ test("an eligible owner request is served by the subscription with the documente
   });
 });
 
+test("a Codex TUI request omits enabled hosted web search and still serves namespaced tools with late developer context", async () => {
+  await withRouteKv(async () => {
+    captured.length = 0;
+    const routed = await attemptClaudeCodeSubscription(
+      {
+        model,
+        stream: true,
+        store: false,
+        prompt_cache_key: "tui-conversation",
+        reasoning: { summary: "concise" },
+        include: ["reasoning.encrypted_content"],
+        parallel_tool_calls: true,
+        tool_choice: "auto",
+        tools: [
+          {
+            type: "namespace",
+            name: "clock",
+            description: "Tools for reading time.",
+            tools: [{ type: "function", name: "curr_time", strict: false, parameters: { type: "object", properties: {}, additionalProperties: false } }],
+          },
+          { type: "web_search", external_web_access: true, user_location: { type: "approximate", country: "US" } },
+        ],
+        input: [
+          { type: "message", role: "developer", content: [{ type: "input_text", text: "global instructions" }] },
+          { type: "message", role: "user", content: [{ type: "input_text", text: "Reply with TUI_READY" }] },
+          { type: "message", role: "developer", content: [{ type: "input_text", text: "later hook reminder" }] },
+        ],
+      },
+      { model, usageContext, env: envLookup(env), fetcher }
+    );
+    assert(routed, "the subscription route must accept the Codex TUI request");
+    assert.equal(captured.length, 1);
+    const request = captured[0];
+    assert.deepEqual(request.body.tools, [{ name: "clock_curr_time", input_schema: { type: "object", properties: {}, additionalProperties: false } }]);
+    assert.equal(JSON.stringify(request.body).includes("web_search"), false);
+    assert.deepEqual(
+      (request.body.system as { text?: string }[]).map((block) => block.text),
+      ["You are Claude Code, Anthropic's official CLI for Claude.", "global instructions", "later hook reminder"]
+    );
+    assert((await routed.response.text()).includes("response.completed"));
+  });
+});
+
 test("an ineligible request never reaches the subscription transport", async () => {
   await withRouteKv(async () => {
     captured.length = 0;

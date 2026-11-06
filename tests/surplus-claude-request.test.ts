@@ -65,6 +65,58 @@ test("Surplus Claude replay preserves function names, call IDs, arguments, resul
   assert.deepEqual(result.body.tool_choice, { type: "auto", disable_parallel_tool_use: true });
 });
 
+test("Surplus Claude flattens namespace tools and omits disabled hosted web search", () => {
+  const result = buildSurplusClaudeRequest({
+    ...base(),
+    input: [
+      { role: "user", content: "What time is it?" },
+      { type: "function_call", name: "curr_time", namespace: "clock", call_id: "call-1", arguments: "{}" },
+      { type: "function_call_output", call_id: "call-1", output: "2026-11-04T22:00:00Z" },
+    ],
+    tools: [
+      {
+        type: "namespace",
+        name: "clock",
+        description: "Tools for reading time.",
+        tools: [
+          { type: "function", name: "curr_time", description: "Current time", parameters: { type: "object", properties: {}, additionalProperties: false } },
+        ],
+      },
+      { type: "function", name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } },
+      { type: "web_search", external_web_access: false, user_location: { type: "approximate", country: "US" } },
+    ],
+    tool_choice: { type: "function", name: "curr_time", namespace: "clock" },
+    parallel_tool_calls: false,
+  });
+  assert.ok(result);
+  assert.deepEqual(
+    (result.body.tools as { name: string }[]).map((tool) => tool.name),
+    ["clock_curr_time", "read_file"]
+  );
+  assert.deepEqual(result.toolNames.get("clock_curr_time"), { name: "curr_time", namespace: "clock" });
+  assert.deepEqual(result.toolNames.get("read_file"), { name: "read_file", namespace: null });
+  assert.deepEqual(result.body.tool_choice, { type: "tool", name: "clock_curr_time", disable_parallel_tool_use: true });
+  const messages = result.body.messages as { content: Record<string, unknown>[] }[];
+  assert.equal(messages[1].content[0].name, "clock_curr_time");
+});
+
+test("Surplus Claude preserves late developer messages in the native system channel", () => {
+  const result = buildSurplusClaudeRequest({
+    ...base(),
+    input: [
+      { role: "developer", content: "first instruction" },
+      { role: "user", content: "question" },
+      { role: "developer", content: "later reminder" },
+    ],
+  });
+  assert.ok(result);
+  assert.deepEqual(result.body.system, [
+    { type: "text", text: "first instruction" },
+    { type: "text", text: "later reminder" },
+  ]);
+  assert.deepEqual(result.body.messages, [{ role: "user", content: [{ type: "text", text: "question", cache_control: { type: "ephemeral" } }] }]);
+});
+
 test("Surplus Claude images retain base64 media type and remote URL without fetching", () => {
   const result = buildSurplusClaudeRequest({
     ...base(),
@@ -175,6 +227,38 @@ test("Surplus Claude reasoning preserves requested effort and the Codex ultra tr
   }
 });
 
+test("Surplus Claude carries JSON-schema structured output with adaptive reasoning", () => {
+  const schema = {
+    type: "object",
+    properties: { title: { type: "string", minLength: 1, maxLength: 36 } },
+    required: ["title"],
+    additionalProperties: false,
+  };
+  const result = buildSurplusClaudeRequest(
+    {
+      ...base(),
+      reasoning: { effort: "high", summary: "concise" },
+      text: { format: { type: "json_schema", strict: true, schema, name: "codex_output_schema" } },
+    },
+    undefined,
+    { supportsNativeReasoningEffort: true }
+  );
+  assert.ok(result);
+  assert.deepEqual(result.body.output_config, {
+    effort: "high",
+    format: { type: "json_schema", schema },
+  });
+});
+
+test("Surplus Claude accepts the Codex concise reasoning summary preference", () => {
+  const result = buildSurplusClaudeRequest({ ...base(), reasoning: { effort: "high", summary: "concise" } }, undefined, {
+    supportsNativeReasoningEffort: true,
+  });
+  assert.ok(result);
+  assert.deepEqual(result.body.thinking, { type: "adaptive" });
+  assert.deepEqual(result.body.output_config, { effort: "high" });
+});
+
 test("native none requires independent disabled-thinking proof, never an effort or model-name guess", () => {
   const body = { ...base(), reasoning: { effort: "none", summary: "none" } };
   const before = JSON.stringify(body);
@@ -207,13 +291,6 @@ test("Surplus native adapter returns incompatible inputs intact to the existing 
     { ...base(), tools: [{ type: "namespace", name: "functions", tools: [] }] },
     { ...base(), tools: [{ type: "custom", name: "apply_patch" }] },
     { ...base(), tools: [{ type: "function", name: "run", strict: true }] },
-    {
-      ...base(),
-      input: [
-        { role: "user", content: "first" },
-        { role: "developer", content: "later" },
-      ],
-    },
     { ...base(), prompt_cache_retention: "24h" },
     { ...base(), prompt_cache_options: { ttl: "30m" } },
     { ...base(), prompt_cache_options: { mode: "disabled" } },
@@ -226,7 +303,7 @@ test("Surplus native adapter returns incompatible inputs intact to the existing 
       ...base(),
       input: [{ role: "user", content: [{ type: "input_text", text: "stable", cache_control: { type: "ephemeral" }, prompt_cache_breakpoint: {} }] }],
     },
-    { ...base(), text: { format: { type: "json_schema", schema: { type: "object" } } } },
+    { ...base(), text: { format: { type: "json_schema" } } },
     { ...base(), text: { format: "text" } },
     { ...base(), store: true },
     { ...base(), previous_response_id: "resp_other_provider" },
@@ -238,4 +315,12 @@ test("Surplus native adapter returns incompatible inputs intact to the existing 
     assert.equal(buildSurplusClaudeRequest(body), null, before);
     assert.equal(JSON.stringify(body), before);
   }
+});
+
+test("Direct Claude Code omits enabled hosted web search while reseller adapters reject it", () => {
+  const body = { ...base(), tools: [{ type: "web_search", external_web_access: true, user_location: { type: "approximate", country: "US" } }] };
+  const direct = buildSurplusClaudeRequest(body, undefined, { provider: "claude_code", omitHostedWebSearch: true });
+  assert.ok(direct);
+  assert.equal(direct.body.tools, undefined);
+  assert.equal(buildSurplusClaudeRequest(body), null);
 });

@@ -7,13 +7,26 @@ import {
   type DeepSeekResponsesResult,
   type OriginalToolName,
   failure,
+  aggregateContextOverflow,
   originalToolName,
 } from "./responses.ts";
-import { FORWARDED_PAYLOAD_POLICY, type ForwardedPayloadElision, type ForwardedPayloadReduction } from "./forwarded-payload-policy.ts";
+import { deepSeekThinkingModeActive } from "./index.ts";
+import {
+  FORWARDED_PAYLOAD_POLICY,
+  compactionSummaryExemption,
+  estimatePromptAdmission,
+  inspectCompactionSummaryInput,
+  promptAdmissionFailureMessage,
+  promptWindowTokensForProfile,
+  reduceToolArgumentsPayload,
+  type ForwardedPayloadElision,
+  type ForwardedPayloadExemption,
+  type ForwardedPayloadReduction,
+  type PromptAdmission,
+} from "./forwarded-payload-policy.ts";
 import { getString, isRecord } from "../utils.ts";
 
 type ChatContentPart = Record<string, unknown>;
-
 /** One Responses content part mapped onto the Chat content union for one message role. */
 const chatContentPart = (
   part: unknown,
@@ -29,13 +42,11 @@ const chatContentPart = (
     return { ok: true, value: { text: part.text } };
   }
   // The refusal part this adapter emits (`responseMessageContent`) is assistant
-  // output replayed as history; it carries its payload in `refusal`. Chat
-  // Completions has no refusal content part, so the text replays as the
-  // assistant message it is, matching the repository's own Chat-side replay rule
-  // for a refusal part. Without this translation a refusal the gateway just
-  // returned made the next request fail with HTTP 400 `input.content type
-  // 'refusal' is not supported`. Every other role keeps that rejection, because
-  // only assistant output produces a refusal part.
+  // output replayed as history; it carries its payload in `refusal`. Chat has no
+  // refusal content part, so the text replays as the assistant message it is;
+  // without this translation a refusal the gateway just returned made the next
+  // request fail with HTTP 400 `input.content type 'refusal' is not supported`.
+  // Every other role keeps that rejection because only assistant output produces it.
   if (type === "refusal" && role === "assistant") {
     if (typeof part.refusal !== "string") return failure("input.content.refusal", "input.content refusal must be a string");
     return { ok: true, value: { text: part.refusal } };
@@ -70,7 +81,8 @@ const chatContentFromResponseParts = (
   role: string,
   reduction: ForwardedPayloadReduction,
   path: string,
-  elisions: ForwardedPayloadElision[]
+  elisions: ForwardedPayloadElision[],
+  exemptFromLimit = false
 ): DeepSeekResponsesResult<string | ChatContentPart[]> => {
   const contentPath = `${path}.content`;
   if (typeof value === "string") return boundedChatContent(value, contentPath, reduction, elisions);
@@ -84,17 +96,43 @@ const chatContentFromResponseParts = (
     if (part.value.image) images.push(part.value.image);
   }
   // Collapse a text-only message to the plain string form the provider expects.
-  if (!images.length) return boundedChatContent(texts.join(""), contentPath, reduction, elisions);
+  // The one exact summary envelope is admitted whole; aggregate admission still
+  // bounds the complete prompt and no other message reaches this branch.
+  if (!images.length) {
+    const text = texts.join("");
+    return exemptFromLimit ? { ok: true, value: text } : boundedChatContent(text, contentPath, reduction, elisions);
+  }
   if (texts.length) images.unshift({ type: "text", text: texts.join("") });
   return boundedChatContent(images, contentPath, reduction, elisions);
 };
+const boundedToolArguments = (
+  value: string,
+  path: string,
+  callId: string,
+  reduction: ForwardedPayloadReduction,
+  elisions: ForwardedPayloadElision[]
+): DeepSeekResponsesResult<string> => {
+  const bytes = forwardedByteLength(value);
+  if (bytes <= FORWARDED_PAYLOAD_POLICY.perMessageLimit) return { ok: true, value };
+  if (reduction === "reject") return oversizedPayloadFailure(path, bytes, callId);
+  const reduced = reduceToolArgumentsPayload(value, path, callId, FORWARDED_PAYLOAD_POLICY.perMessageLimit);
+  if (reduced === null) return oversizedPayloadFailure(path, bytes, callId);
+  elisions.push(reduced.elision);
+  return { ok: true, value: reduced.content };
+};
 
-const chatToolCallItem = (item: Record<string, unknown>): DeepSeekResponsesResult<Record<string, unknown>> => {
+const chatToolCallItem = (
+  item: Record<string, unknown>,
+  reduction: ForwardedPayloadReduction,
+  path: string,
+  elisions: ForwardedPayloadElision[]
+): DeepSeekResponsesResult<Record<string, unknown>> => {
   const callId = getString(item.call_id) ?? getString(item.id);
   const name = getString(item.name);
   if (!callId || !name) return failure("input", "function_call items require call_id and name");
-  const args = typeof item.arguments === "string" ? item.arguments : "{}";
-  return { ok: true, value: { id: callId, type: "function", function: { name, arguments: args } } };
+  const args = boundedToolArguments(typeof item.arguments === "string" ? item.arguments : "{}", `${path}.arguments`, callId, reduction, elisions);
+  if (!args.ok) return args;
+  return { ok: true, value: { id: callId, type: "function", function: { name, arguments: args.value } } };
 };
 
 const forwardedByteLength = (value: string): number => new TextEncoder().encode(value).byteLength;
@@ -196,12 +234,13 @@ const boundedForwardedText = (
   path: string,
   reduction: ForwardedPayloadReduction,
   elisions: ForwardedPayloadElision[],
-  limit: number = FORWARDED_PAYLOAD_POLICY.perMessageLimit
+  limit: number = FORWARDED_PAYLOAD_POLICY.perMessageLimit,
+  kind: ForwardedPayloadElision["kind"] = "message"
 ): DeepSeekResponsesResult<string> => {
   const bytes = forwardedByteLength(value);
   if (bytes <= limit) return { ok: true, value };
   if (reduction === "reject") return oversizedPayloadFailure(path, bytes, null);
-  const reduced = reduceForwardedPayload(value, path, null, "message", limit);
+  const reduced = reduceForwardedPayload(value, path, null, kind, limit);
   elisions.push(reduced.elision);
   return { ok: true, value: reduced.content };
 };
@@ -298,12 +337,19 @@ const chatToolResultItems = (
  * requires. Without this translation Codex rejected the whole request:
  * "input item type 'custom_tool_call' is not supported".
  */
-const chatCustomToolCallItem = (item: Record<string, unknown>): DeepSeekResponsesResult<Record<string, unknown>> => {
+const chatCustomToolCallItem = (
+  item: Record<string, unknown>,
+  reduction: ForwardedPayloadReduction,
+  path: string,
+  elisions: ForwardedPayloadElision[]
+): DeepSeekResponsesResult<Record<string, unknown>> => {
   const callId = getString(item.call_id) ?? getString(item.id);
   const name = getString(item.name);
   if (!callId || !name) return failure("input", "custom_tool_call items require call_id and name");
   const input = typeof item.input === "string" ? item.input : "";
-  return { ok: true, value: { id: callId, type: "function", function: { name, arguments: JSON.stringify({ input }) } } };
+  const args = boundedToolArguments(JSON.stringify({ input }), `${path}.arguments`, callId, reduction, elisions);
+  if (!args.ok) return args;
+  return { ok: true, value: { id: callId, type: "function", function: { name, arguments: args.value } } };
 };
 
 /**
@@ -345,14 +391,23 @@ const appendMessageItem = (
   pending: { reasoning: string },
   path: string,
   reduction: ForwardedPayloadReduction,
-  elisions: ForwardedPayloadElision[]
+  elisions: ForwardedPayloadElision[],
+  exemptions: ForwardedPayloadExemption[],
+  compactionSummary: boolean
 ): DeepSeekResponsesResult<void> => {
   const role = getString(item.role) ?? "user";
   if (role !== "user" && role !== "assistant" && role !== "developer" && role !== "system") {
     return failure("input.role", `input role '${role}' is not supported`);
   }
-  const content = chatContentFromResponseParts(item.content, role, reduction, path, elisions);
+  // A user turn starts a new reasoning scope; do not carry reasoning without a
+  // message across it to a later assistant or tool turn.
+  if (role === "user") pending.reasoning = "";
+  const content = chatContentFromResponseParts(item.content, role, reduction, path, elisions, compactionSummary);
   if (!content.ok) return content;
+  if (compactionSummary && typeof content.value === "string") {
+    const bytes = forwardedByteLength(content.value);
+    if (bytes > FORWARDED_PAYLOAD_POLICY.perMessageLimit) exemptions.push(compactionSummaryExemption(`${path}.content`, bytes));
+  }
   const message: Record<string, unknown> = { role: role === "developer" ? "system" : role, content: content.value };
   if (role === "assistant" && pending.reasoning) {
     message.reasoning_content = pending.reasoning;
@@ -435,25 +490,33 @@ const appendInputItem = (
   pending: { reasoning: string },
   path: string,
   reduction: ForwardedPayloadReduction,
-  elisions: ForwardedPayloadElision[]
+  elisions: ForwardedPayloadElision[],
+  exemptions: ForwardedPayloadExemption[],
+  compactionSummary: boolean
 ): DeepSeekResponsesResult<void> => {
   if (typeof rawItem === "string") {
     const content = boundedForwardedText(rawItem, path, reduction, elisions);
     if (!content.ok) return content;
     messages.push({ role: "user", content: content.value });
+    pending.reasoning = "";
     return { ok: true, value: undefined };
   }
   if (!isRecord(rawItem) || Array.isArray(rawItem)) return failure("input", "input items must be objects");
   const type = getString(rawItem.type) ?? "message";
   switch (type) {
-    case "reasoning":
-      // Held for the assistant turn that follows it rather than dropped.
-      pending.reasoning += reasoningTextFromItem(rawItem);
+    case "reasoning": {
+      // Held for the assistant turn that follows it rather than dropped. The
+      // replay is payload like any other, so it keeps the generic bound.
+      const reasoning = boundedForwardedText(reasoningTextFromItem(rawItem), path, reduction, elisions, FORWARDED_PAYLOAD_POLICY.perMessageLimit, "reasoning");
+      if (!reasoning.ok) return reasoning;
+      pending.reasoning += reasoning.value;
       return { ok: true, value: undefined };
+    }
     case "function_call":
     case "custom_tool_call": {
       // Freeform calls carry raw text; function calls carry JSON arguments.
-      const call = type === "custom_tool_call" ? chatCustomToolCallItem(rawItem) : chatToolCallItem(rawItem);
+      const call =
+        type === "custom_tool_call" ? chatCustomToolCallItem(rawItem, reduction, path, elisions) : chatToolCallItem(rawItem, reduction, path, elisions);
       if (!call.ok) return call;
       appendToolCall(messages, call.value, pending);
       return { ok: true, value: undefined };
@@ -469,10 +532,11 @@ const appendInputItem = (
       const agentMessage = chatAgentMessageItem(rawItem, reduction, `${path}.content`, elisions);
       if (!agentMessage.ok) return agentMessage;
       messages.push(agentMessage.value);
+      pending.reasoning = "";
       return { ok: true, value: undefined };
     }
     case "message":
-      return appendMessageItem(messages, rawItem, pending, path, reduction, elisions);
+      return appendMessageItem(messages, rawItem, pending, path, reduction, elisions, exemptions, compactionSummary);
     default:
       return failure("input.type", `input item type '${type}' is not supported`);
   }
@@ -482,7 +546,8 @@ export const toDeepSeekChatMessages = (
   input: unknown,
   instructions: string | null,
   reduction: ForwardedPayloadReduction = "reduce",
-  elisions: ForwardedPayloadElision[] = []
+  elisions: ForwardedPayloadElision[] = [],
+  exemptions: ForwardedPayloadExemption[] = []
 ): DeepSeekResponsesResult<Record<string, unknown>[]> => {
   const messages: Record<string, unknown>[] = [];
   if (instructions) {
@@ -490,6 +555,8 @@ export const toDeepSeekChatMessages = (
     if (!content.ok) return content;
     messages.push({ role: "system", content: content.value });
   }
+  const summary = inspectCompactionSummaryInput(input);
+  if (!summary.ok) return failure(summary.path, `input item ${summary.message}`, "context_length_exceeded");
   if (typeof input === "string") {
     if (input) {
       const content = boundedForwardedText(input, "input", reduction, elisions);
@@ -503,7 +570,7 @@ export const toDeepSeekChatMessages = (
 
   const pending = { reasoning: "" };
   for (let index = 0; index < input.length; index += 1) {
-    const appended = appendInputItem(messages, input[index], pending, `input[${index}]`, reduction, elisions);
+    const appended = appendInputItem(messages, input[index], pending, `input[${index}]`, reduction, elisions, exemptions, summary.index === index);
     if (!appended.ok) return appended;
   }
   return { ok: true, value: messages };
@@ -656,6 +723,24 @@ const toChatTools = (
   return { ok: true, value: { tools: collector.tools, toolNames: collector.toolNames, customToolNames: collector.customNames } };
 };
 
+const chatToolName = (name: string, namespace: string | null, toolNames: ReadonlyMap<string, OriginalToolName>): string => {
+  // Preserve the compatibility form's existing reverse lookup when it already
+  // supplies a flattened Chat name. A namespace-aware choice below is the
+  // forward lookup from the original Responses identity to that Chat name.
+  if (namespace === null) {
+    for (const [chatName, original] of toolNames) {
+      if (original.name === name && original.namespace === null) return chatName;
+    }
+    return originalToolName(name, toolNames);
+  }
+  // A namespace-aware choice must be resolved from the original identity so
+  // a colliding namespaced function gets its synthesized Chat name.
+  for (const [chatName, original] of toolNames) {
+    if (original.name === name && original.namespace === namespace) return chatName;
+  }
+  return name;
+};
+
 const toChatToolChoice = (value: unknown, toolNames: ReadonlyMap<string, OriginalToolName>): DeepSeekResponsesResult<unknown> => {
   if (value === undefined || value === null) return { ok: true, value: undefined };
   if (typeof value === "string") {
@@ -663,9 +748,11 @@ const toChatToolChoice = (value: unknown, toolNames: ReadonlyMap<string, Origina
     return failure("tool_choice", `tool_choice '${value}' is not supported`);
   }
   if (!isRecord(value) || Array.isArray(value)) return failure("tool_choice", "tool_choice must be a string or an object");
-  const name = getString(value.name) ?? (isRecord(value.function) ? getString(value.function.name) : null);
+  const nestedFunction = isRecord(value.function) && !Array.isArray(value.function) ? value.function : null;
+  const name = getString(value.name) ?? getString(nestedFunction?.name);
   if (!name) return failure("tool_choice.name", "a named tool_choice requires a name");
-  return { ok: true, value: { type: "function", function: { name: originalToolName(name, toolNames) } } };
+  const namespace = value.namespace === undefined ? getString(nestedFunction?.namespace) : getString(value.namespace);
+  return { ok: true, value: { type: "function", function: { name: chatToolName(name, namespace, toolNames) } } };
 };
 
 /** Responses nests the output format under `text.format`; Chat has one flat field. */
@@ -697,15 +784,41 @@ const applyReasoning = (
   rawRecord: Record<string, unknown>,
   profile: ChatOnlyResponsesProfile
 ): DeepSeekResponsesResult<void> => {
+  // Keep the provider's wire mode aligned with the mode used below to decide
+  // whether sampling controls are effective.
+  const thinkingDisabled = profile.id === "deepseek" && !deepSeekThinkingModeActive(undefined, rawRecord.thinking);
   const raw = rawRecord.reasoning;
-  if (raw === undefined || raw === null) return { ok: true, value: undefined };
+  if (raw === undefined || raw === null) {
+    if (thinkingDisabled) body.reasoning_effort = "none";
+    return { ok: true, value: undefined };
+  }
   if (!isRecord(raw) || Array.isArray(raw)) return failure("reasoning", "reasoning must be an object");
   const effort = getString(raw.effort);
-  if (!effort) return { ok: true, value: undefined };
+  if (!effort) {
+    if (thinkingDisabled) body.reasoning_effort = "none";
+    return { ok: true, value: undefined };
+  }
   const wireEffort = profile.projectReasoningEffort(effort);
   if (wireEffort === null) return failure("reasoning.effort", `reasoning.effort '${effort}' is not supported by ${profile.label}`);
   body.reasoning_effort = wireEffort;
   return { ok: true, value: undefined };
+};
+
+const SAMPLING_CONTROL_KEYS = ["temperature", "top_p"] as const;
+
+const applySamplingControls = (body: Record<string, unknown>, rawRecord: Record<string, unknown>, profile: ChatOnlyResponsesProfile): string[] => {
+  const thinkingActive = profile.id === "deepseek" && deepSeekThinkingModeActive(body.reasoning_effort, rawRecord.thinking);
+  const warnings: string[] = [];
+  for (const key of SAMPLING_CONTROL_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(rawRecord, key)) continue;
+    if (thinkingActive) {
+      warnings.push(`${key}_ignored`);
+      continue;
+    }
+    // Check presence rather than truthiness so valid values such as temperature 0 survive.
+    body[key] = rawRecord[key];
+  }
+  return warnings;
 };
 
 const applyTools = (
@@ -812,13 +925,17 @@ export const toDeepSeekResponsesChatBody = (
   rawRecord: Record<string, unknown>,
   requestedModel: string,
   clientWantsStream: boolean,
-  profile: ChatOnlyResponsesProfile = DEEPSEEK_RESPONSES_PROFILE
+  profile: ChatOnlyResponsesProfile = DEEPSEEK_RESPONSES_PROFILE,
+  promptAdmissionProjection?: (body: Record<string, unknown>) => Record<string, unknown>
 ): DeepSeekResponsesResult<
   Readonly<{
     body: Record<string, unknown>;
     toolNames: ReadonlyMap<string, OriginalToolName>;
     customToolNames: ReadonlySet<string>;
     elisions: readonly ForwardedPayloadElision[];
+    exemptions: readonly ForwardedPayloadExemption[];
+    promptAdmission: PromptAdmission;
+    warnings: string[];
   }>
 > => {
   const canonical = profile.upstreamModelFor(requestedModel);
@@ -827,13 +944,13 @@ export const toDeepSeekResponsesChatBody = (
   if (!reduction.ok) return reduction;
   const instructions = typeof rawRecord.instructions === "string" && rawRecord.instructions.trim() ? rawRecord.instructions : null;
   const elisions: ForwardedPayloadElision[] = [];
-  const messages = toDeepSeekChatMessages(rawRecord.input, instructions, reduction.value, elisions);
+  const exemptions: ForwardedPayloadExemption[] = [];
+  const messages = toDeepSeekChatMessages(rawRecord.input, instructions, reduction.value, elisions, exemptions);
   if (!messages.ok) return messages;
   if (!messages.value.length) return failure("input", "input must contain at least one message");
 
-  // Cerebras documents this optional routing hint on its Chat wire. Keep the
-  // caller's value through Responses translation; the other profiles keep
-  // their existing automatic-cache wire without an unverified field mapping.
+  // Cerebras's optional cache hint is preserved; other profiles keep their
+  // existing automatic-cache wire without an unverified field mapping.
   const body: Record<string, unknown> = {
     model: canonical,
     messages: messages.value,
@@ -847,12 +964,21 @@ export const toDeepSeekResponsesChatBody = (
   if (!outputLimit.ok) return outputLimit;
   const reasoning = applyReasoning(body, rawRecord, profile);
   if (!reasoning.ok) return reasoning;
+  const warnings = applySamplingControls(body, rawRecord, profile);
   const toolNames = applyTools(body, rawRecord, profile);
   if (!toolNames.ok) return toolNames;
   // Only a tool-bearing request makes the provider require replayed reasoning.
   const continuationFailure = prepareExecutableToolMessages(body, rawRecord, messages.value, reduction.value, elisions);
   if (continuationFailure) return continuationFailure;
-  return { ok: true, value: { body, toolNames: toolNames.value.toolNames, customToolNames: toolNames.value.customToolNames, elisions } };
+  const window = promptWindowTokensForProfile(profile.id);
+  if (window === null)
+    return failure("model", `${profile.label} has no verified prompt window; aggregate admission refused the request.`, "context_length_exceeded");
+  const promptAdmission = estimatePromptAdmission(body, window, promptAdmissionProjection);
+  if (!promptAdmission.admitted) return aggregateContextOverflow(promptAdmissionFailureMessage(promptAdmission, profile.label));
+  return {
+    ok: true,
+    value: { body, toolNames: toolNames.value.toolNames, customToolNames: toolNames.value.customToolNames, elisions, exemptions, promptAdmission, warnings },
+  };
 };
 
 /**

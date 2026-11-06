@@ -6,8 +6,9 @@ import type { Kv } from "#kv";
  * travels as `x-api-key`, the legacy `CLAUDE_CODE_OAUTH_TOKEN` keeps the
  * documented Bearer plus OAuth beta wire, and an organization-scoped key that
  * demands `anthropic-workspace-id` discovers a workspace once instead of
- * failing every request. The provider's rate-limit headers stay the only
- * authoritative quota evidence and no client fingerprint is ever synthesized.
+ * failing every request. The provider's OAuth usage endpoint and unified
+ * rate-limit headers are authoritative quota evidence; inference requests
+ * never synthesize a client fingerprint.
  */
 import { STREAM_FIRST_EVENT_DEADLINE_MS } from "../inference-deadline.ts";
 import { type ApiKeyProviderDispatch, ApiKeyQuotaDispatchError } from "../api-key-policy.ts";
@@ -387,6 +388,9 @@ export const buildClaudeCodeRequest = (
     supportsNativeReasoningEffort: (options.nativeReasoningEfforts?.length ?? 0) > 0,
     nativeReasoningEfforts: options.nativeReasoningEfforts,
     supportsNativeDisabledThinking: options.supportsNativeDisabledThinking,
+    // Codex advertises hosted web_search by default; the direct Messages lane
+    // has no equivalent server tool and must not reject the whole turn.
+    omitHostedWebSearch: true,
   });
   if (!built) return null;
   // `prompt_cache_key` is a reseller-router affinity hint with no place in the
@@ -641,6 +645,7 @@ export const fetchClaudeCodeResponses = async (body: unknown, options: ClaudeCod
     reasoningSummary: responseReasoningSummary(body),
     reasoningReplayScope: options.reasoningReplayScope,
     provider: "claude_code",
+    toolNames: native.toolNames,
   });
   return {
     ...(accountBinding ? { account_binding: accountBinding } : {}),

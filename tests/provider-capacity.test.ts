@@ -34,6 +34,8 @@ import {
   recordProviderCapacityDowntimeEvent,
 } from "../src/provider/capacity-events.ts";
 import { METERED_QUOTA_FRESH_MS, METERED_QUOTA_STATE_KEY } from "../src/metered-quota.ts";
+import { CLAUDE_CODE_ACCOUNTS_KEY } from "../src/provider/claude-code-accounts.ts";
+import { CLAUDE_CODE_AUTH_KV_KEY, CLAUDE_CODE_WORKSPACE_KV_KEY } from "../src/provider/claude-code-credentials.ts";
 import { CountingKv } from "./helpers/counting-kv.ts";
 import { createFetcher, keyToString, kvStore, kvStub, nowMs, requestUrl, seed } from "./helpers/provider-capacity-harness.ts";
 
@@ -757,8 +759,13 @@ test("stale default read delivers the changed upstream Codex quota value", async
   seed();
   let primaryUsed = 80;
   const usage = () => [primaryUsed, 20] as const;
-  await refreshProviderCapacity({ kv: kvStub, fetcher: createFetcher([], null, {}, usage), now: () => nowMs - 40_000 });
-  const before = await getPersistedProviderCapacityView({ kv: kvStub, now: () => nowMs - 39_000 });
+  const staleSnapshotAtMs = nowMs - PROVIDER_CAPACITY_READ_FRESH_MS - 10_000;
+  await refreshProviderCapacity({
+    kv: kvStub,
+    fetcher: createFetcher([], null, {}, usage),
+    now: () => staleSnapshotAtMs,
+  });
+  const before = await getPersistedProviderCapacityView({ kv: kvStub, now: () => staleSnapshotAtMs + 1_000 });
   assert.equal(codexSourceAt(before.sources, 1)?.windows.primary?.used_percent, 80);
   assert.equal(before.cache_state, "persisted");
 
@@ -1071,8 +1078,12 @@ test("event sampler persists capacity without building the discarded admin proje
       0,
       "the event sampler must not enumerate history or reset-event projection prefixes"
     );
-    // The quota refresh inside a sample also appends at most one hourly
-    // balance-history read plus one upsert; the rollup read is the 23rd command.
+    const discoveryKeys = [CLAUDE_CODE_ACCOUNTS_KEY, CLAUDE_CODE_AUTH_KV_KEY, CLAUDE_CODE_WORKSPACE_KV_KEY].map(keyToString);
+    const discoveryReads = samplerKv.commands.filter(
+      (command) => command.scenario === "background:capacity_sampler" && command.keys.some((key) => discoveryKeys.includes(keyToString(key)))
+    );
+    assert.deepEqual(discoveryReads, [], "passive header sampling never reads Claude account, credential or workspace state");
+    // With no Claude usage collection, the original sampler bound covers every command.
     assert.ok(samplerBudget.commands <= 23, `event sampler budget unexpectedly grew to ${samplerBudget.commands} KV commands`);
     assert.notEqual((await samplerKv.get(PROVIDER_CAPACITY_SNAPSHOT_KEY)).value, null);
     assert.notEqual((await samplerKv.get(providerCapacityHistoryKey(nowMs))).value, null);

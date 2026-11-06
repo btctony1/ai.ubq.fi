@@ -1,3 +1,4 @@
+import { handleAdminCodexResetConsume } from "../admin/codex-reset.ts";
 import {
   handleAdminApiKeyChanges,
   handleAdminApiKeysCreate,
@@ -13,6 +14,7 @@ import {
   handleAdminClaudeCodeAuthGet,
   handleAdminClaudeCodeAuthSet,
   handleAdminClaudeCodeQuotaClear,
+  handleAdminClaudeCodeQuotaRefresh,
   handleAdminCodexAuth,
   handleAdminCodexBankedResetShadowDecisions,
   handleAdminCodexCacheScopeExperiment,
@@ -73,6 +75,7 @@ import {
 } from "../auth/passkeys.ts";
 
 import { handleRoot, handleStaticAsset } from "../static.ts";
+import { handlePassportRoute } from "../auth/passport.ts";
 
 import { handleProviderCapacity, handleProviderCapacityRollups } from "../provider/capacity.ts";
 import {} from "../sentinel/replay-capture.ts";
@@ -158,6 +161,7 @@ const ADMIN_ROUTES: readonly AdminRouteEntry[] = [
   { methods: ["GET", "POST"], path: "/admin/defaults", run: (req) => handleAdminDefaults(req) },
   { methods: ["GET", "POST", "DELETE"], path: "/admin/debug/routing", run: (req) => handleAdminDebugRouting(req) },
   { methods: ["GET"], path: "/admin/providers", run: () => handleHealthProviders({ includeQuota: true }) },
+  { methods: ["POST"], path: "/admin/providers/codex/banked-resets/consume", run: (req) => handleAdminCodexResetConsume(req) },
   { methods: ["GET"], path: "/admin/providers/selection", run: () => handleAdminProviderSelectionGet() },
   { methods: ["POST"], path: "/admin/providers/selection", run: (req) => handleAdminProviderSelectionSet(req) },
   { methods: ["GET"], path: "/admin/providers/capacity", run: (req) => proxyAdminChartSource(req, handleProviderCapacity(req)) },
@@ -169,6 +173,7 @@ const ADMIN_ROUTES: readonly AdminRouteEntry[] = [
   { methods: ["POST"], path: "/admin/providers/claude-code/auth", run: (req) => handleAdminClaudeCodeAuthSet(req) },
   { methods: ["DELETE"], path: "/admin/providers/claude-code/auth", run: (req) => handleAdminClaudeCodeAuthDelete(req) },
   { methods: ["POST"], path: "/admin/providers/claude-code/quota/clear", run: (req) => handleAdminClaudeCodeQuotaClear(req) },
+  { methods: ["POST"], path: "/admin/providers/claude-code/quota/refresh", run: (req) => handleAdminClaudeCodeQuotaRefresh(req) },
   { methods: ["GET"], path: "/admin/providers/quota-projection", run: (req) => handleAdminProvidersQuotaProjection(req) },
   { methods: ["POST"], path: "/admin/providers/quota-projection/backfill", run: (req) => handleAdminProvidersQuotaProjectionBackfill(req) },
   { methods: ["GET"], path: "/admin/prompt-cache-analytics", run: (req) => handleAdminPromptCacheAnalytics(req) },
@@ -225,6 +230,8 @@ const handleHealthRoute = async (req: Request, path: string): Promise<Response |
 
 /** Serves the passkey and session routes; null when no auth route matches. */
 const handleAuthRoute = async (req: Request, path: string): Promise<Response | null> => {
+  const passport = await handlePassportRoute(req, path);
+  if (passport) return passport;
   if (req.method === "POST" && path === "/api/auth/register/start") {
     const auth = await authenticateAdmin(req);
     if (!auth.ok) return auth.response;
@@ -279,17 +286,27 @@ const handleAdminRoute = async (req: Request, path: string, requestId: string): 
   return await handleApiKeyPaidFallbacksRoute(req, path);
 };
 
+/** The actual UOS catalog/message dispatch table, also consumed by the published-contract parity test. */
+export const UOS_ROUTES: readonly ExactRouteEntry[] = [
+  { methods: ["GET"], path: "/uos/auth", run: handleV1Auth },
+  { methods: ["GET"], path: "/uos/models/catalog", run: () => handlePublicModelCatalog() },
+  {
+    methods: ["GET"],
+    path: "/uos/models/capabilities",
+    run: async (req) => {
+      const authResult = await authenticateClient(req);
+      if (!authResult.ok) return authResult.response;
+      return await handleModelCapabilities();
+    },
+  },
+  { methods: ["GET"], path: "/uos/agent-messages", run: handleAgentMessagesList },
+  { methods: ["POST"], path: "/uos/agent-messages", run: handleAgentMessagesPost },
+];
+
 /** Serves the UOS catalog and agent-message routes; null when none matches. */
 const handleUosRoute = async (req: Request, path: string): Promise<Response | null> => {
-  if (req.method === "GET" && path === "/uos/auth") return await handleV1Auth(req);
-  if (req.method === "GET" && path === "/uos/models/catalog") return await handlePublicModelCatalog();
-  if (req.method === "GET" && path === "/uos/models/capabilities") {
-    const authResult = await authenticateClient(req);
-    if (!authResult.ok) return authResult.response;
-    return await handleModelCapabilities();
-  }
-  if (path === "/uos/agent-messages" && req.method === "GET") return await handleAgentMessagesList(req);
-  if (path === "/uos/agent-messages" && req.method === "POST") return await handleAgentMessagesPost(req);
+  const route = matchExactRoute(UOS_ROUTES, req, path);
+  if (route) return await route.run(req);
   if (path === "/uos/agent-messages") return openaiError(405, "Method not allowed", "method_not_allowed");
   return null;
 };

@@ -62,6 +62,8 @@ export const resolveIdempotencyPrincipal = async (authResult: PrincipalAuthResul
       return `github-repo:${authResult.method.owner.toLowerCase()}/${authResult.method.repo.toLowerCase()}`;
     case "passkey_session":
       return `passkey-user:${authResult.method.user_id}`;
+    case "passport_session":
+      return authResult.method.principal;
     case "auth_tokens_allowlist":
     case "admin_allowlist":
     case "deno_deploy_token":
@@ -158,6 +160,7 @@ const POST_TERMINAL_ROUTES: Readonly<Record<string, string>> = Object.freeze({
   "/uos/embedding-jobs": "embeddings.jobs.create",
   "/v1/chat/completions": "chat.completions",
   "/v1/responses": "responses",
+  "/v1/decisions": "decisions",
   "/v1/systemone": "systemone",
   "/v1/images/generations": "images.generations",
   "/v1/images/edits": "images.edits",

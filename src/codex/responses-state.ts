@@ -54,7 +54,8 @@ export type EvaluatedBlockedReset = Readonly<{
   /** The active-selection row observed before this reset transaction began. */
   originalActive: CodexActiveAccountSnapshot;
 }>;
-export type PreexistingBankedReset = Readonly<{ kind: "evaluated"; evaluated: EvaluatedBlockedReset } | { kind: "none" } | { kind: "blocked" }>;
+export type PreexistingBankedReset =
+  Readonly<{ kind: "evaluated"; evaluated: EvaluatedBlockedReset }> | Readonly<{ kind: "none" }> | Readonly<{ kind: "blocked"; reason: string }>;
 
 type BankedResetFence = { key: KvKey; isCurrent: (value: unknown) => boolean };
 type BankedResetInput = {
@@ -222,10 +223,6 @@ export const createCodexResponseState = async (
     newOwnerToken: configuredBankedReset?.newOwnerToken,
     hash: configuredBankedReset?.hash,
     telemetry: configuredBankedReset?.telemetry,
-    // A supplied provider exists only as the hermetic `fetchCodexResponses`
-    // test seam. Real traffic creates its account-bound adapter below and
-    // therefore always enforces a durable decision before live submission.
-    allowLiveWithoutShadowForTest: configuredBankedReset?.provider !== undefined,
   };
   const lastResponse: Response | null = null;
   const lastError: unknown = null;

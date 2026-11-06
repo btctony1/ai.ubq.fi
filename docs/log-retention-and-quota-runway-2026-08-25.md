@@ -93,8 +93,11 @@ request mix; the captures above are the authoritative record.
   per hour, token and spend sums, plus `quota_source` (only `metered` is monitored) and `usage_source` (`paid_fallback`
   for settlement rows that carry quota/spend and runway estimates, `observability` for terminal accounting on routes
   that never settle, Codex subscription capacity first).
-- `estimates[]` — for the requested window: requests remaining, run-time remaining, estimated exhaustion timestamp,
-  percent-of-balance / percent-of-baseline knocked per request, and `stale_balance` when the quota snapshot is stale.
+- `estimates[]` — for the requested window: requests remaining, run-time remaining, and the no-refill
+  `exhausted_at_ms` contrast, percent-of-balance / percent-of-baseline knocked per request, and `stale_balance` when
+  the quota snapshot is stale. Retained balance samples and refill observations additionally provide
+  `refill_aware_status` (`sustainable`, `exhausts_without_refill`, `exhausts_with_refill`, or `unknown`), the known
+  refill amount/cadence, and `refill_aware_exhausted_at_ms` when a scheduled refill-aware exhaustion point exists.
   Surplus rows always get an empty estimates array: `METERED_API_KEY` monitors only the OpenLux account, so projecting
   Surplus history against it would be wrong. `observability` rows never carry estimates either: they report consumption
   for a capacity the OpenLux balance does not measure.
@@ -122,11 +125,11 @@ Rollup keys are sharded by request id (16 shards) so concurrent settlements of t
 one KV key inside the settlement atomic; readers sum all shards. Windows and rates are hour-bucket precise: the selected
 window includes the bucket that contains its start, and the rate divides by the full window, idle hours included.
 
-The math is deliberately conservative: run-time is `remaining balance / quota
-per hour` (from the same window), requests
-remaining is `balance / average
-quota per request`, and the UI states that refill is not assumed. Unlimited quota yields
-no exhaustion estimate rather than a fake one.
+The no-refill contrast remains deliberately conservative: run-time is `remaining balance / quota
+per hour` (from the same window), and requests remaining is `balance / average
+quota per request`. The refill-aware branch uses repeated positive balance changes to estimate a cadence, combines that
+with the latest refill amount and cycle timestamps, and reports sustainable capacity when the refill rate covers the
+selected burn rate. Unlimited quota yields no exhaustion estimate rather than a fake one.
 
 The "Quota runway" card was removed from the admin Analytics view on 2026-10-03 (docs/DECISIONS.md), so no client now
 polls the quota-projection endpoint. The current operator surface for the measured ledger growth is the Provider
@@ -177,8 +180,9 @@ accumulates.
   them here before re-tuning the raw-row horizon.
 - Oldest-first hard cap: not implemented. PR #1156 reported an owner decline on 2026-10-16, citing issue #139, but
   neither #139 nor `docs/DECISIONS.md` records that decision at `0d726874`. Owner confirmation and a durable decision
-  record remain [pending](handoff/owner-only-follow-ups-1176.md#retention-hard-cap-1073-item-2-139); #139's completed
-  close reason is not evidence of eviction. The reported rationale was that the KV lives on the VPS with ample disk,
+  record remain [pending](handoff/owner-only-follow-ups-1176.md#retention-hard-cap-1073-item-2-139), as tracked in the
+  [decision log](DECISIONS.md#owner-only-follow-ups-from-1132-remain-pending---2026-10-18-1176); #139's completed close
+  reason is not evidence of eviction. The reported rationale was that the KV lives on the VPS with ample disk,
   so the per-GiB billing that motivated a hard cap no longer applies. The 365-day TTL bounds the raw rows, and the
   5 GiB `budget_bytes` figure only sets the growth alert; nothing is evicted when it is reached. If a byte budget ever
   becomes necessary, it would need timestamp-ordered keys or a global age index — note the legacy analytics key shape

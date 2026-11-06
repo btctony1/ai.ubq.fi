@@ -1,4 +1,5 @@
 import "./network.js";
+import { appendManualResetControl } from "./admin-reset.js";
 import {
   buildBackendUrl,
   formatAuthSessionLabel,
@@ -24,7 +25,6 @@ import { bindForegroundRefresh } from "./foreground-refresh.js";
 import { setReasoningPlaceholder, updateReasoningSelectForModel } from "./reasoning-select.js";
 import { toast } from "./toast.js?v=passport-design-20260922";
 import { createSupervisorView } from "./admin-supervisor.js?v=20261001-supervisor-v4";
-
 const STORAGE_KEYS = {
   rememberToken: AUTH_STORAGE_KEYS.rememberToken,
   token: AUTH_STORAGE_KEYS.token,
@@ -124,13 +124,18 @@ const fetch = async (input, init = {}) => {
 
 const debounce = (fn, wait = 450) => {
   let timer = null;
-  return (...args) => {
+  const debounced = (...args) => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
       fn(...args);
     }, wait);
   };
+  debounced.cancel = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  };
+  return debounced;
 };
 
 const mustGet = (id) => {
@@ -144,6 +149,8 @@ const rememberTokenInput = mustGet("remember-admin-token");
 const showTokenInput = mustGet("show-admin-token");
 const authBadge = mustGet("admin-auth-badge");
 const passkeyHandleInput = mustGet("admin-passkey-handle");
+const passportLoginBtn = mustGet("admin-passport-login");
+const passportWidgetLoginBtn = mustGet("admin-passport-login-widget");
 const passkeyLoginBtn = mustGet("admin-passkey-login");
 const passkeyRegisterBtn = mustGet("admin-passkey-register");
 const signOutBtn = mustGet("admin-sign-out");
@@ -159,7 +166,6 @@ const loadingTitle = mustGet("admin-loading-title");
 const loadingSummary = mustGet("admin-loading-summary");
 const loadingGrid = mustGet("admin-loading-grid");
 const authGate = mustGet("admin-auth-gate");
-const authGateOpen = mustGet("admin-auth-gate-open");
 const loadingAuthStatus = mustGet("loading-auth-status");
 const loadingKeysStatus = mustGet("loading-keys-status");
 const loadingUsersStatus = mustGet("loading-users-status");
@@ -286,6 +292,8 @@ let currentKeyView = "active";
 let currentAdminView = "loading";
 let pendingAdminView = null;
 let adminAccessState = { checked: false, isAdmin: false, isSuperAdmin: false };
+let passportSessionActive = false;
+let adminAuthRetryTimer = 0;
 let relaySessionActive = false;
 let localDevelopmentAutoAuth = false;
 let adminPrefetchRunId = 0;
@@ -293,6 +301,8 @@ let adminPrefetchSignature = "";
 let adminPrefetchPromise = null;
 let authWidgetAutoOpened = false;
 let allKeys = [];
+let keyExpiryTimer = 0;
+let refreshKeyRows = () => {};
 let keysLoading = false;
 let keysLoadedAt = 0;
 let providersLoading = false;
@@ -368,11 +378,13 @@ const meteredQuotaCycleStarted = mustGet("metered-quota-cycle-started");
 let defaultsLoaded = false;
 let defaultsSaving = false;
 let defaultsSaveQueued = false;
+let defaultsSaveQueuedTarget = "";
 let defaultsModelMap = new Map();
 let defaultsTouched = false;
 let defaultsEditRevision = 0;
 let defaultsLoadId = 0;
 let defaultsLoadedAt = 0;
+let cancelDefaultsSaveSchedule = () => {};
 
 const kernelListBadge = mustGet("kernel-list-badge");
 const kernelAttention = mustGet("kernel-attention");
@@ -466,7 +478,8 @@ const updateLoadingAuthStatus = () => {
 
 const syncLoadingGate = () => {
   const preparing = adminAccessState.isAdmin || (!adminAccessState.checked && hasAdminCredential());
-  authGate.hidden = preparing;
+  const authWidgetExpanded = document.body.dataset.authWidget === "expanded";
+  authGate.hidden = preparing || authWidgetExpanded;
   loadingGrid.hidden = !preparing;
   loadingTitle.textContent = preparing ? "Preparing admin console" : "Sign in to manage the gateway";
 };
@@ -490,6 +503,7 @@ const setAuthWidgetOpen = (open, options = {}) => {
   authWidgetToggle.setAttribute("aria-label", expanded ? "Collapse authentication" : "Open authentication");
   authWidgetToggle.dataset.tooltip = expanded ? "Collapse authentication" : "Open authentication";
   authWidgetToggleLabel.textContent = expanded ? "Close" : "Session";
+  syncLoadingGate();
   if (expanded && options.focus) {
     globalThis.requestAnimationFrame(() => authWidgetPanel.focus({ preventScroll: true }));
   }
@@ -498,12 +512,14 @@ const setAuthWidgetOpen = (open, options = {}) => {
 const setSignedInState = (signedIn, options = {}) => {
   const deviceRegistered = options.deviceRegistered ?? hasStoredPasskeyCredentials();
   const canRegisterPasskey = options.canRegisterPasskey ?? false;
+  passportLoginBtn.hidden = signedIn;
+  passportWidgetLoginBtn.hidden = signedIn;
   passkeyLoginBtn.hidden = signedIn;
   passkeyRegisterBtn.hidden =
     isAuthRelayMode || isRemoteRelayOrigin() || deviceRegistered || (signedIn && !canRegisterPasskey);
   signOutBtn.hidden = !signedIn;
-  if (signedIn) setPasskeyStatus("ok", options.statusText ?? "Token active");
-  else setPasskeyStatus("unknown", "Passkey idle");
+  if (signedIn) setPasskeyStatus("ok", options.statusText ?? "Signed in");
+  else setPasskeyStatus("unknown", "Signed out");
 };
 const setCreateBadge = (state, text) => setBadge(createBadge, state, text);
 const setKeysBadge = (state, text) => setBadge(keysBadge, state, text);
@@ -572,7 +588,9 @@ const setAdminSnapshotScopeFromAuth = (auth) => {
   const tokenFingerprint = typeof auth?.token?.sha256_12 === "string" ? auth.token.sha256_12 : "";
   const passkeyUserId = typeof auth?.method?.user?.id === "string" ? auth.method.user.id : "";
   const localDevelopmentPrincipal = method === "disabled" && canUseLocalDevelopmentAuth() ? "local-development" : "";
-  const principal = tokenFingerprint || (passkeyUserId ? `${method}:${passkeyUserId}` : localDevelopmentPrincipal);
+  const passportPrincipal = typeof auth?.principal === "string" ? auth.principal : "";
+  const principal =
+    tokenFingerprint || passportPrincipal || (passkeyUserId ? `${method}:${passkeyUserId}` : localDevelopmentPrincipal);
   if (!method || !principal) {
     clearAdminSnapshotScope();
     return false;
@@ -922,6 +940,26 @@ const getApiKeyStatus = (key) => {
   return isExpiredAt(key?.expires_at_ms) ? "expired" : "active";
 };
 
+const scheduleKeyExpiryRefresh = () => {
+  if (keyExpiryTimer) globalThis.clearTimeout(keyExpiryTimer);
+  keyExpiryTimer = 0;
+  const now = Date.now();
+  const nextExpiry = allKeys.reduce((next, key) => {
+    const expiresAtMs = key?.expires_at_ms;
+    return typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs) && expiresAtMs > now
+      ? Math.min(next, expiresAtMs)
+      : next;
+  }, Number.POSITIVE_INFINITY);
+  if (!Number.isFinite(nextExpiry)) return;
+  keyExpiryTimer = globalThis.setTimeout(
+    () => {
+      keyExpiryTimer = 0;
+      refreshKeyRows();
+    },
+    Math.min(2_147_483_647, Math.max(0, nextExpiry - now + 1))
+  );
+};
+
 const numberFormatter = new Intl.NumberFormat();
 const compactNumberFormatter = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
 const creditFormatter = new Intl.NumberFormat(undefined, {
@@ -1018,7 +1056,7 @@ const capacityProgressTone = (remainingPercent) => {
   return "healthy";
 };
 
-const renderCapacityWindow = (container, label, window) => {
+const renderCapacityWindow = (container, label, window, observedAtMs) => {
   const card = document.createElement("section");
   card.dataset.capacityWindow = "";
   const title = document.createElement("h4");
@@ -1059,6 +1097,7 @@ const renderCapacityWindow = (container, label, window) => {
       : "Not reported"
   );
   appendProviderFact(facts, "Reset", formatCapacityTimestamp(window?.reset_at_ms));
+  if (observedAtMs !== undefined) appendProviderFact(facts, "Observed", formatCapacityTimestamp(observedAtMs));
   card.append(title, usage, facts);
   container.appendChild(card);
 };
@@ -1272,6 +1311,7 @@ const appendCapacitySourceMeta = (row, source, provider = null) => {
     appendProviderFact(facts, "Last event", health?.last_event ?? "Not observed");
     appendProviderFact(facts, "Blocked until", formatCapacityTimestamp(source.blocked_until_ms, "Not blocked"));
     appendProviderFact(facts, "Cooldown until", formatCapacityTimestamp(source.cooldown_until_ms, "No cooldown"));
+    appendProviderFact(facts, "Quota source", "Claude response headers");
     appendProviderFact(
       facts,
       "Last upstream error",
@@ -1312,13 +1352,12 @@ let codexResetSettingsRevision = 0;
 const codexResetSaving = new Set();
 let codexResetSettingsTarget = "";
 let codexResetSettingsToken = "";
-
 let codexOverageSettings = [];
 let codexOverageSettingsRevision = 0;
 const codexOverageSaving = new Set();
 let codexOverageSettingsTarget = "";
 let codexOverageSettingsToken = "";
-
+const refreshResetPanels = () => Promise.all([loadProviders(), loadProviderCapacity()]);
 const renderCodexCapacitySource = (source, provider = null) => {
   // The capacity list is a role="list" container, and aria-allowed-role rejects listitem on article.
   const row = document.createElement("div");
@@ -1345,17 +1384,18 @@ const renderCodexCapacitySource = (source, provider = null) => {
   label.dataset.check = "";
   const copy = document.createElement("span");
   const count = setting?.available_count;
-  copy.textContent = "Use banked resets";
+  copy.textContent = "Automatic resets";
   const countLabel = document.createElement("small");
   countLabel.textContent = Number.isSafeInteger(count) && count >= 0 ? count + " available" : "Count unavailable";
   const input = document.createElement("input");
   input.type = "checkbox";
   input.setAttribute("role", "switch");
-  input.setAttribute("aria-label", "Use banked resets for " + title.textContent);
+  input.setAttribute("aria-label", "Automatic resets for " + title.textContent);
   input.checked = setting?.enabled === true;
   input.disabled = !setting || codexResetSaving.has(setting.account_id_hash);
   label.append(copy, input, countLabel);
   header.append(label);
+  appendManualResetControl(header, setting, title.textContent, apiUrl, getAdminToken, refreshResetPanels);
   input.addEventListener("change", async () => {
     if (!setting) return;
     const target = apiUrl("/admin/providers");
@@ -1496,8 +1536,8 @@ const claudeCapacityWindowForDisplay = (window) => {
 };
 
 /**
- * The Claude subscription row mirrors the Codex rows: a live/stale/unavailable
- * badge, the observed subscription windows as remaining capacity, and the
+ * The Claude subscription row keeps the Codex layout with a last-observed
+ * badge, the response-header windows as remaining capacity, and the
  * diagnostics the tier itself recorded (credential direction, workspace,
  * guards, last upstream outcome, and Console API-key limits when present).
  */
@@ -1529,14 +1569,33 @@ const renderClaudeCapacitySource = (source) => {
     title.textContent += ` · ${account?.label || source.account_id.slice(0, 8)}${account?.active ? " · Active" : ""}`;
   const badge = document.createElement("span");
   badge.dataset.badge = "";
-  setBadge(badge, capacityBadgeState(source.state), capacityStateLabel(source.state));
+  const observed = typeof source.source_observed_at_ms === "number" && Number.isFinite(source.source_observed_at_ms);
+  const label =
+    source.state === "unavailable"
+      ? capacityStateLabel(source.state)
+      : !observed
+        ? "Awaiting response headers"
+        : source.state === "stale"
+          ? "Last observed · stale"
+          : "Last observed";
+  setBadge(badge, observed || source.state === "unavailable" ? capacityBadgeState(source.state) : "unknown", label);
   header.append(title, badge);
   row.append(header);
 
   const windows = document.createElement("div");
   windows.dataset.capacityWindows = "";
-  renderCapacityWindow(windows, "5-hour window", claudeCapacityWindowForDisplay(source.windows?.five_hour));
-  renderCapacityWindow(windows, "Weekly window", claudeCapacityWindowForDisplay(source.windows?.seven_day));
+  renderCapacityWindow(
+    windows,
+    "5-hour window",
+    claudeCapacityWindowForDisplay(source.windows?.five_hour),
+    source.windows?.five_hour?.observed_at_ms ?? null
+  );
+  renderCapacityWindow(
+    windows,
+    "Weekly window",
+    claudeCapacityWindowForDisplay(source.windows?.seven_day),
+    source.windows?.seven_day?.observed_at_ms ?? null
+  );
   row.append(windows);
 
   appendCapacitySourceMeta(row, source, provider);
@@ -1621,12 +1680,25 @@ const CLAUDE_CAPACITY_CHART_SERIES = [
   { key: "claude-five-hour", label: "Claude 5-hour", window: "five_hour" },
   { key: "claude-seven-day", label: "Claude weekly", window: "seven_day" },
 ];
-let selectedClaudeHistoryAccountId = null;
-
+const isClaudeHeaderCapacityPoint = (point) =>
+  point !== null &&
+  typeof point === "object" &&
+  (point.source === "response_headers" || (point.source === undefined && !point.usage_snapshot));
+const claudeCapacityChartSeries = (snapshot, accountId) => {
+  const series = new Map();
+  const add = (point) => {
+    if (point?.account_id !== accountId) return;
+    for (const entry of CLAUDE_CAPACITY_CHART_SERIES)
+      if (point.windows?.[entry.window]) series.set(entry.window, entry);
+  };
+  for (const point of snapshot?.claude_history?.points ?? []) if (isClaudeHeaderCapacityPoint(point)) add(point);
+  for (const row of snapshot?.claude_accounts ?? [snapshot?.claude]) add(row);
+  return Array.from(series.values());
+};
 /** Raw observed points only: never reuse a live value at browser-now. */
 const claudeCapacityChartPoints = (view, accountId, windowId, interval) => {
   const samples = (Array.isArray(view?.points) ? view.points : [])
-    .filter((point) => point?.account_id === accountId)
+    .filter((point) => point?.account_id === accountId && isClaudeHeaderCapacityPoint(point))
     .sort(
       (left, right) =>
         (left.source_observed_at_ms ?? left.sampled_at_ms) - (right.source_observed_at_ms ?? right.sampled_at_ms)
@@ -1673,62 +1745,40 @@ const claudeCapacityChartPoints = (view, accountId, windowId, interval) => {
   return points;
 };
 
-const renderClaudeHistorySelector = (header, snapshot) => {
-  const view = snapshot?.claude_history;
-  const accounts = new Map(
-    (latestClaudeSubscription?.accounts ?? []).map((account) => [
-      account.account_id,
-      account.label || account.account_id,
-    ])
-  );
-  for (const point of Array.isArray(view?.points) ? view.points : [])
-    if (typeof point?.account_id === "string" && !accounts.has(point.account_id))
-      accounts.set(point.account_id, `Retained account ${point.account_id}`);
-  if (selectedClaudeHistoryAccountId === null || (selectedClaudeHistoryAccountId === "" && accounts.size))
-    selectedClaudeHistoryAccountId = latestClaudeSubscription?.active_account_id ?? accounts.keys().next().value ?? "";
-  if (selectedClaudeHistoryAccountId && !accounts.has(selectedClaudeHistoryAccountId))
-    accounts.set(selectedClaudeHistoryAccountId, `Retained account ${selectedClaudeHistoryAccountId}`);
-  const label = document.createElement("label");
-  label.dataset.capacityClaudeFilter = "";
-  const text = document.createElement("span");
-  text.textContent = "Claude history account";
-  const select = document.createElement("select");
-  select.setAttribute("aria-label", "Claude history account (view only)");
-  if (!accounts.size) {
-    const empty = document.createElement("option");
-    empty.value = "";
-    empty.textContent = "Waiting for account observations";
-    select.appendChild(empty);
+const claudeHistoryAccountId = (snapshot) => {
+  // The capacity snapshot's compatibility row is the exact current active account.
+  const active = snapshot?.claude;
+  if (active !== undefined) {
+    if (typeof active?.account_id !== "string" || !active.account_id) return "";
+    return !Array.isArray(snapshot.claude_accounts) ||
+      snapshot.claude_accounts.some(
+        (account) => account.account_id === active.account_id && account.account_cohort_id === active.account_cohort_id
+      )
+      ? active.account_id
+      : "";
   }
-  for (const [id, name] of accounts) {
-    const option = document.createElement("option");
-    option.value = id;
-    option.textContent = name;
-    select.appendChild(option);
-  }
-  select.value = selectedClaudeHistoryAccountId;
-  select.addEventListener("change", () => {
-    selectedClaudeHistoryAccountId = select.value;
-    const state = latestProviderCapacityChartState;
-    if (state) renderProviderCapacityChart(state.snapshot, state.sources, state.fiveXxBuckets);
-  });
-  label.append(text, select);
-  header.appendChild(label);
+  const activeId = latestClaudeSubscription?.active_account_id;
+  if (typeof activeId !== "string" || !activeId) return "";
+  const account = latestClaudeSubscription.accounts?.find((entry) => entry.account_id === activeId);
+  if (!account) return "";
+  return !Array.isArray(snapshot?.claude_accounts) ||
+    snapshot.claude_accounts.some(
+      (entry) => entry.account_id === activeId && entry.account_cohort_id === account.account_cohort_id
+    )
+    ? activeId
+    : "";
 };
 
 const renderClaudeHistoryPaths = (svg, snapshot, interval, plot) => {
-  for (const series of CLAUDE_CAPACITY_CHART_SERIES) {
-    const points = claudeCapacityChartPoints(
-      snapshot?.claude_history,
-      selectedClaudeHistoryAccountId,
-      series.window,
-      interval
-    );
+  const accountId = claudeHistoryAccountId(snapshot);
+  for (const series of claudeCapacityChartSeries(snapshot, accountId)) {
+    const points = claudeCapacityChartPoints(snapshot?.claude_history, accountId, series.window, interval);
     const path = capacityChartSvgElement("path", {
       d: capacityChartPath(points, plot, { anchorStart: false, anchorEnd: false }),
       fill: "none",
       role: "img",
       "aria-label": `${series.label}, observed remaining capacity, gaps are unknown`,
+      stroke: "currentColor",
     });
     path.dataset.capacitySeries = series.key;
     svg.appendChild(path);
@@ -1738,9 +1788,10 @@ const renderClaudeHistoryPaths = (svg, snapshot, interval, plot) => {
         cy: plot.top + ((100 - point.remainingPercent) / 100) * plot.height,
         r: 2,
       });
+      circle.setAttribute("fill", "currentColor");
       circle.dataset.capacityClaudePoint = series.key;
       const title = capacityChartSvgElement("title");
-      title.textContent = `${series.label} · ${quotaPercentFormatter.format(point.remainingPercent)}% remaining · ${point.sample.account_id} · cohort ${point.sample.account_cohort_id} · headers observed ${formatCapacityTimestamp(point.observedAt)} · sampled ${formatCapacityTimestamp(point.sample.sampled_at_ms)} · ${point.sample.state} · reset ${formatCapacityTimestamp(point.window.reset_at_ms)}`;
+      title.textContent = `${series.label} · ${quotaPercentFormatter.format(point.remainingPercent)}% remaining · ${point.sample.account_id} · cohort ${point.sample.account_cohort_id} · ${point.sample.usage_snapshot ? "usage" : "headers"} observed ${formatCapacityTimestamp(point.observedAt)} · sampled ${formatCapacityTimestamp(point.sample.sampled_at_ms)} · ${point.sample.state} · reset ${formatCapacityTimestamp(point.window.reset_at_ms)}`;
       circle.appendChild(title);
       svg.appendChild(circle);
     }
@@ -1750,8 +1801,9 @@ const renderClaudeHistoryPaths = (svg, snapshot, interval, plot) => {
 const claudeHistorySummary = (snapshot, nowMs) => {
   const view = snapshot?.claude_history;
   if (!view || view.scan !== "ok") return "Claude history unavailable; no capacity inferred.";
+  const accountId = claudeHistoryAccountId(snapshot);
   const points = (Array.isArray(view.points) ? view.points : []).filter(
-    (point) => point.account_id === selectedClaudeHistoryAccountId
+    (point) => point.account_id === accountId && isClaudeHeaderCapacityPoint(point)
   );
   if (!points.length)
     return `Claude history: waiting for actual upstream quota observations; no backfill.${view.truncated ? " INCOMPLETE: scan truncated." : ""}`;
@@ -1759,7 +1811,7 @@ const claudeHistorySummary = (snapshot, nowMs) => {
     .map((point) => point.source_observed_at_ms)
     .filter((time) => typeof time === "number" && Number.isFinite(time));
   const last = times.length ? Math.max(...times) : null;
-  return `Claude: ${points.length} retained observations · headers last observed ${formatCapacityTimestamp(last)}${last === null ? " · observation time unknown" : nowMs - last > view.stale_after_ms ? " · stale" : ""}${view.truncated ? " · INCOMPLETE: scan truncated" : ""} · downsampled to at most 6 events per 15-minute account/cohort bucket; latest 200 markers per window. Observed is gateway header receipt, not the provider clock. Gaps and reset/cohort changes are not interpolated.`;
+  return `Claude: ${points.length} retained header observations · last observed ${formatCapacityTimestamp(last)}${last === null ? " · observation time unknown" : nowMs - last > view.stale_after_ms ? " · stale" : ""}${view.truncated ? " · INCOMPLETE: scan truncated" : ""} · downsampled to at most 6 events per 15-minute account/cohort bucket; latest 200 markers per window. Observed is gateway response-header receipt, not the provider clock. Gaps and reset/cohort changes are not interpolated.`;
 };
 
 const capacityChartFailureIsDowntime = (source) =>
@@ -2691,7 +2743,6 @@ const renderProviderCapacityChart = (snapshot, sources, fiveXxBuckets = []) => {
   range.dataset.capacityChartRange = "";
   range.textContent = "7 days";
   chartHeader.append(title, range);
-  renderClaudeHistorySelector(chartHeader, snapshot);
   figure.appendChild(chartHeader);
 
   const legend = document.createElement("div");
@@ -2700,7 +2751,7 @@ const renderProviderCapacityChart = (snapshot, sources, fiveXxBuckets = []) => {
   for (const series of [
     { key: "cached-input", label: "Cached input share" },
     ...CAPACITY_CHART_SERIES,
-    ...CLAUDE_CAPACITY_CHART_SERIES,
+    ...claudeCapacityChartSeries(snapshot, claudeHistoryAccountId(snapshot)),
     { key: "rate-limit-reset", label: "Reset" },
     { key: "openai-downtime", label: "Downtime" },
     { key: "inference-error", label: "Errors (5xx)" },
@@ -2712,6 +2763,7 @@ const renderProviderCapacityChart = (snapshot, sources, fiveXxBuckets = []) => {
     const swatch = document.createElement("span");
     swatch.dataset.capacityLegendSwatch = "";
     swatch.setAttribute("aria-hidden", "true");
+    if (series.key.startsWith("claude-meter-")) swatch.style.backgroundColor = "currentColor";
     const label = document.createElement("span");
     label.textContent = series.label;
     item.append(swatch, label);
@@ -3839,6 +3891,8 @@ const formatAuthMethodLabel = (method) => {
     auth_tokens_allowlist: "Allowlist token",
     kv_api_key: "API key",
     github_token: "GitHub token",
+    passport_session: "Passport",
+    passport_bearer: "Passport token",
     passkey_session: "Passkey",
     disabled: "Auth disabled",
   };
@@ -4091,11 +4145,11 @@ const refreshAccessOverview = async () => {
   updateAccessPubkeysSummary();
 };
 
-const getKernelListMissingTokenMessage = () => "Paste an admin token to load GitHub access analytics and rate limits.";
+const getKernelListMissingTokenMessage = () => "Sign in with Passport to load GitHub access analytics and rate limits.";
 
 const getKernelListTargetChangedMessage = () => "Target changed. Loading GitHub access analytics and rate limits...";
 
-const getKernelQueueMissingTokenMessage = () => "Paste an admin token to load the rate limit queue.";
+const getKernelQueueMissingTokenMessage = () => "Sign in with Passport to load the rate limit queue.";
 
 const getKernelQueueTargetChangedMessage = () => "Target changed. Loading the rate limit queue...";
 
@@ -5647,7 +5701,7 @@ const refreshKernelPubKeys = async () => {
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
     setKernelPubKeysBadge("bad", "Missing token");
-    setKernelPubKeysMessage("Paste an admin token to load kernel attestation keys.");
+    setKernelPubKeysMessage("Sign in with Passport to load kernel attestation keys.");
     updateAccessPubkeysSummary();
     return;
   }
@@ -5697,7 +5751,7 @@ const ensureKernelPubKeysLoaded = async () => {
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
     setKernelPubKeysBadge("bad", "Missing token");
-    setKernelPubKeysMessage("Paste an admin token to load kernel attestation keys.");
+    setKernelPubKeysMessage("Sign in with Passport to load kernel attestation keys.");
     updateAccessPubkeysSummary();
     return;
   }
@@ -6617,23 +6671,13 @@ const buildUnlimitedToggle = (id, controlId, labelText) => {
 const renderKeys = (keys, view = "all") => {
   clearKeysListLoading();
   keysList.textContent = "";
-  let filteredKeys = keys;
-  if (view === "active") {
-    filteredKeys = keys.filter((k) => getApiKeyStatus(k) === "active");
-  } else if (view === "expired") {
-    filteredKeys = keys.filter((k) => getApiKeyStatus(k) === "expired");
-  } else if (view === "revoked") {
-    filteredKeys = keys.filter((k) => getApiKeyStatus(k) === "revoked");
-  }
-  if (!filteredKeys.length) {
-    setKeyListMessage(view === "all" ? "No API keys yet." : `No ${view} API keys.`);
-    setKeysBadge("ok", view === "all" ? "No API keys" : `No ${view} API keys`);
-    updateAccessApiKeysSummary();
-    return;
-  }
+  const statusRefreshers = [];
+  let emptyMessage = null;
 
-  filteredKeys.forEach((key, index) => {
-    const statusKind = getApiKeyStatus(key);
+  keys.forEach((key, index) => {
+    let statusKind = getApiKeyStatus(key);
+    const keyLabel = key.name || key.id || "unnamed API key";
+    const currentKeyLabel = () => key.name || key.id || keyLabel;
     const row = document.createElement("div");
     row.dataset.key = "row";
     row.dataset.state = statusKind;
@@ -6801,21 +6845,26 @@ const renderKeys = (keys, view = "all") => {
     applyIconButton(editBtn, "edit", "Edit API key");
     actionRow.appendChild(editBtn);
 
-    if (statusKind === "active") {
-      const revokeBtn = document.createElement("button");
-      revokeBtn.type = "button";
-      revokeBtn.dataset.variant = "danger";
-      applyIconButton(revokeBtn, "revoke", "Revoke API key");
-      revokeBtn.addEventListener("click", () => {
-        void revokeKey(key.id, key.name || "this API key", revokeBtn);
-      });
-      actionRow.appendChild(revokeBtn);
-    } else if (statusKind === "revoked") {
+    const renderKeyActions = (statusKind) => {
+      actionRow.textContent = "";
+      actionRow.appendChild(editBtn);
+      if (statusKind !== "revoked") {
+        const revokeBtn = document.createElement("button");
+        revokeBtn.type = "button";
+        revokeBtn.dataset.variant = "danger";
+        applyIconButton(revokeBtn, "revoke", "Revoke API key");
+        revokeBtn.addEventListener("click", () => {
+          void revokeKey(key.id, currentKeyLabel(), revokeBtn);
+        });
+        actionRow.appendChild(revokeBtn);
+        return;
+      }
+
       const restoreBtn = document.createElement("button");
       restoreBtn.type = "button";
       applyIconButton(restoreBtn, "restore", "Unrevoke API key");
       restoreBtn.addEventListener("click", () => {
-        void unrevokeKey(key.id, key.name || "this API key", restoreBtn);
+        void unrevokeKey(key.id, currentKeyLabel(), restoreBtn);
       });
       actionRow.appendChild(restoreBtn);
 
@@ -6824,10 +6873,11 @@ const renderKeys = (keys, view = "all") => {
       deleteBtn.dataset.variant = "danger";
       applyIconButton(deleteBtn, "trash", "Delete API key");
       deleteBtn.addEventListener("click", () => {
-        void deleteKey(key.id, key.name || "this API key", deleteBtn);
+        void deleteKey(key.id, currentKeyLabel(), deleteBtn);
       });
       actionRow.appendChild(deleteBtn);
-    }
+    };
+    renderKeyActions(statusKind);
 
     controls.appendChild(status);
     controls.appendChild(actionRow);
@@ -7121,6 +7171,21 @@ const renderKeys = (keys, view = "all") => {
       updatePaidFallbackInfo();
     };
 
+    const updateKeyStatus = () => {
+      const nextStatusKind = getApiKeyStatus(key);
+      row.dataset.state = nextStatusKind;
+      status.dataset.state = nextStatusKind === "active" ? "ok" : nextStatusKind === "expired" ? "warning" : "bad";
+      status.textContent =
+        nextStatusKind === "revoked" ? "Revoked" : nextStatusKind === "expired" ? "Expired" : "Active";
+      if (nextStatusKind !== statusKind) renderKeyActions(nextStatusKind);
+      statusKind = nextStatusKind;
+      expiresInfo.valueEl.textContent = formatExpires(key.expires_at_ms);
+      if (nextStatusKind === "expired") expiresInfo.item.dataset.state = "bad";
+      else delete expiresInfo.item.dataset.state;
+      row.hidden = view !== "all" && view !== nextStatusKind;
+    };
+    statusRefreshers.push(updateKeyStatus);
+
     const buildEditPayload = () => {
       const payload = { id: key.id };
       let changed = false;
@@ -7303,7 +7368,7 @@ const renderKeys = (keys, view = "all") => {
         }
 
         title.textContent = key.name || "Untitled";
-        expiresInfo.valueEl.textContent = formatExpires(key.expires_at_ms);
+        updateKeyStatus();
         observedAtMs = Date.now();
         updateUsageInfo();
 
@@ -7328,6 +7393,7 @@ const renderKeys = (keys, view = "all") => {
         } else {
           setEditBadge("ok", "Saved");
         }
+        refreshKeyRows();
       } catch {
         setEditBadge("bad", "Offline");
       } finally {
@@ -7458,8 +7524,26 @@ const renderKeys = (keys, view = "all") => {
     row.appendChild(main);
     keysList.appendChild(row);
   });
-  setKeysBadge("ok", `${formatPlural(filteredKeys.length, "API key")}`);
-  updateAccessApiKeysSummary();
+  refreshKeyRows = () => {
+    statusRefreshers.forEach((refresh) => refresh());
+    const visibleCount = view === "all" ? keys.length : keys.filter((key) => getApiKeyStatus(key) === view).length;
+    if (visibleCount) {
+      emptyMessage?.remove();
+      emptyMessage = null;
+      setKeysBadge("ok", `${formatPlural(visibleCount, "API key")}`);
+    } else {
+      if (!emptyMessage) {
+        emptyMessage = document.createElement("p");
+        emptyMessage.dataset.empty = "keys";
+        emptyMessage.textContent = view === "all" ? "No API keys yet." : `No ${view} API keys.`;
+        keysList.appendChild(emptyMessage);
+      }
+      setKeysBadge("ok", view === "all" ? "No API keys" : `No ${view} API keys`);
+    }
+    updateAccessApiKeysSummary();
+    scheduleKeyExpiryRefresh();
+  };
+  refreshKeyRows();
 };
 
 const renderPasskeyUsers = (users) => {
@@ -7543,7 +7627,7 @@ const refreshPasskeyUsers = async () => {
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
     setPasskeyUsersBadge("bad", "Missing token");
-    setPasskeyUsersMessage("Paste a fallback admin token to manage passkey users.");
+    setPasskeyUsersMessage("Sign in with Passport to manage passkey users.");
     return;
   }
 
@@ -7565,7 +7649,7 @@ const refreshPasskeyUsers = async () => {
       setPasskeyUsersBadge("bad", data?.error?.message ?? "Error");
       setPasskeyUsersMessage(
         res.status === 403
-          ? "Admin token required. Paste a Deno/admin token in the fallback token field."
+          ? "Administrator access required. Sign in with Passport again."
           : "Failed to load passkey users."
       );
       return;
@@ -8209,7 +8293,7 @@ const switchKeysView = (view) => {
   if (allKeys.length) {
     renderKeys(allKeys, view);
   } else {
-    setKeyListMessage("Paste an admin token to load API keys.");
+    setKeyListMessage("Sign in with Passport to load API keys.");
     setKeysBadge("unknown", "Not loaded");
   }
 };
@@ -8234,7 +8318,20 @@ const computeExpiresAtMs = (preset) => {
   }
 };
 
+const markAdminAuthUnavailable = () => {
+  setAuthBadge("unknown", "Connection unavailable. Retrying...");
+  if (!adminAccessState.checked) setPasskeyStatus("unknown", "Checking saved sign-in. Retrying...");
+  if (!document.hidden && !adminAuthRetryTimer) {
+    adminAuthRetryTimer = globalThis.setTimeout(() => {
+      adminAuthRetryTimer = 0;
+      void testAdminToken();
+    }, 5000);
+  }
+};
+
 const testAdminToken = async ({ allowBearerFallback = true } = {}) => {
+  globalThis.clearTimeout(adminAuthRetryTimer);
+  adminAuthRetryTimer = 0;
   const token = getAdminToken();
   setAuthBadge("unknown", "Checking...");
   try {
@@ -8260,13 +8357,23 @@ const testAdminToken = async ({ allowBearerFallback = true } = {}) => {
     }
     const { res, data } = authResult;
     if (!res.ok) {
+      if (res.status !== 401 && res.status !== 403) {
+        markAdminAuthUnavailable();
+        return false;
+      }
+      passportSessionActive = false;
       clearAdminSnapshotScope();
       setAuthBadge("bad", data?.error?.message ?? "Unauthorized");
       setAdminAccessState({ checked: true, isAdmin: false, isSuperAdmin: false });
       setSignedInState(false);
       return false;
     }
-    if (!data?.auth?.is_admin) {
+    if (typeof data?.auth?.is_admin !== "boolean") {
+      markAdminAuthUnavailable();
+      return false;
+    }
+    if (!data.auth.is_admin) {
+      passportSessionActive = false;
       clearAdminSnapshotScope();
       setAuthBadge("bad", "Not admin");
       setAdminAccessState({ checked: true, isAdmin: false, isSuperAdmin: false });
@@ -8274,6 +8381,7 @@ const testAdminToken = async ({ allowBearerFallback = true } = {}) => {
       return false;
     }
     const kind = data?.auth?.method?.kind;
+    passportSessionActive = kind === "passport_session";
     const isSuperAdmin = data?.auth?.is_super_admin === true;
     setAuthBadge("ok", kind ? `OK (${formatAuthMethodLabel(kind)})` : "OK");
     setAdminSnapshotScopeFromAuth(data.auth);
@@ -8286,10 +8394,7 @@ const testAdminToken = async ({ allowBearerFallback = true } = {}) => {
     });
     return true;
   } catch {
-    clearAdminSnapshotScope();
-    setAuthBadge("bad", "Offline");
-    setAdminAccessState({ checked: true, isAdmin: false, isSuperAdmin: false });
-    setSignedInState(false);
+    markAdminAuthUnavailable();
     return false;
   }
 };
@@ -8425,7 +8530,7 @@ const refreshKeys = async () => {
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
     setKeysBadge("bad", "Missing token");
-    setKeyListMessage("Paste an admin token to load API keys.");
+    setKeyListMessage("Sign in with Passport to load API keys.");
     updateAccessApiKeysSummary();
     return;
   }
@@ -8479,7 +8584,7 @@ const ensureKeysLoaded = async () => {
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
     setKeysBadge("bad", "Missing token");
-    setKeyListMessage("Paste an admin token to load API keys.");
+    setKeyListMessage("Sign in with Passport to load API keys.");
     return;
   }
   if (keysLoadedAt && Date.now() - keysLoadedAt < 10_000) {
@@ -8712,11 +8817,16 @@ const unrevokeKey = async (id, name, button) => {
     }
     updateKeyRevocationState(id, null);
     const remainsExpired = isExpiredAt(allKeys.find((key) => key?.id === id)?.expires_at_ms);
+    if (remainsExpired) {
+      toast.info(`Unrevoked ${name}`, {
+        description: "The key remains expired and cannot be used until its expiry is extended.",
+      });
+    }
+    await refreshKeys();
     setKeysBadge(
       remainsExpired ? "warning" : "ok",
       remainsExpired ? `Unrevoked ${name} · remains expired` : `Unrevoked ${name}`
     );
-    void refreshKeys();
   } catch {
     setKeysBadge("bad", "Offline");
   } finally {
@@ -8913,6 +9023,25 @@ const updateReasoningOptions = (modelSlug, preferred) => {
   return updateReasoningSelectForModel(defaultsReasoningSelect, model, preferred);
 };
 
+const defaultsTarget = () => apiUrl("/admin/defaults");
+const clearDefaultsSaveQueue = () => {
+  cancelDefaultsSaveSchedule();
+  defaultsSaveQueued = false;
+  defaultsSaveQueuedTarget = "";
+};
+const queueDefaultsSave = () => {
+  defaultsSaveQueued = true;
+  defaultsSaveQueuedTarget = defaultsTarget();
+};
+const scheduleQueuedDefaultsSave = (loadTarget) => {
+  if (!defaultsSaveQueued) return;
+  if (defaultsSaveQueuedTarget !== loadTarget || defaultsTarget() !== loadTarget) {
+    clearDefaultsSaveQueue();
+    return;
+  }
+  scheduleDefaultsSave();
+};
+
 const loadDefaults = async (options = {}) => {
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
@@ -8924,7 +9053,12 @@ const loadDefaults = async (options = {}) => {
 
   const loadId = ++defaultsLoadId;
   const preserveInputs = options.preserveInputs === true;
-  if (!preserveInputs) defaultsTouched = false;
+  const loadTarget = defaultsTarget();
+  if (!preserveInputs) {
+    defaultsTouched = false;
+    defaultsEditRevision += 1;
+    clearDefaultsSaveQueue();
+  }
   defaultsLoaded = false;
   setDefaultsBadge("unknown", defaultsLoadedAt ? "Cached · refreshing" : "Loading...");
   setMeteredQuotaBadge("unknown", defaultsLoadedAt ? "Cached · refreshing" : "Loading...");
@@ -8946,6 +9080,7 @@ const loadDefaults = async (options = {}) => {
         defaultsLoaded = true;
         setDefaultsBadge("unknown", "Cached · refresh unavailable");
         setMeteredQuotaBadge("unknown", "Cached · refresh unavailable");
+        scheduleQueuedDefaultsSave(loadTarget);
         return;
       }
       setDefaultsBadge("bad", modelsPayload?.error?.message ?? "Error");
@@ -8964,6 +9099,7 @@ const loadDefaults = async (options = {}) => {
         defaultsLoaded = true;
         setDefaultsBadge("unknown", "Cached · refresh unavailable");
         setMeteredQuotaBadge("unknown", "Cached · refresh unavailable");
+        scheduleQueuedDefaultsSave(loadTarget);
         return;
       }
       setDefaultsBadge("bad", defaultsPayload?.error?.message ?? "Error");
@@ -8999,6 +9135,7 @@ const loadDefaults = async (options = {}) => {
     });
     defaultsLoaded = true;
     defaultsLoadedAt = Date.now();
+    scheduleQueuedDefaultsSave(loadTarget);
     if (!defaultsTouched && result) {
       setDefaultsBadge("ok", `${result.selectedModel} · ${result.selectedReasoning}`);
     }
@@ -9007,6 +9144,7 @@ const loadDefaults = async (options = {}) => {
       defaultsLoaded = true;
       setDefaultsBadge("unknown", "Cached · offline");
       setMeteredQuotaBadge("unknown", "Cached · offline");
+      scheduleQueuedDefaultsSave(loadTarget);
       return;
     }
     setDefaultsBadge("bad", "Offline");
@@ -9245,6 +9383,8 @@ const buildModelOption = (entry) => {
   if (providers.childElementCount) body.append(providers);
 
   const facts = [];
+  const endpoints = new Set((entry.providers ?? []).flatMap((provider) => provider.supported_endpoints ?? []));
+  if (endpoints.has("/v1/decisions")) facts.push("Decisions");
   const contextWindow = modelsPositiveTokenCount(entry.context_window_tokens);
   if (contextWindow) facts.push(`Context ${MODEL_TOKEN_FORMAT.format(contextWindow)}`);
   const reasoning = modelsReasoningFor(entry);
@@ -9474,6 +9614,10 @@ const loadModelsWhitelist = async (options = {}) => {
     return;
   }
   const loadId = ++modelsLoadId;
+  if (modelsSaving) {
+    modelsSaving = false;
+    updateModelsStatus();
+  }
   setModelsWhitelistBadge("unknown", modelsLoadedAt ? "Cached · refreshing" : "Loading...");
   // The provider chips and labels come from the roster, so this tab asks for it
   // when the Providers prefetch has not already loaded the shared dictionary.
@@ -9521,6 +9665,7 @@ const saveModelsWhitelist = async () => {
     return;
   }
   if (modelsSaving || !modelsHasUnsavedChanges()) return;
+  const saveId = modelsLoadId;
   modelsSaving = true;
   modelsSaveError = "";
   updateModelsStatus();
@@ -9532,6 +9677,7 @@ const saveModelsWhitelist = async () => {
       body: JSON.stringify({ model_ids: submittedIds }),
     });
     const payload = await response.json().catch(() => null);
+    if (saveId !== modelsLoadId) return;
     if (!response.ok) {
       modelsSaving = false;
       modelsSaveError = "Failed to save";
@@ -9557,6 +9703,7 @@ const saveModelsWhitelist = async () => {
       }
     );
   } catch (error) {
+    if (saveId !== modelsLoadId) return;
     modelsSaving = false;
     modelsSaveError = "Save error";
     toast.error("Save failed", { description: "Offline" });
@@ -9681,8 +9828,14 @@ let providerTierFilter = "all";
 let providersVisibleIds = new Set();
 let providerSelectionLoadedAt = 0;
 let providerSelectionLoadId = 0;
+let providerSelectionContextId = 0;
 let providerSelectionSaving = false;
 let providerSelectionSaveError = "";
+
+// A refresh must not commit its server selection after the picker is edited.
+const markProviderSelectionEdited = () => {
+  providerSelectionLoadId += 1;
+};
 
 const setProvidersSelectionBadge = (state, text) => setBadge(providersSelectionBadge, state, text);
 
@@ -9745,10 +9898,10 @@ const providerSubscriptionSelected = (subscriptionId) =>
   providerSelection.has("codex") || providerSelection.has(subscriptionId);
 
 /** A tier is active when its own id is checked, or when any of its subscriptions is. */
-const isProviderChecked = (providerId) =>
+const isProviderChecked = (providerId, selection = providerSelection) =>
   providerId === "codex"
-    ? providerSelection.has("codex") || providerCodexSelection().selected > 0
-    : providerSelection.has(providerId);
+    ? selection.has("codex") || providerSubscriptions().some((subscription) => selection.has(subscription.id))
+    : selection.has(providerId);
 
 const providerCodexSelection = () => {
   const subscriptions = providerSubscriptions();
@@ -9777,6 +9930,8 @@ const providersHasUnsavedChanges = () =>
   [...providerSelection].some((id) => !providersSavedSelection.has(id));
 
 const providersSelectionIsEmpty = () => providerSelection.size === 0;
+
+const providersHasActiveTier = () => providersRosterIds().some((id) => isProviderChecked(id));
 
 /**
  * Selected ids in roster order, then the narrowed subscriptions, then staged
@@ -10005,6 +10160,7 @@ const renderProvidersMessage = (message) => {
 
 /** Drop the loaded roster and both selections, e.g. after the token or target changes. */
 const invalidateProviderSelection = (message) => {
+  providerSelectionContextId += 1;
   providerSelectionLoadId += 1;
   providerSelectionSaving = false;
   providerRoster = [];
@@ -10016,7 +10172,6 @@ const invalidateProviderSelection = (message) => {
   providerSelectionSaveError = "";
   latestClaudeSubscription = null;
   selectedClaudeAccountId = null;
-  selectedClaudeHistoryAccountId = null;
   claudeAccountDrafts.clear();
   claudeAccessDirty = false;
   claudeAccessInput.value = "";
@@ -10132,7 +10287,7 @@ const updateProvidersStatus = () => {
   else if (providerSelectionSaveError) setProvidersSelectionBadge("bad", providerSelectionSaveError);
   else if (unsaved) setProvidersSelectionBadge("warning", "Unsaved changes");
   else if (providerSelectionLoadedAt) {
-    const activeTiers = providersRosterIds().filter((id) => isProviderChecked(id)).length;
+    const activeTiers = providersRosterIds().filter((id) => isProviderChecked(id, providersSavedSelection)).length;
     setProvidersSelectionBadge("ok", filterActive ? `${formatNumber(activeTiers)} active` : "No filter");
   } else setProvidersSelectionBadge("unknown", "Not loaded");
 
@@ -10154,9 +10309,9 @@ const updateProvidersStatus = () => {
     : "Remove missing";
   providersDropMissingBtn.hidden = providerRoster.length === 0;
   providersDiscardBtn.disabled = saving || !unsaved;
-  // Saving nothing is not a state the API can store: an empty list clears the
-  // filter, so the button stays disabled until at least one provider is checked.
-  providersSelectionSave.disabled = saving || !unsaved || providersSelectionIsEmpty();
+  // Empty lists clear the filter, and missing-only selections cannot route.
+  // Require at least one checked roster tier before saving either restriction.
+  providersSelectionSave.disabled = saving || !unsaved || !providersHasActiveTier();
 };
 
 const renderProvidersPicker = () => {
@@ -10177,6 +10332,7 @@ const renderProvidersPicker = () => {
 };
 
 const applyProvidersSelection = (mutate) => {
+  markProviderSelectionEdited();
   providerSelectionSaveError = "";
   mutate(providersVisibleEntries());
   if (providersOnlyActiveInput.checked) {
@@ -10283,7 +10439,10 @@ const saveProviderSelection = async () => {
     setProvidersSelectionBadge("bad", "Missing token");
     return;
   }
-  if (providerSelectionSaving || !providersHasUnsavedChanges() || providersSelectionIsEmpty()) return;
+  if (providerSelectionSaving || !providersHasUnsavedChanges() || !providersHasActiveTier()) return;
+  const saveContextId = providerSelectionContextId;
+  const submittedSelection = new Set(providerSelection);
+  const submittedIds = providersSelectedIds();
   providerSelectionSaving = true;
   providerSelectionSaveError = "";
   updateProvidersStatus();
@@ -10291,9 +10450,10 @@ const saveProviderSelection = async () => {
     const response = await fetch(apiUrl("/admin/providers/selection"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ provider_ids: providersSelectedIds() }),
+      body: JSON.stringify({ provider_ids: submittedIds }),
     });
     const payload = await response.json().catch(() => null);
+    if (saveContextId !== providerSelectionContextId) return;
     if (!response.ok) {
       providerSelectionSaving = false;
       providerSelectionSaveError = "Failed to save";
@@ -10303,13 +10463,25 @@ const saveProviderSelection = async () => {
     }
     providerSelectionSaving = false;
     providerSelectionSaveError = "";
-    const savedIds = Array.isArray(payload?.provider_ids) ? payload.provider_ids : providersSelectedIds();
+    const savedIds = Array.isArray(payload?.provider_ids) ? payload.provider_ids : submittedIds;
     providersSavedSelection = providersSelectionFromIds(savedIds);
-    providerSelection = new Set(providersSavedSelection);
+    const activeTiers = providersRosterIds().filter((id) => isProviderChecked(id, providersSavedSelection)).length;
+    // Replay later checkbox edits on the saved set, not on the serialized ids:
+    // all checked providers serialize to [], and Codex subscriptions share an umbrella.
+    const nextSelection = new Set(providersSavedSelection);
+    for (const id of submittedSelection) {
+      if (!providerSelection.has(id)) nextSelection.delete(id);
+    }
+    for (const id of providerSelection) {
+      if (!submittedSelection.has(id)) nextSelection.add(id);
+    }
+    providerSelection = nextSelection;
     providerSelectionLoadedAt = Date.now();
     renderProvidersPicker();
     toast.success(
-      savedIds.length === 0 ? "Filter cleared" : `${formatNumber(providerSelection.size)} providers active`,
+      savedIds.length === 0
+        ? "Filter cleared"
+        : `${formatNumber(activeTiers)} provider${activeTiers === 1 ? "" : "s"} active`,
       {
         description:
           savedIds.length === 0
@@ -10318,6 +10490,7 @@ const saveProviderSelection = async () => {
       }
     );
   } catch (error) {
+    if (saveContextId !== providerSelectionContextId) return;
     providerSelectionSaving = false;
     providerSelectionSaveError = "Save error";
     toast.error("Save failed", { description: "Offline" });
@@ -10328,6 +10501,7 @@ const saveProviderSelection = async () => {
 
 const discardProviderChanges = () => {
   if (!providersHasUnsavedChanges()) return;
+  markProviderSelectionEdited();
   providerSelectionSaveError = "";
   providerSelection = new Set(providersSavedSelection);
   renderProvidersPicker();
@@ -10376,7 +10550,13 @@ const setProviderChecked = (providerId, checked) => {
   }
   for (const subscription of providerSubscriptions()) providerSelection.delete(subscription.id);
   if (checked) providerSelection.add("codex");
-  else providerSelection.delete("codex");
+  else {
+    providerSelection.delete("codex");
+    // Turning the tier off also covers subscriptions no longer in the roster.
+    for (const id of providerSelection) {
+      if (id.startsWith("codex:")) providerSelection.delete(id);
+    }
+  }
 };
 
 /** Narrowing to one subscription expands the umbrella, then drops that account. */
@@ -10411,8 +10591,10 @@ providersList.addEventListener("change", (event) => {
   providerSelectionSaveError = "";
   if (subscriptionId) setSubscriptionChecked(subscriptionId, checkbox.checked);
   else setProviderChecked(id, checkbox.checked);
-  if (providersOnlyActiveInput.checked || subscriptionId) renderProvidersPicker();
-  else {
+  if (providersOnlyActiveInput.checked || subscriptionId) {
+    markProviderSelectionEdited();
+    renderProvidersPicker();
+  } else {
     applyProvidersSelection(() => {});
   }
 });
@@ -10440,6 +10622,7 @@ providersInvertBtn.addEventListener("click", () => {
 providersDropMissingBtn.addEventListener("click", () => {
   const missing = providersMissingSelectionIds();
   if (!missing.length) return;
+  markProviderSelectionEdited();
   for (const id of missing) providerSelection.delete(id);
   providerSelectionSaveError = "";
   renderProvidersPicker();
@@ -10455,7 +10638,10 @@ providersSelectionSave.addEventListener("click", () => {
 });
 
 const saveDefaults = async () => {
-  if (!defaultsLoaded) return;
+  if (!defaultsLoaded) {
+    queueDefaultsSave();
+    return;
+  }
   const token = getAdminToken();
   if (!token && !hasAdminCredential()) {
     setDefaultsBadge("bad", "Missing token");
@@ -10463,10 +10649,19 @@ const saveDefaults = async () => {
   }
 
   if (defaultsSaving) {
-    defaultsSaveQueued = true;
+    queueDefaultsSave();
     return;
   }
+  const saveTarget = defaultsTarget();
+  if (defaultsSaveQueued) {
+    if (defaultsSaveQueuedTarget !== saveTarget) {
+      clearDefaultsSaveQueue();
+      return;
+    }
+    clearDefaultsSaveQueue();
+  }
   defaultsSaving = true;
+  const saveLoadId = defaultsLoadId;
   const saveRevision = defaultsEditRevision;
   const model = defaultsModelSelect.value;
   const reasoning = defaultsReasoningSelect.value;
@@ -10484,7 +10679,7 @@ const saveDefaults = async () => {
   setDefaultsBadge("unknown", "Saving...");
 
   try {
-    const res = await fetch(apiUrl("/admin/defaults"), {
+    const res = await fetch(saveTarget, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -10498,6 +10693,11 @@ const saveDefaults = async () => {
       }),
     });
     const data = await res.json().catch(() => null);
+    if (saveTarget !== defaultsTarget()) {
+      if (defaultsSaveQueuedTarget === saveTarget) clearDefaultsSaveQueue();
+      return;
+    }
+    if (saveLoadId !== defaultsLoadId && !defaultsSaveQueued) return;
     if (!res.ok) {
       setDefaultsBadge("bad", data?.error?.message ?? "Error");
       return;
@@ -10514,7 +10714,7 @@ const saveDefaults = async () => {
       defaultsTouched = false;
       setDefaultsBadge("ok", summary);
     } else {
-      defaultsSaveQueued = true;
+      queueDefaultsSave();
       setDefaultsBadge("unknown", "Saving latest changes...");
     }
   } catch {
@@ -10522,8 +10722,8 @@ const saveDefaults = async () => {
   } finally {
     defaultsSaving = false;
     if (defaultsSaveQueued) {
-      defaultsSaveQueued = false;
-      void saveDefaults();
+      if (defaultsSaveQueuedTarget !== defaultsTarget()) clearDefaultsSaveQueue();
+      else scheduleDefaultsSave();
     }
   }
 };
@@ -10731,6 +10931,7 @@ const hydrateAdminSnapshots = async () => {
 const scheduleDefaultsSave = debounce(() => {
   void saveDefaults();
 }, 500);
+cancelDefaultsSaveSchedule = scheduleDefaultsSave.cancel;
 
 restoreSettings();
 syncCreateUsageLimitControls();
@@ -10750,11 +10951,11 @@ setKernelNewBadge("unknown", "Idle");
 setKernelQueueBadge("unknown", "Not loaded");
 setKernelPubKeysBadge("unknown", "Not loaded");
 setKernelPubKeyCreateBadge("unknown", "Idle");
-setKeyListMessage("Paste an admin token to load API keys.");
-setPasskeyUsersMessage("Paste a fallback admin token to manage passkey users.");
+setKeyListMessage("Sign in with Passport to load API keys.");
+setPasskeyUsersMessage("Sign in with Passport to manage passkey users.");
 setKernelListMessage(getKernelListMissingTokenMessage());
 setKernelQueueMessage(getKernelQueueMissingTokenMessage());
-setKernelPubKeysMessage("Paste an admin token to load kernel attestation keys.");
+setKernelPubKeysMessage("Sign in with Passport to load kernel attestation keys.");
 kernelFilterInput.value = "";
 kernelShowSelect.value = "all";
 switchKeysView("active");
@@ -10777,6 +10978,7 @@ const refreshAnalyticsView = () => {
 };
 
 bindForegroundRefresh(() => {
+  if (!getAdminToken()) void testAdminToken();
   if (!adminAccessState.isAdmin || !hasAdminCredential()) return;
   if (currentAdminView === "analytics") {
     // Resume refreshes the quota panels immediately instead of waiting for
@@ -10789,10 +10991,6 @@ bindForegroundRefresh(() => {
 
 authWidgetToggle.addEventListener("click", () => {
   setAuthWidgetOpen(authWidgetPanel.hidden, { focus: authWidgetPanel.hidden });
-});
-
-authGateOpen.addEventListener("click", () => {
-  setAuthWidgetOpen(true, { focus: true });
 });
 
 authWidgetClose.addEventListener("click", () => {
@@ -10837,16 +11035,17 @@ tokenInput.addEventListener("input", () => {
     setAdminAccessState({ checked: true, isAdmin: false, isSuperAdmin: false });
     setSignedInState(false);
     setKeysBadge("unknown", "Not loaded");
-    setKeyListMessage("Paste an admin token to load API keys.");
+    setKeyListMessage("Sign in with Passport to load API keys.");
     setPasskeyUsersBadge("unknown", "Not loaded");
-    setPasskeyUsersMessage("Paste a fallback admin token to manage passkey users.");
+    setPasskeyUsersMessage("Sign in with Passport to manage passkey users.");
     setKernelListBadge("unknown", "Not loaded");
     setKernelListMessage(getKernelListMissingTokenMessage());
     setKernelQueueBadge("unknown", "Not loaded");
     setKernelQueueMessage(getKernelQueueMissingTokenMessage());
     setKernelPubKeysBadge("unknown", "Not loaded");
-    setKernelPubKeysMessage("Paste an admin token to load kernel attestation keys.");
+    setKernelPubKeysMessage("Sign in with Passport to load kernel attestation keys.");
     allKeys = [];
+    scheduleKeyExpiryRefresh();
     passkeyUsers = [];
     kernelQueueItems = [];
     kernelPubKeys = [];
@@ -10893,6 +11092,12 @@ passkeyHandleInput.addEventListener("input", () => {
   schedulePasskeyHandlePersist();
 });
 
+const openPassportLogin = () => {
+  globalThis.location.assign(buildBackendUrl("/auth/login?return_to=%2Fadmin", resolveBaseUrl()));
+};
+passportLoginBtn.addEventListener("click", openPassportLogin);
+passportWidgetLoginBtn.addEventListener("click", openPassportLogin);
+
 passkeyLoginBtn.addEventListener("click", () => {
   void runPasskeyLogin();
 });
@@ -10933,14 +11138,18 @@ signOutBtn.addEventListener("click", async () => {
       token: isRemoteRelayOrigin() && relaySessionActive ? "" : token,
       baseUrl: resolveBaseUrl(),
       corsOrigin: isRemoteRelayOrigin() ? globalThis.location.origin : "",
+      passportSession: passportSessionActive,
     });
-  } finally {
+    passportSessionActive = false;
     relaySessionActive = false;
     tokenInput.value = "";
     rememberTokenInput.checked = false;
     setAuthBadge("bad", "Missing token");
     setSignedInState(false);
     tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
+  } catch (error) {
+    setAuthBadge("bad", error?.message ?? "Sign-out is unavailable. Try again.");
+  } finally {
     signOutBtn.disabled = false;
   }
 });
@@ -11013,12 +11222,15 @@ baseSelect.addEventListener("change", () => {
   setKernelNewPanelOpen(false);
   resetKernelPubKeyForm();
   allKeys = [];
+  scheduleKeyExpiryRefresh();
   keysLoadedAt = 0;
   passkeyUsers = [];
   passkeyUsersLoadedAt = 0;
   defaultsLoaded = false;
   defaultsLoadedAt = 0;
   defaultsLoadId += 1;
+  defaultsEditRevision += 1;
+  clearDefaultsSaveQueue();
   kernelListLoadedAt = 0;
   kernelListLoadId += 1;
   kernelQueueItems = [];
@@ -11226,7 +11438,7 @@ const markDefaultsEditing = () => {
   defaultsEditRevision += 1;
   setDefaultsBadge("unknown", "Editing...");
   if (defaultsSaving) {
-    defaultsSaveQueued = true;
+    queueDefaultsSave();
     return;
   }
   scheduleDefaultsSave();

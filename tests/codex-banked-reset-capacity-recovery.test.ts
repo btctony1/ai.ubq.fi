@@ -33,6 +33,8 @@ import {
   singlePool,
 } from "./helpers/codex-account-routing-harness.ts";
 import { loadOverageUsageSettings, overageUsageAllowedSync, resetOverageUsageCacheForTest, writeOverageUsage } from "../src/codex/overage-settings.ts";
+import { loadCodexCapacityRoutingObservations, reconcileCapacityQuotaBlock } from "../src/codex/capacity-routing.ts";
+import type { RoutingAccount } from "../src/codex/routing-state.ts";
 import { sha256Hex } from "../src/utils.ts";
 
 type RoutingAuth = CodexAuthPoolState["accounts"][number];
@@ -232,6 +234,211 @@ test("a successful claimed probe clears the stuck reset ambiguity", async () => 
   }
 });
 
+test("a newer capacity sample reconciles both sibling blocks so the full cohort stays reset-fencable", async () => {
+  const kv = new RoutingKv();
+  setKvForTest(kv as unknown as Kv);
+  resetCodexAccountRoutingForTest();
+  resetProviderSelectionCacheForTest();
+  try {
+    const now = 1_700_000_000_000;
+    const first = { ...pool.accounts[0], updated_at_ms: now };
+    const second = { ...pool.accounts[1], updated_at_ms: now };
+    const authPool: CodexAuthPoolState = { accounts: [first, second], updated_at_ms: now };
+    const firstHash = await routingAccountIdHash(first.account_id);
+    const secondHash = await routingAccountIdHash(second.account_id);
+    const firstCredential = await codexCredentialVersion(first);
+    const secondCredential = await codexCredentialVersion(second);
+    const oldDeadline = now + 2 * DAY_MS;
+    const newDeadline = now + 7 * DAY_MS;
+    await kv.set(CODEX_AUTH_POOL_KV_KEY, authPool);
+    await kv.set(CODEX_ACCOUNT_ROUTING_KV_KEY, {
+      v: 2 as const,
+      updated_at_ms: now,
+      banked_reset_legacy_identity_unresolved: false,
+      slots: [
+        await routingSlot(first, {
+          primary_used_percent: 100,
+          banked_reset_generation_ambiguous: true,
+        }),
+        await routingSlot(second, {
+          primary_used_percent: 100,
+          quota_blocked_until_ms: oldDeadline,
+          quota_block_source: "body_resets_at",
+          quota_blocked_classes: ["standard"],
+          quota_blocks_by_class: {
+            standard: {
+              blocked_until_ms: oldDeadline,
+              source: "body_resets_at",
+              legacy_fallback: false,
+              quota_signal_observed_at_ms: now - 1,
+              observed_reset_at_ms: oldDeadline,
+              observed_reset_at_is_stable: true,
+              banked_reset_generation_ambiguous: true,
+              banked_reset_recovery_probe_pending: false,
+            },
+          },
+          quota_signal_observed_at_ms: now - 1,
+          observed_reset_at_ms: oldDeadline,
+          observed_reset_at_is_stable: true,
+          banked_reset_generation_ambiguous: true,
+        }),
+      ],
+    });
+    await recordCodexCapacityRoutingObservations(
+      [
+        {
+          slot: 0,
+          account_id: first.account_id,
+          state: "available",
+          source_observed_at_ms: now + 1,
+          snapshot_at_ms: now + 1,
+          windows: { primary: { limit_window_seconds: WEEKLY_WINDOW_SECONDS, used_percent: 100, reset_at_ms: newDeadline }, secondary: null },
+          additional_rate_limits: [],
+        },
+        {
+          slot: 1,
+          account_id: second.account_id,
+          state: "available",
+          source_observed_at_ms: now + 1,
+          snapshot_at_ms: now + 1,
+          windows: { primary: { limit_window_seconds: WEEKLY_WINDOW_SECONDS, used_percent: 100, reset_at_ms: newDeadline }, secondary: null },
+          additional_rate_limits: [],
+        },
+      ],
+      now + 1
+    );
+
+    const observations = await loadCodexCapacityRoutingObservations(authPool, true);
+    const accounts: readonly RoutingAccount[] = [
+      {
+        auth: first,
+        slot: 0,
+        accountIdHash: firstHash,
+        credentialVersion: firstCredential,
+        quotaHeadroom: 0,
+        probeRequired: false,
+        probeGeneration: null,
+        probeToken: null,
+        probeCircuit: null,
+        requestedModel: LUNA,
+      },
+      {
+        auth: second,
+        slot: 1,
+        accountIdHash: secondHash,
+        credentialVersion: secondCredential,
+        quotaHeadroom: 0,
+        probeRequired: false,
+        probeGeneration: null,
+        probeToken: null,
+        probeCircuit: null,
+        requestedModel: LUNA,
+      },
+    ];
+    for (const account of accounts) {
+      const observation = required(
+        observations.find((candidate) => candidate.account_id_hash === account.accountIdHash),
+        "capacity observation"
+      );
+      assert.equal(await reconcileCapacityQuotaBlock(account, observation, now + 2), true);
+      assert.equal(typeof (await getCodexQuotaBlockFence(account, newDeadline)), "number");
+      assert.equal(await getCodexQuotaBlockFence(account, oldDeadline), null);
+    }
+
+    const state = required(parseCodexAccountRoutingState(kv.values.get(key(CODEX_ACCOUNT_ROUTING_KV_KEY))), "routing state");
+    assert.equal(state.slots[0]?.banked_reset_generation_ambiguous, false);
+    assert.equal(state.slots[1]?.banked_reset_generation_ambiguous, false);
+    assert.equal(state.slots[1]?.quota_blocks_by_class?.standard?.observed_reset_at_ms, newDeadline);
+
+    const selected = await selectCodexRoutingAccountsStrong(authPool, authPool.accounts, now + 3, LUNA);
+    assert.equal(selected.kind, "quota_blocked");
+    assert.equal(selected.fullCohortExhausted, true);
+    assert.equal(selected.blockedAccounts.length, 2);
+    for (const blocked of selected.blockedAccounts) assert.equal(typeof (await getCodexQuotaBlockFence(blocked, newDeadline)), "number");
+  } finally {
+    setKvForTest(null);
+    resetCodexAccountRoutingForTest();
+    resetProviderSelectionCacheForTest();
+  }
+});
+
+test("an older capacity sample cannot replace a newer live quota signal", async () => {
+  const kv = new RoutingKv();
+  setKvForTest(kv as unknown as Kv);
+  resetCodexAccountRoutingForTest();
+  resetProviderSelectionCacheForTest();
+  try {
+    const now = 1_700_000_000_000;
+    const auth = harnessAuth(now);
+    const accountHash = await routingAccountIdHash(auth.account_id);
+    const credentialVersion = await codexCredentialVersion(auth);
+    const priorDeadline = now + 2 * DAY_MS;
+    const freshCapacityDeadline = now + 7 * DAY_MS;
+    await kv.set(CODEX_AUTH_POOL_KV_KEY, { accounts: [auth], updated_at_ms: now });
+    await kv.set(CODEX_ACCOUNT_ROUTING_KV_KEY, {
+      v: 2 as const,
+      updated_at_ms: now,
+      banked_reset_legacy_identity_unresolved: false,
+      slots: [
+        await routingSlot(auth, {
+          primary_used_percent: 100,
+          quota_blocked_until_ms: priorDeadline,
+          quota_block_source: "body_resets_at",
+          quota_blocked_classes: ["standard"],
+          quota_blocks_by_class: {
+            standard: {
+              blocked_until_ms: priorDeadline,
+              source: "body_resets_at",
+              legacy_fallback: false,
+              quota_signal_observed_at_ms: now + 10,
+              observed_reset_at_ms: priorDeadline,
+              observed_reset_at_is_stable: true,
+              banked_reset_generation_ambiguous: false,
+              banked_reset_recovery_probe_pending: false,
+            },
+          },
+          quota_signal_observed_at_ms: now + 10,
+          observed_reset_at_ms: priorDeadline,
+          observed_reset_at_is_stable: true,
+        }),
+      ],
+    });
+    const account: RoutingAccount = {
+      auth,
+      slot: 0,
+      accountIdHash: accountHash,
+      credentialVersion,
+      quotaHeadroom: 0,
+      probeRequired: false,
+      probeGeneration: null,
+      probeToken: null,
+      probeCircuit: null,
+      requestedModel: LUNA,
+    };
+    const observation = {
+      slot: 0,
+      account_id_hash: accountHash,
+      state: "available" as const,
+      source_observed_at_ms: now,
+      snapshot_at_ms: now,
+      windows: {
+        primary: { limit_window_seconds: WEEKLY_WINDOW_SECONDS, used_percent: 100, reset_at_ms: freshCapacityDeadline },
+        secondary: null,
+      },
+      additional_rate_limits: [],
+    };
+
+    assert.equal(await reconcileCapacityQuotaBlock(account, observation, now + 1), false);
+    const state = required(parseCodexAccountRoutingState(kv.values.get(key(CODEX_ACCOUNT_ROUTING_KV_KEY))), "routing state");
+    assert.equal(state.slots[0]?.quota_blocks_by_class?.standard?.blocked_until_ms, priorDeadline);
+    assert.equal(state.slots[0]?.quota_blocks_by_class?.standard?.observed_reset_at_ms, priorDeadline);
+  } finally {
+    setKvForTest(null);
+    resetCodexAccountRoutingForTest();
+    resetProviderSelectionCacheForTest();
+  }
+});
+
 test("a fresh stable 429 supersedes an absent observation so the reset fence can arm", async () => {
   const kv = new RoutingKv();
   setKvForTest(kv as unknown as Kv);
@@ -356,7 +563,7 @@ test("a capacity observation that is not fresh never fabricates a probe identity
   }
 });
 
-test("an overage-allowed account routes the capacity exhaustion as a bounded probe without materializing a block", async () => {
+test("an overage-allowed account serves capacity exhaustion without a reset probe lease", async () => {
   const kv = new RoutingKv();
   setKvForTest(kv as unknown as Kv);
   resetCodexAccountRoutingForTest();
@@ -384,8 +591,8 @@ test("an overage-allowed account routes the capacity exhaustion as a bounded pro
     const selected = await selectCodexRoutingAccountsStrong(singlePool, singlePool.accounts, now + 2, LUNA);
     assert.equal(selected.kind, "eligible");
     const probeAccount = selected.accounts[0];
-    assert.equal(probeAccount.probeRequired, true);
-    assert.equal(probeAccount.probeCircuit, "quota");
+    assert.equal(probeAccount.probeRequired, false);
+    assert.equal(probeAccount.probeCircuit, null);
     assert.equal(probeAccount.quotaHeadroom, 0);
     // The capacity-100% evidence must neither materialize nor block a class.
     const state = parseCodexAccountRoutingState(kv.values.get(key(CODEX_ACCOUNT_ROUTING_KV_KEY)));
@@ -394,7 +601,8 @@ test("an overage-allowed account routes the capacity exhaustion as a bounded pro
 
     const claimed = await claimCodexRoutingProbe(singlePool, probeAccount, now + 5);
     assert.ok(claimed);
-    assert.equal(claimed.probeCircuit, "quota");
+    assert.equal(claimed.probeRequired, false);
+    assert.equal(claimed.probeCircuit, null);
   } finally {
     setKvForTest(null);
     resetCodexAccountRoutingForTest();
@@ -464,7 +672,7 @@ test("one subscription's overage allowance never changes its sibling's blocked i
     assert.equal(selected.kind, "eligible");
     assert.equal(selected.accounts.length, 1);
     assert.equal(selected.accounts[0].auth.account_id, "one");
-    assert.equal(selected.accounts[0].probeRequired, true);
+    assert.equal(selected.accounts[0].probeRequired, false);
     assert.equal(selected.blockedAccounts.length, 1);
     assert.equal(selected.blockedAccounts[0].auth.account_id, "two");
     assert.equal(selected.blockedAccounts[0].quotaResetAtMs, resetAtMs);
