@@ -1,5 +1,5 @@
 use crate::{
-    host::{CatalogHost, CatalogProvider, CredentialPublication, ProviderBinding, unavailable},
+    host::{CatalogHost, CatalogProvider, CredentialPublication, unavailable},
     providers,
 };
 use gateway_core::{

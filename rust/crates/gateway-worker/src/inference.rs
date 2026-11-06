@@ -16,8 +16,11 @@ use crate::{
     },
 };
 use crate::{
-    inference_capture::Capture, inference_currentness::CurrentnessGuard, inference_early::Gate,
-    inference_local::Start, inference_source::NativeTurn,
+    inference_capture::Capture,
+    inference_currentness::CurrentnessGuard,
+    inference_early::Gate,
+    inference_local::Start,
+    inference_source::{NativeTurn, error_response},
 };
 use gateway_auth::types::{AuthMethod, AuthPrincipal};
 use gateway_core::{
@@ -439,12 +442,7 @@ impl Inference<'_> {
         let document = match parse_http_body(bytes).and_then(SourceRequestDocument::new) {
             Ok(document) => document,
             Err(error) => {
-                return crate::inference_source::error_response(
-                    error.into(),
-                    self.capture,
-                    &self.turn,
-                )
-                .await;
+                return error_response(error.into(), self.capture, &self.turn).await;
             }
         };
         self.turn.stream =
@@ -461,7 +459,7 @@ impl Inference<'_> {
                 .resolve_model(&ModelId::from_source(model), self.responses)
                 .await
             {
-                return crate::inference_source::error_response(error.into(), self.capture).await;
+                return error_response(error.into(), self.capture, &self.turn).await;
             }
         }
         let original = RequestContext {
@@ -504,8 +502,7 @@ impl Inference<'_> {
             Ok(Start::Response(response)) => return Ok(response),
             Ok(Start::Ordinary(session)) => session,
             Err(error) => {
-                return crate::inference_source::error_response(error, self.capture, &self.turn)
-                    .await;
+                return error_response(error, self.capture, &self.turn).await;
             }
         };
 
@@ -522,8 +519,7 @@ impl Inference<'_> {
                     .finish(Default::default())
                     .await
                     .map_err(|error| *error.error)?;
-                return crate::inference_source::error_response(error, self.capture, &self.turn)
-                    .await;
+                return error_response(error, self.capture, &self.turn).await;
             }
         };
         self.capture
@@ -603,8 +599,7 @@ impl Inference<'_> {
                     .finish(Default::default())
                     .await
                     .map_err(|error| *error.error)?;
-                return crate::inference_source::error_response(error, self.capture, &self.turn)
-                    .await;
+                return error_response(error, self.capture, &self.turn).await;
             }
         };
 
