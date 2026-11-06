@@ -10,6 +10,7 @@ members = [
   "crates/gateway-authority",
   "crates/gateway-admission",
   "crates/gateway-catalog-runtime",
+  "crates/gateway-provider-catalog-cache",
   "crates/gateway-auth",
   "crates/gateway-passport-session",
   "crates/gateway-admin",
@@ -65,6 +66,7 @@ gateway-providers = { path = "crates/gateway-providers" }
 gateway-authority = { path = "crates/gateway-authority" }
 gateway-admission = { path = "crates/gateway-admission" }
 gateway-catalog-runtime = { path = "crates/gateway-catalog-runtime" }
+gateway-provider-catalog-cache = { path = "crates/gateway-provider-catalog-cache" }
 gateway-capacity-recovery = { path = "crates/gateway-capacity-recovery" }
 gateway-auth = { path = "crates/gateway-auth" }
 gateway-passport-session = { path = "crates/gateway-passport-session" }

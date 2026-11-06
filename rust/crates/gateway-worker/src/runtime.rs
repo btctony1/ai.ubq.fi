@@ -498,7 +498,10 @@ async fn models_response(
             return catalog_response(response).map(Into::into);
         }
         let state = CatalogState::load(store, env, host, Rc::clone(context)).await?;
-        let response = state.native_models(store, request, version, now).await?;
+        let response = state
+            .service
+            .versioned_models(store, &state.host, version, conditional.as_deref())
+            .await?;
         return catalog_response(response).map(Into::into);
     }
     let state = CatalogState::load(store, env, host, Rc::clone(context)).await?;

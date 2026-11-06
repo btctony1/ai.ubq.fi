@@ -131,11 +131,11 @@ impl CatalogHost for Host {
     }
     async fn wait(&self, milliseconds: u32) -> Result<(), GatewayError> {
         if self.platform.cancellation.signal().aborted() {
-            return Err(unavailable("Catalog request was cancelled."));
+            return Err(GatewayError::new(499, "Cancelled", Some("cancelled")));
         }
         worker::Delay::from(std::time::Duration::from_millis(u64::from(milliseconds))).await;
         if self.platform.cancellation.signal().aborted() {
-            return Err(unavailable("Catalog request was cancelled."));
+            return Err(GatewayError::new(499, "Cancelled", Some("cancelled")));
         }
         Ok(())
     }

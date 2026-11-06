@@ -24,6 +24,7 @@ use gateway_core::{
     claude::ClaudeErrorEvidence,
     error::GatewayError,
     identity::{ApiKeyId, PrincipalId, RequestContext, RequestId},
+    model::ModelId,
     provider::UpstreamProvider,
 };
 use gateway_observability::replay_trace::{AttemptTrace, TraceTerminal};
@@ -429,7 +430,7 @@ impl Inference<'_> {
     async fn execute(
         mut self,
         bytes: &[u8],
-        catalog: CatalogState,
+        mut catalog: CatalogState,
         client_version: String,
         request_id: RequestId,
         local_compaction: bool,
@@ -452,6 +453,16 @@ impl Inference<'_> {
             let model =
                 gateway_core::source_serialization::member(document.original_source(), "model");
             gate.arm(self.turn.stream.as_ref(), model.as_ref());
+        }
+        if let Ok(gateway_schema::source_request::SourceModelRequest::Named(model)) =
+            document.model_request()
+        {
+            if let Err(error) = catalog
+                .resolve_model(&ModelId::from_source(model), self.responses)
+                .await
+            {
+                return crate::inference_source::error_response(error.into(), self.capture).await;
+            }
         }
         let original = RequestContext {
             request_id,

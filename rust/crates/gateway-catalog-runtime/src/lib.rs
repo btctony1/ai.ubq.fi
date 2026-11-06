@@ -3,12 +3,14 @@ pub mod admin;
 pub mod control;
 pub mod host;
 pub mod providers;
+mod request;
 pub mod state;
 mod versioned;
 
 use gateway_core::{
     error::GatewayError, query::QueryStore, source_json::SourceJson, source_serialization as source,
 };
+use gateway_provider_catalog_cache::observation;
 use gateway_schema::{catalog::ProviderCatalog, catalog_cache::CatalogResponse};
 use host::{
     CatalogFetch, CatalogHost, CatalogProvider, CredentialPublication, ProviderBinding, unavailable,
@@ -174,10 +176,11 @@ impl CatalogRuntime {
         public: bool,
         now: i64,
     ) -> Result<(), GatewayError> {
-        let Some(generation) = state::auth_generation(store).await? else {
-            return Ok(());
-        };
+        let generation = state::auth_generation(store).await?;
         let mut providers = publication.providers.keys().copied().collect::<Vec<_>>();
+        if !providers.contains(&CatalogProvider::Openrouter) {
+            providers.push(CatalogProvider::Openrouter);
+        }
         if public && !providers.contains(&CatalogProvider::Surplus) {
             providers.push(CatalogProvider::Surplus);
         }
@@ -206,15 +209,14 @@ impl CatalogRuntime {
             {
                 continue;
             }
-            let Some(mut snapshot) = state::load_provider_observation(
-                store,
-                &generation,
-                provider,
-                binding.as_ref(),
-                now,
-            )
-            .await?
-            else {
+            let Some(scope) = observation::scope(
+                provider.id(),
+                generation.as_deref(),
+                binding.as_ref().map(|b| b.identity.as_str()),
+            ) else {
+                continue;
+            };
+            let Some(mut snapshot) = observation::load(store, &scope, now).await? else {
                 continue;
             };
             snapshot.configured = publication.providers.contains_key(&provider);
@@ -458,24 +460,20 @@ impl CatalogRuntime {
             }
             entry.snapshot.clone()
         };
-        if discovered
-            && let Some(snapshot) = &snapshot
-            && let Some(generation) = state::auth_generation(store).await?
-        {
+        if discovered && let Some(snapshot) = &snapshot {
             let binding = match &identity {
                 MemoIdentity::Credential(binding) => Some(binding),
                 MemoIdentity::Anonymous => None,
             };
-            state::persist_provider_observation(
-                store,
-                &generation,
-                provider,
-                binding,
-                snapshot,
-                &host.unique_id(),
-                host.now_ms(),
-            )
-            .await?;
+            let generation = state::auth_generation(store).await?;
+            if let Some(scope) = observation::scope(
+                provider.id(),
+                generation.as_deref(),
+                binding.map(|b| b.identity.as_str()),
+            ) {
+                observation::persist(store, &scope, snapshot, &host.unique_id(), host.now_ms())
+                    .await?;
+            }
         }
         Ok(snapshot)
     }
@@ -607,16 +605,13 @@ impl CatalogRuntime {
             snapshot
         };
         if let Some(generation) = state::auth_generation(store).await? {
-            state::persist_provider_observation(
-                store,
-                &generation,
-                CatalogProvider::ClaudeCode,
-                Some(binding),
-                &snapshot,
-                &host.unique_id(),
-                host.now_ms(),
-            )
-            .await?;
+            let scope = observation::Scope {
+                generation: &generation,
+                provider: CatalogProvider::ClaudeCode.id(),
+                binding: Some(&binding.identity),
+            };
+            observation::persist(store, &scope, &snapshot, &host.unique_id(), host.now_ms())
+                .await?;
         }
         Ok(true)
     }
