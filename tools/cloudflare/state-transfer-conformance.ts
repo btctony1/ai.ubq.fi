@@ -24,14 +24,11 @@ const config :Workerd.Config = ( services = [
 };
 
 type Running = Readonly<{ origin: string; stop: () => Promise<void> }>;
-const start = async (directory: string, name: string, text: string): Promise<Running> => {
+const start = async (directory: string, name: string, text: string, port: number): Promise<Running> => {
   const workerd: unknown = createRequire(import.meta.url)("workerd");
   assert(isObject(workerd) && typeof workerd.default === "string", "The prepared native workerd binary is required.");
   const path = join(directory, `${name}.capnp`);
   await writeFile(path, text, { mode: 0o600, flag: "wx" });
-  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 503 }) });
-  const port = listener.port;
-  await listener.stop(true);
   const child = Bun.spawn([workerd.default, "serve", path, "--experimental", "--import-path", "/", "--socket-addr", `main=127.0.0.1:${port}`], {
     cwd: directory,
     stdout: Bun.file(join(directory, `${name}.stdout.log`)),
@@ -95,15 +92,20 @@ const run = async (): Promise<ObjectValue> => {
   await writeFile(stageReceipt, JSON.stringify(stage), { mode: 0o600, flag: "wx" });
   const state = join(directory, "state");
   const common = (origin: string): string[] => ["--origin", origin];
+  // One origin and one namespace identify the same target across every restart.
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 503 }) });
+  const port = listener.port;
+  assert(typeof port === "number");
+  await listener.stop(true);
 
   // Closed: no intent digest configured means the route does not exist for anyone.
-  let worker = await start(directory, "closed", config(workerJs, workerWasm, state, undefined));
+  let worker = await start(directory, "closed", config(workerJs, workerWasm, state, undefined), port);
   const closed = await probe(worker.origin, { authorization: `Bearer ${ADMIN}`, [INTENT_HEADER]: "x" });
   await worker.stop();
   assert.deepEqual(closed, { status: 404, code: "state_transfer_closed" });
 
   const importIntent = mintIntent({ kind: "import", captureId });
-  worker = await start(directory, "import", config(workerJs, workerWasm, state, importIntent.sha256));
+  worker = await start(directory, "import", config(workerJs, workerWasm, state, importIntent.sha256), port);
   const unauthenticated = await probe(worker.origin, { [INTENT_HEADER]: importIntent.token });
   const noIntent = await probe(worker.origin, { authorization: `Bearer ${ADMIN}` });
   const environment = { UOS_STATE_TRANSFER_ADMIN_TOKEN: ADMIN, UOS_STATE_TRANSFER_INTENT: importIntent.token };
@@ -119,7 +121,7 @@ const run = async (): Promise<ObjectValue> => {
 
   // Restart on the same Durable Object state with a separate export intent.
   const exportIntent = mintIntent({ kind: "export" });
-  worker = await start(directory, "export", config(workerJs, workerWasm, state, exportIntent.sha256));
+  worker = await start(directory, "export", config(workerJs, workerWasm, state, exportIntent.sha256), port);
   const wrongScope = await probe(worker.origin, { authorization: `Bearer ${ADMIN}`, [INTENT_HEADER]: exportIntent.token });
   const exported = await main(
     ["export", ...common(worker.origin), "--archive", join(directory, "archive.private.ndjson"), "--receipt", join(directory, "export.json")],
@@ -128,8 +130,20 @@ const run = async (): Promise<ObjectValue> => {
   await worker.stop();
   assert.equal(wrongScope.status, 403);
   const verified = await main(
-    ["verify", "--frames-receipt", stageReceipt, "--import-receipt", join(directory, "import.json"), "--export-receipt", join(directory, "export.json")],
-    {}
+    [
+      "verify",
+      ...common(worker.origin),
+      ...importArgs,
+      "--archive",
+      join(directory, "archive.private.ndjson"),
+      "--import-receipt",
+      join(directory, "import.json"),
+      "--export-receipt",
+      join(directory, "export.json"),
+    ],
+    {},
+    fetch,
+    JSON.stringify({ v: 1, import_intent: importIntent.token, export_intent: exportIntent.token })
   );
   return {
     v: 1,
