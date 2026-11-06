@@ -20,10 +20,12 @@ export default defineConfig({
       ASSETS: bindings.assets(),
       // Isolated rust-candidate direct-provider path. Production ai.ubq.fi keeps
       // its provider credentials on the VPS. This Worker never holds a Codex
-      // refresh token: UOS_NATIVE_CARRIER (optional) pins the HTTPS origin, the
-      // transport identity and the fixed renewal-owner registry of the one
-      // native owner that keeps Codex credential custody and performs refresh.
-      UOS_NATIVE_CARRIER: bindings.secret(),
+      // refresh token: the optional UOS_NATIVE_CARRIER secret pins the HTTPS
+      // origin, the transport identity and the fixed renewal-owner registry of
+      // the one native owner that keeps Codex credential custody and performs
+      // refresh. It is set by the operator with `cf workers secrets update`
+      // once that owner exists; the pinned cf CLI treats every declared secret
+      // as required, so it is deliberately not declared here.
       UOS_AI_TOKEN: bindings.secret(),
       DEEPSEEK_API_KEY: bindings.secret(),
       CEREBRAS_API_KEY: bindings.secret(),
