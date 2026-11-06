@@ -760,18 +760,17 @@ fn anonymous_surplus_is_public_data_without_an_inference_configuration() {
     assert_eq!(host.requests.borrow().len(), 1);
 }
 #[test]
-fn durable_provider_observations_hydrate_a_fresh_runtime_and_binding() {
+fn durable_provider_observations_hydrate_a_fresh_runtime_and_binding() -> TestResult {
     let store = Store::new();
     store.put(catalog_store::auth_generation_key(), "g", "g".into());
     let host = Host::new(&store);
     host.provider(CatalogProvider::Openrouter, "credential-a");
     host.queue(Outcome::json(json!({"data":[{"id":"openrouter-model"}]})));
     let first = CatalogRuntime::new();
-    let snapshot = run(first.refresh_provider(&store, &host, CatalogProvider::Openrouter, false))
-        .unwrap()
-        .unwrap();
+    let snapshot = run(first.refresh_provider(&store, &host, CatalogProvider::Openrouter, false))?
+        .ok_or("Provider observation was not published")?;
     assert_eq!(
-        snapshot.models[0].deserialize::<Value>().unwrap()["id"],
+        snapshot.models[0].deserialize::<Value>()?["id"],
         "openrouter-model"
     );
     assert_eq!(host.requests.borrow().len(), 1);
@@ -780,11 +779,9 @@ fn durable_provider_observations_hydrate_a_fresh_runtime_and_binding() {
     // for another discovery; durable observations must supply the rows.
     let fresh = CatalogRuntime::new();
     let publication = host.published.borrow().clone();
-    let state = run(fresh.load_state(&store, &publication, store.now.get())).unwrap();
+    let state = run(fresh.load_state(&store, &publication, store.now.get()))?;
     assert_eq!(
-        state.input.rows("openrouter")[0]
-            .deserialize::<Value>()
-            .unwrap()["id"],
+        state.input.rows("openrouter")[0].deserialize::<Value>()?["id"],
         "openrouter-model"
     );
     assert_eq!(host.requests.borrow().len(), 1);
@@ -793,7 +790,7 @@ fn durable_provider_observations_hydrate_a_fresh_runtime_and_binding() {
     host.provider(CatalogProvider::Openrouter, "credential-b");
     let rotated = CatalogRuntime::new();
     let publication = host.published.borrow().clone();
-    let state = run(rotated.load_state(&store, &publication, store.now.get())).unwrap();
+    let state = run(rotated.load_state(&store, &publication, store.now.get()))?;
     assert!(state.input.rows("openrouter").is_empty());
 
     // Public OpenRouter metadata is independent of the Codex catalog generation.
@@ -801,8 +798,9 @@ fn durable_provider_observations_hydrate_a_fresh_runtime_and_binding() {
     store.put(catalog_store::auth_generation_key(), "g2", "g2".into());
     let rotated_generation = CatalogRuntime::new();
     let publication = host.published.borrow().clone();
-    let state = run(rotated_generation.load_state(&store, &publication, store.now.get())).unwrap();
+    let state = run(rotated_generation.load_state(&store, &publication, store.now.get()))?;
     assert!(!state.input.rows("openrouter").is_empty());
+    Ok(())
 }
 
 #[test]
