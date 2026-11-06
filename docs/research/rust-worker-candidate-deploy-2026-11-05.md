@@ -6,12 +6,16 @@ Owner-authorized candidate deployment of the Rust gateway to Cloudflare Workers,
 
 Both builds ran on the VPS (Linux ARM64) with `ops/rust-worker-build.sh` under the task-local toolchain recorded in the promotion runbook addendum, with all three pinned tool overrides honoured and no downloads. Deployments used `ops/rust-worker-deploy.sh`, which validates the receipt against the committed tree and runs `cf deploy --prebuilt`.
 
-| Source SHA                                 | Receipt SHA-256  | `index_bg.wasm` SHA-256 | Upload (gzip)          | Version ID  |
-| ------------------------------------------ | ---------------- | ----------------------- | ---------------------- | ----------- |
-| `f847badb8867338881e5d9db86c61d8f9a1de4f2` | `606b061a…c833e` | `286af7a0…f531`         | 12507.75 KiB (4088.64) | `5a7fc560…` |
-| `70289ae3433aa64d954d7e5a0b2b87144b8ba7c3` | `7e1303c7…59dc`  | `3ce7d342…3251`         | 12508.41 KiB (4089.17) | `8132705b…` |
+| Source SHA                                 | Receipt SHA-256   | `index_bg.wasm` SHA-256 | Upload (gzip)                                                                                           | Version ID  |
+| ------------------------------------------ | ----------------- | ----------------------- | ------------------------------------------------------------------------------------------------------- | ----------- |
+| `f847badb8867338881e5d9db86c61d8f9a1de4f2` | `606b061a…c833e`  | `286af7a0…f531`         | 12507.75 KiB (4088.64)                                                                                  | `5a7fc560…` |
+| `70289ae3433aa64d954d7e5a0b2b87144b8ba7c3` | `7e1303c7…59dc`   | `3ce7d342…3251`         | 12508.41 KiB (4089.17)                                                                                  | `8132705b…` |
+| `50f802e7f99eeff5716aba11519e110f0e4ca91a` | `a4a3cd6a…9fb9b7` | `46408d57…8cdc`         | not deployed: the config at that SHA declared `UOS_NATIVE_CARRIER`, which the cf CLI treats as required | none        |
+| `b588420dc1275ac1f7548a6932a5e63330751cea` | `4cb1c25d…8944f`  | `99a3e146…7f53`         | 12360.86 KiB (4047.56)                                                                                  | `cb825fed…` |
 
 The 4.09 MB gzipped artifact uploaded and deployed, so the account's Workers plan accepts it. Worker startup time reported by Cloudflare: 7 ms.
+
+Between the cloud agent's deployments, the owner's local Codex session deployed `405b5bda0e290792196e895921e70569101f1ccd` (the `rust-migration` tip after PR #1362) to the same Worker; the cloud agent's `b588420` deployment supersedes it.
 
 ## Secrets
 
