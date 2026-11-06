@@ -454,13 +454,11 @@ impl Inference<'_> {
         }
         if let Ok(gateway_schema::source_request::SourceModelRequest::Named(model)) =
             document.model_request()
-        {
-            if let Err(error) = catalog
+            && let Err(error) = catalog
                 .resolve_model(&ModelId::from_source(model), self.responses)
                 .await
-            {
-                return error_response(error.into(), self.capture, &self.turn).await;
-            }
+        {
+            return error_response(error.into(), self.capture, &self.turn).await;
         }
         let original = RequestContext {
             request_id,
