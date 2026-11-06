@@ -23,6 +23,8 @@ use std::{
     sync::Arc,
     task::{Context, Poll, Waker},
 };
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
 fn run<T>(future: impl Future<Output = T>) -> T {
     let mut context = Context::from_waker(Waker::noop());
     let mut future = std::pin::pin!(future);
@@ -113,30 +115,31 @@ impl CatalogHost for Host {
             }
         ));
         self.requests.set(self.requests.get() + 1);
-        self.replies
-            .borrow_mut()
-            .pop_front()
-            .expect("only one discovery is permitted")
+        self.replies.borrow_mut().pop_front().ok_or_else(|| {
+            GatewayError::unavailable(
+                "Unexpected additional discovery",
+                "fixture_unexpected_discovery",
+            )
+        })?
     }
 }
 fn reply() -> Result<CatalogFetchResponse, GatewayError> {
     Ok(CatalogFetchResponse::json(200,json!({"data":[{"id":"vendor/model","architecture":{"input_modalities":["text"],"output_modalities":["text"]}}]}).to_string()))
 }
-fn input(runtime: &CatalogRuntime, store: &Store, host: &Host) -> CatalogInput {
-    run(runtime.load_state(store, &host.publication, host.now_ms()))
-        .unwrap()
-        .input
+fn input(
+    runtime: &CatalogRuntime,
+    store: &Store,
+    host: &Host,
+) -> Result<CatalogInput, GatewayError> {
+    run(runtime.load_state(store, &host.publication, host.now_ms())).map(|state| state.input)
 }
 #[test]
-fn cold_empty_codex_request_waits_once_and_a_new_runtime_reloads_without_codex_generation() {
+fn cold_empty_codex_request_waits_once_and_a_new_runtime_reloads_without_codex_generation()
+-> TestResult {
     let (store, host, runtime) = (Store::default(), Host::new(reply()), CatalogRuntime::new());
     assert!(host.publication.codex_accounts.is_empty());
-    assert!(
-        run(store.read(&catalog_store::auth_generation_key()))
-            .unwrap()
-            .is_none()
-    );
-    let cold = input(&runtime, &store, &host);
+    assert!(run(store.read(&catalog_store::auth_generation_key()))?.is_none());
+    let cold = input(&runtime, &store, &host)?;
     assert!(cold.rows("openrouter").is_empty());
     let loaded = run(runtime.resolve_request_model(
         &store,
@@ -144,17 +147,12 @@ fn cold_empty_codex_request_waits_once_and_a_new_runtime_reloads_without_codex_g
         &cold,
         &ModelId::from_scalar("vendor/model"),
         true,
-    ))
-    .unwrap()
-    .unwrap();
+    ))?
+    .ok_or("Cold OpenRouter resolution did not reload the catalog")?;
     assert_eq!(host.requests.get(), 1);
     assert_eq!(loaded.input.rows("openrouter").len(), 1);
-    assert!(
-        run(store.read(&catalog_store::auth_generation_key()))
-            .unwrap()
-            .is_none()
-    );
-    let fresh = input(&CatalogRuntime::new(), &store, &host);
+    assert!(run(store.read(&catalog_store::auth_generation_key()))?.is_none());
+    let fresh = input(&CatalogRuntime::new(), &store, &host)?;
     assert_eq!(fresh.rows("openrouter"), loaded.input.rows("openrouter"));
     assert!(
         run(runtime.resolve_request_model(
@@ -163,16 +161,17 @@ fn cold_empty_codex_request_waits_once_and_a_new_runtime_reloads_without_codex_g
             &loaded.input,
             &ModelId::from_scalar("other/model"),
             true
-        ))
-        .unwrap()
+        ))?
         .is_none()
     );
     assert_eq!(host.requests.get(), 1);
+    Ok(())
 }
 #[test]
-fn disabled_unconfigured_earlier_direct_and_synthetic_requests_do_not_discover_openrouter() {
+fn disabled_unconfigured_earlier_direct_and_synthetic_requests_do_not_discover_openrouter()
+-> TestResult {
     let (store, host, runtime) = (Store::default(), Host::new(reply()), CatalogRuntime::new());
-    let cold = input(&runtime, &store, &host);
+    let cold = input(&runtime, &store, &host)?;
     let mut disabled = cold.clone();
     disabled.selection =
         ProviderSelection::normalize(&json!({"provider_ids":["deepseek"],"updated_at_ms":1}));
@@ -180,7 +179,7 @@ fn disabled_unconfigured_earlier_direct_and_synthetic_requests_do_not_discover_o
     unconfigured
         .providers
         .get_mut("openrouter")
-        .unwrap()
+        .ok_or("Missing fixture provider")?
         .configured = false;
     for (input, model) in [
         (&disabled, "vendor/model"),
@@ -197,15 +196,15 @@ fn disabled_unconfigured_earlier_direct_and_synthetic_requests_do_not_discover_o
                 input,
                 &ModelId::from_scalar(model),
                 true
-            ))
-            .unwrap()
+            ))?
             .is_none()
         );
     }
     assert_eq!(host.requests.get(), 0);
+    Ok(())
 }
 #[test]
-fn discovery_failure_and_cancellation_do_not_create_codex_generation_or_pool() {
+fn discovery_failure_and_cancellation_do_not_create_codex_generation_or_pool() -> TestResult {
     for status in [499, 502] {
         let (store, runtime) = (Store::default(), CatalogRuntime::new());
         let host = Host::new(Err(GatewayError::new(
@@ -213,7 +212,7 @@ fn discovery_failure_and_cancellation_do_not_create_codex_generation_or_pool() {
             "fixture discovery failure",
             Some("fixture"),
         )));
-        let cold = input(&runtime, &store, &host);
+        let cold = input(&runtime, &store, &host)?;
         let error = run(runtime.resolve_request_model(
             &store,
             &host,
@@ -222,64 +221,53 @@ fn discovery_failure_and_cancellation_do_not_create_codex_generation_or_pool() {
             true,
         ))
         .err()
-        .unwrap();
+        .ok_or("Discovery unexpectedly succeeded")?;
         assert_eq!(error.status, if status == 499 { 499 } else { 503 });
         assert_eq!(host.requests.get(), 1);
-        assert!(
-            run(store.read(&catalog_store::auth_generation_key()))
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            run(store.read(&gateway_authority::keys::pool()))
-                .unwrap()
-                .is_none()
-        );
+        assert!(run(store.read(&catalog_store::auth_generation_key()))?.is_none());
+        assert!(run(store.read(&gateway_authority::keys::pool()))?.is_none());
     }
+    Ok(())
 }
 
 #[test]
-fn observations_keep_binding_and_non_openrouter_generation_fences() {
+fn observations_keep_binding_and_non_openrouter_generation_fences() -> TestResult {
     use gateway_provider_catalog_cache::observation;
     use gateway_schema::catalog::ProviderCatalog;
     let store = Store::default();
     let now = 1_800_000_000_000;
     let snapshot = ProviderCatalog {
-        models: vec![
-            gateway_core::source_json::SourceJson::parse(r#"{"id":"vendor/model"}"#).unwrap(),
-        ],
+        models: vec![gateway_core::source_json::SourceJson::parse(
+            r#"{"id":"vendor/model"}"#,
+        )?],
         updated_at_ms: Some(now),
         available: true,
         ..Default::default()
     };
-    let public = observation::scope("openrouter", None, Some("binding-a")).unwrap();
-    run(observation::persist(&store, &public, &snapshot, "r1", now)).unwrap();
-    let after_codex_change =
-        observation::scope("openrouter", Some("new-codex"), Some("binding-a")).unwrap();
+    let public = observation::scope("openrouter", None, Some("binding-a"))
+        .ok_or("Missing fixture observation scope")?;
+    run(observation::persist(&store, &public, &snapshot, "r1", now))?;
+    let after_codex_change = observation::scope("openrouter", Some("new-codex"), Some("binding-a"))
+        .ok_or("Missing fixture observation scope")?;
     assert_eq!(
-        run(observation::load(&store, &after_codex_change, now)).unwrap(),
+        run(observation::load(&store, &after_codex_change, now))?,
         Some(snapshot.clone())
     );
-    let rotated = observation::scope("openrouter", None, Some("binding-b")).unwrap();
-    assert!(
-        run(observation::load(&store, &rotated, now))
-            .unwrap()
-            .is_none()
-    );
+    let rotated = observation::scope("openrouter", None, Some("binding-b"))
+        .ok_or("Missing fixture observation scope")?;
+    assert!(run(observation::load(&store, &rotated, now))?.is_none());
     assert!(observation::scope("lithos", None, Some("binding-a")).is_none());
-    let credential = observation::scope("lithos", Some("generation-a"), Some("binding-a")).unwrap();
+    let credential = observation::scope("lithos", Some("generation-a"), Some("binding-a"))
+        .ok_or("Missing fixture observation scope")?;
     run(observation::persist(
         &store,
         &credential,
         &snapshot,
         "r2",
         now,
-    ))
-    .unwrap();
-    let changed = observation::scope("lithos", Some("generation-b"), Some("binding-a")).unwrap();
-    assert!(
-        run(observation::load(&store, &changed, now))
-            .unwrap()
-            .is_none()
-    );
+    ))?;
+    let changed = observation::scope("lithos", Some("generation-b"), Some("binding-a"))
+        .ok_or("Missing fixture observation scope")?;
+    assert!(run(observation::load(&store, &changed, now))?.is_none());
+    Ok(())
 }

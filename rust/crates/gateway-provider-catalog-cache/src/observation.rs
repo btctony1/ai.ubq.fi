@@ -31,7 +31,7 @@ pub fn scope<'a>(
     })
 }
 fn unavailable(message: &str) -> GatewayError {
-    GatewayError::unavailable(message, "codex_catalog_unavailable")
+    GatewayError::new(502, message, Some("codex_catalog_unavailable"))
 }
 fn key(scope: &Scope<'_>) -> RecordKey {
     let identity = scope
