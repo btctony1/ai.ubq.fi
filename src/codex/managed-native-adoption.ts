@@ -82,6 +82,69 @@ export const planManagedNativeAdoption = async (
   };
 };
 
+/** Already-owned primary only. This never enters the refresh-capable runtime path. */
+export const planOwnedPrimaryNativeAdoption = async (
+  value: unknown,
+  raw: unknown,
+  selection: ManagedAdoptionSelection,
+  nowMs: number
+): Promise<ManagedAdoptionPlan> => {
+  const parsed = parseCodexAuthPool(value);
+  if (
+    !parsed ||
+    !isDeepStrictEqual(parsed, value) ||
+    parsed.accounts.length !== 2 ||
+    selection.slot !== 1 ||
+    !/^[a-f0-9]{64}$/.test(selection.accountSha256) ||
+    !isAbsolute(selection.home) ||
+    resolve(selection.home) !== selection.home ||
+    !Number.isSafeInteger(nowMs)
+  )
+    refuse("owned_primary_source_invalid");
+  const pool = value as CodexAuthPoolState;
+  const previous = pool.accounts[0];
+  const owner = previous.native_owner;
+  const accountHash = createHash("sha256").update(previous.account_id).digest("hex");
+  if (
+    accountHash !== selection.accountSha256 ||
+    owner?.codex_home !== selection.home ||
+    owner.auth_mode !== undefined ||
+    owner.chatgpt_user_id !== undefined ||
+    owner.generation_hash !== (await nativeCodexCredentialGeneration(previous))
+  )
+    refuse("owned_primary_fence_changed");
+  if (!isRecord(raw) || (raw.auth_mode !== undefined && raw.auth_mode !== "chatgpt") || !isRecord(raw.tokens)) refuse("managed_document_required");
+  const auth = parseCodexAuthFromAuthJson(raw);
+  const refreshedAt = typeof raw.last_refresh === "string" ? raw.last_refresh : null;
+  if (
+    !auth?.refresh_token ||
+    auth.account_id !== previous.account_id ||
+    (raw.last_refresh !== undefined && raw.last_refresh !== null && (!refreshedAt || !Number.isFinite(Date.parse(refreshedAt))))
+  )
+    refuse("native_document_invalid");
+  const normalized: CodexAuthState = { ...auth, updated_at_ms: nowMs };
+  verifyNativeProgress(previous, { auth: normalized, email: null, refreshedAt }, true, nowMs);
+  const generationSha256 = await nativeCodexCredentialGeneration(normalized);
+  const next = upsertCodexAuthAccount(pool, {
+    ...normalized,
+    native_owner: {
+      codex_home: selection.home,
+      generation_hash: generationSha256,
+      ...(refreshedAt ? { native_refreshed_at: refreshedAt } : {}),
+    },
+  });
+  if (next?.accounts.length !== 2 || !isDeepStrictEqual(next.accounts[1], pool.accounts[1])) refuse("sibling_changed");
+  const planned = { ...next, updated_at_ms: nowMs };
+  return {
+    pool: planned,
+    beforeSha256: managedAdoptionHash(pool),
+    afterSha256: managedAdoptionHash(planned),
+    accountSha256: accountHash,
+    generationSha256,
+    accessExpiresAtMs: getJwtExpMs(normalized.access_token) ?? refuse("expiry_missing"),
+  };
+};
+
 export type ManagedAdoptionSnapshot = Readonly<{ pool: unknown; versionstamp: string }>;
 export type ManagedAdoptionExpectation = Readonly<{ poolVersionstamp: string; poolSha256: string; nativeSha256: string }>;
 /** Constructor-owned adapter only: no caller-selected key, path or stopped boolean exists in this protocol. */
@@ -107,18 +170,19 @@ export type ManagedAdoptionReceipt = Readonly<{
   access_expires_at_ms: number;
 }>;
 
-export const executeManagedNativeAdoption = async (
+const executeAdoptionWithPlanner = async (
   port: ManagedAdoptionPort,
   selection: ManagedAdoptionSelection,
   expected: ManagedAdoptionExpectation,
-  nowMs: number
+  nowMs: number,
+  planner: typeof planManagedNativeAdoption
 ): Promise<ManagedAdoptionReceipt> => {
   await port.assertOwned();
   const source = await port.read();
   if (source.versionstamp !== expected.poolVersionstamp || managedAdoptionHash(source.pool) !== expected.poolSha256) refuse("source_changed");
   const native = await port.native();
   if (native.sha256 !== expected.nativeSha256) refuse("home_changed");
-  const plan = await planManagedNativeAdoption(source.pool, native.raw, selection, nowMs);
+  const plan = await planner(source.pool, native.raw, selection, nowMs);
   await port.proveNative(native.raw);
   await port.backup(source);
   await port.intent(plan);
@@ -152,3 +216,17 @@ export const executeManagedNativeAdoption = async (
     access_expires_at_ms: plan.accessExpiresAtMs,
   };
 };
+
+export const executeManagedNativeAdoption = (
+  port: ManagedAdoptionPort,
+  selection: ManagedAdoptionSelection,
+  expected: ManagedAdoptionExpectation,
+  nowMs: number
+): Promise<ManagedAdoptionReceipt> => executeAdoptionWithPlanner(port, selection, expected, nowMs, planManagedNativeAdoption);
+
+export const executeOwnedPrimaryNativeAdoption = (
+  port: ManagedAdoptionPort,
+  selection: ManagedAdoptionSelection,
+  expected: ManagedAdoptionExpectation,
+  nowMs: number
+): Promise<ManagedAdoptionReceipt> => executeAdoptionWithPlanner(port, selection, expected, nowMs, planOwnedPrimaryNativeAdoption);

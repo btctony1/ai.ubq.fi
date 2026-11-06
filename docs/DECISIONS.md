@@ -6,6 +6,12 @@ higher authority.
 
 Provider routing decisions are maintained separately in `docs/provider-decision-journal.md`.
 
+## Full-pool adoption separates owned primary and unowned secondary - 2026-11-06
+
+The source-only extension adds a distinct already-owned-primary planner that requires the current source owner/home/physical generation and strict usable native progress. It never calls the refresh-capable runtime entry or retries a CAS. The existing unowned-secondary guards remain unchanged. Two fixed prepared account/home bindings may share one actual deployment lease through a private active token that is neither exported nor serialized; foreign, inactive, duplicate and cross-source members are refused.
+
+Primary must have a positively verified committed/reconciled readback before secondary can run. Secondary's pool revision and hash come from that accepted primary readback, while its native-file fence remains independently bound. Both fences are revalidated before completion. Two sequential CAS operations are not one atomic transaction: a later failure records partial recovery and retains current custody, never restores the stale original pool. This authorizes source and synthetic tests only; actual privileged windows, credentials and service/Worker changes retain their separate acceptance gates.
+
 ## Managed native adoption preserves one stopped-source auth-pool lifetime - 2026-11-06
 
 The source-only managed adoption planner and transaction protocol reconcile one already-existing secondary account with its independently verified newer managed native generation. They preserve the sibling, account order and all state outside the auth-pool key, require a private backup and write-ahead intent before exactly one version-fenced CAS, re-read the resulting state and reconcile an unknown outcome without another mutation. They perform no credential refresh or upstream inference. Existing strict staging custody equality and physical-native versus access-projection generations remain unchanged.
