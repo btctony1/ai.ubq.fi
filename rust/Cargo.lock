@@ -963,6 +963,7 @@ dependencies = [
  "gateway-core",
  "gateway-native",
  "gateway-providers",
+ "gateway-provider-catalog-cache",
  "gateway-publication-policy",
  "gateway-routing-runtime-test-support",
  "gateway-schema",
@@ -1211,6 +1212,16 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "gateway-provider-catalog-cache"
+version = "0.1.0"
+dependencies = [
+ "gateway-core",
+ "gateway-schema",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -796,13 +796,13 @@ fn durable_provider_observations_hydrate_a_fresh_runtime_and_binding() {
     let state = run(rotated.load_state(&store, &publication, store.now.get())).unwrap();
     assert!(state.input.rows("openrouter").is_empty());
 
-    // A new catalog auth generation must not reuse the old observation.
+    // Public OpenRouter metadata is independent of the Codex catalog generation.
     host.provider(CatalogProvider::Openrouter, "credential-a");
     store.put(catalog_store::auth_generation_key(), "g2", "g2".into());
     let rotated_generation = CatalogRuntime::new();
     let publication = host.published.borrow().clone();
     let state = run(rotated_generation.load_state(&store, &publication, store.now.get())).unwrap();
-    assert!(state.input.rows("openrouter").is_empty());
+    assert!(!state.input.rows("openrouter").is_empty());
 }
 
 #[test]

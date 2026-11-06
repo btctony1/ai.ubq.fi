@@ -3,13 +3,10 @@ use crate::{
     authority::RemoteAuthorityStore, catalog_host::Host, host::PlatformHost, storage::now_ms,
 };
 use gateway_catalog_runtime::{CatalogRuntime, admin::AdminCatalogResponse, host::CatalogHost};
-use gateway_core::{error::GatewayError, source_json::SourceJson};
-use gateway_schema::{
-    catalog::CatalogInput, catalog_cache::CatalogResponse,
-    source_request::error::SourceRequestError,
-};
+use gateway_core::{error::GatewayError, model::ModelId, source_json::SourceJson};
+use gateway_schema::{catalog::CatalogInput, source_request::error::SourceRequestError};
 use std::rc::Rc;
-use worker::{Context, Env, Request};
+use worker::{Context, Env};
 
 pub const DIRECT_PROVIDERS: &[(&str, &str)] = &[
     ("deepseek", "DEEPSEEK_API_KEY"),
@@ -87,8 +84,8 @@ pub fn schedule_warm(
 pub struct CatalogState {
     pub input: CatalogInput,
     pub runtime: Option<SourceJson>,
-    service: CatalogRuntime,
-    host: Host,
+    pub(crate) service: CatalogRuntime,
+    pub(crate) host: Host,
 }
 
 impl CatalogState {
@@ -109,18 +106,11 @@ impl CatalogState {
         let state = service.load_state(store, &publication, now_ms()?).await?;
         for provider in state.refresh_due {
             let service = service.clone();
-            let host = host.clone();
-            let store = store.clone();
-            context.wait_until(async move {
-                if let Err(error) = service
-                    .refresh_provider(&store, &host, provider, false)
+            host.background("Catalog refresh", move |host| async move {
+                service
+                    .refresh_provider(&host.store, &host, provider, false)
                     .await
-                {
-                    worker::console_error!(
-                        "Catalog refresh remains unavailable: {}",
-                        error.envelope.error.message
-                    );
-                }
+                    .map(drop)
             });
         }
         Ok(Self {
@@ -131,23 +121,19 @@ impl CatalogState {
         })
     }
 
-    pub async fn native_models(
-        &self,
-        store: &RemoteAuthorityStore,
-        request: &Request,
-        version: &str,
-        _now: i64,
-    ) -> Result<CatalogResponse, GatewayError> {
-        let conditional = request.headers().get("if-none-match").map_err(|_| {
-            GatewayError::new(
-                400,
-                "Invalid conditional catalog header.",
-                Some("invalid_request_error"),
-            )
-        })?;
-        self.service
-            .versioned_models(store, &self.host, version, conditional.as_deref())
-            .await
+    pub async fn resolve_model(
+        &mut self,
+        model: &ModelId,
+        responses: bool,
+    ) -> Result<(), GatewayError> {
+        if let Some(state) = self
+            .service
+            .resolve_request_model(&self.host.store, &self.host, &self.input, model, responses)
+            .await?
+        {
+            (self.input, self.runtime) = (state.input, state.runtime);
+        }
+        Ok(())
     }
 }
 
