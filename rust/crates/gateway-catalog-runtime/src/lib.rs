@@ -10,7 +10,10 @@ mod versioned;
 use gateway_core::{
     error::GatewayError, query::QueryStore, source_json::SourceJson, source_serialization as source,
 };
-use gateway_provider_catalog_cache::observation;
+use gateway_provider_catalog_cache::{
+    memo::{DiscoveryMemo, MemoEntry, PendingGuard},
+    observation,
+};
 use gateway_schema::{catalog::ProviderCatalog, catalog_cache::CatalogResponse};
 use host::{
     CatalogFetch, CatalogHost, CatalogProvider, CredentialPublication, ProviderBinding, unavailable,
@@ -35,38 +38,16 @@ struct Discovery {
     force: bool,
     coalesce: bool,
 }
-#[derive(Clone)]
-struct MemoEntry {
-    identity: MemoIdentity,
-    snapshot: Option<ProviderCatalog>,
-    expires_ms: i64,
-    retry_ms: i64,
-    published_generation: u64,
-    shared_request: Option<u64>,
-}
-#[derive(Default)]
-struct Memo {
-    entries: BTreeMap<CatalogProvider, MemoEntry>,
-    next_request: u64,
-}
-/// Dropping a cancelled request releases only that request's memo ownership.
-struct PendingGuard {
-    memo: Rc<RefCell<Memo>>,
-    provider: CatalogProvider,
-    request: u64,
-}
-impl Drop for PendingGuard {
-    fn drop(&mut self) {
-        if let Some(entry) = self.memo.borrow_mut().entries.get_mut(&self.provider)
-            && entry.shared_request == Some(self.request)
-        {
-            entry.shared_request = None;
-        }
+fn mark_stale_claude(entry: &mut MemoEntry<MemoIdentity>) {
+    if let Some(snapshot) = &mut entry.snapshot {
+        providers::withdraw_stale_reasoning(&mut snapshot.models);
+        snapshot.stale = true;
     }
+    entry.expires_ms = entry.retry_ms;
 }
 #[derive(Clone, Default)]
 pub struct CatalogRuntime {
-    memo: Rc<RefCell<Memo>>,
+    memo: Rc<RefCell<DiscoveryMemo<CatalogProvider, MemoIdentity>>>,
     source_string_collator:
         Option<std::sync::Arc<dyn gateway_schema::aliases::SourceStringCollator>>,
 }
@@ -322,23 +303,12 @@ impl CatalogRuntime {
         for _ in 0..401 {
             let pending = {
                 let mut memo = self.memo.borrow_mut();
-                let entry = memo.entries.entry(provider).or_insert_with(|| MemoEntry {
-                    identity: identity.clone(),
-                    snapshot: None,
-                    expires_ms: 0,
-                    retry_ms: 0,
-                    published_generation: 0,
-                    shared_request: None,
-                });
+                let entry = memo
+                    .entries
+                    .entry(provider)
+                    .or_insert_with(|| MemoEntry::empty(identity.clone()));
                 if entry.identity != identity {
-                    *entry = MemoEntry {
-                        identity: identity.clone(),
-                        snapshot: None,
-                        expires_ms: 0,
-                        retry_ms: 0,
-                        published_generation: 0,
-                        shared_request: None,
-                    };
+                    *entry = MemoEntry::empty(identity.clone());
                 }
                 if !force && (entry.expires_ms > now || entry.retry_ms > now) {
                     return Ok(entry.snapshot.clone());
@@ -396,6 +366,35 @@ impl CatalogRuntime {
             request,
         };
         let result = self.discover(host, provider, &identity).await;
+        self.complete_discovery(
+            store,
+            host,
+            Discovery {
+                provider,
+                identity,
+                publication,
+                force,
+                coalesce,
+            },
+            request,
+            result,
+        )
+        .await
+    }
+    async fn complete_discovery<S: QueryStore, H: CatalogHost>(
+        &self,
+        store: &S,
+        host: &H,
+        discovery: Discovery,
+        request: u64,
+        result: Result<Vec<SourceJson>, GatewayError>,
+    ) -> Result<Option<ProviderCatalog>, GatewayError> {
+        let Discovery {
+            provider,
+            identity,
+            publication,
+            ..
+        } = discovery;
         if let MemoIdentity::Credential(binding) = &identity {
             let latest = host.publication().await?;
             if latest.binding(provider).as_ref() != Some(binding)
@@ -450,11 +449,7 @@ impl CatalogRuntime {
                     }
                     entry.retry_ms = host.now_ms().saturating_add(PROVIDER_RETRY_MS);
                     if provider == CatalogProvider::ClaudeCode {
-                        if let Some(snapshot) = &mut entry.snapshot {
-                            providers::withdraw_stale_reasoning(&mut snapshot.models);
-                            snapshot.stale = true;
-                        }
-                        entry.expires_ms = entry.retry_ms;
+                        mark_stale_claude(entry);
                     }
                 }
             }

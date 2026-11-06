@@ -5,7 +5,7 @@
     "gateway-admin-runtime": 5389,
     "gateway-auth": 8282,
     "gateway-authority": 32011,
-    "gateway-catalog-runtime": 4123,
+    "gateway-catalog-runtime": 4118,
     "gateway-claude-runtime": 2210,
     "gateway-compaction": 3168,
     "gateway-core": 4749,

@@ -70,13 +70,25 @@ impl QueryStore for Store {
 }
 struct Host {
     requests: Cell<usize>,
+    blocked: Cell<bool>,
     publication: CredentialPublication,
     replies: RefCell<VecDeque<Result<CatalogFetchResponse, GatewayError>>>,
 }
 impl Host {
+    async fn released(&self) {
+        std::future::poll_fn(|_| {
+            if self.blocked.get() {
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        })
+        .await;
+    }
     fn new(reply: Result<CatalogFetchResponse, GatewayError>) -> Self {
         Self {
             requests: Cell::new(0),
+            blocked: Cell::new(false),
             publication: CredentialPublication {
                 providers: BTreeMap::from([(
                     CatalogProvider::Openrouter,
@@ -101,6 +113,7 @@ impl CatalogHost for Host {
         format!("fixture-{}", self.requests.get())
     }
     async fn wait(&self, _: u32) -> Result<(), GatewayError> {
+        self.released().await;
         Ok(())
     }
     async fn publication(&self) -> Result<CredentialPublication, GatewayError> {
@@ -115,6 +128,7 @@ impl CatalogHost for Host {
             }
         ));
         self.requests.set(self.requests.get() + 1);
+        self.released().await;
         self.replies.borrow_mut().pop_front().ok_or_else(|| {
             GatewayError::unavailable(
                 "Unexpected additional discovery",
@@ -269,5 +283,43 @@ fn observations_keep_binding_and_non_openrouter_generation_fences() -> TestResul
     let changed = observation::scope("lithos", Some("generation-b"), Some("binding-a"))
         .ok_or("Missing fixture observation scope")?;
     assert!(run(observation::load(&store, &changed, now))?.is_none());
+    Ok(())
+}
+
+#[test]
+fn concurrent_requests_share_one_provider_discovery() -> TestResult {
+    let (store, host, runtime) = (Store::default(), Host::new(reply()), CatalogRuntime::new());
+    host.blocked.set(true);
+    let mut first =
+        Box::pin(runtime.refresh_provider(&store, &host, CatalogProvider::Openrouter, false));
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(first.as_mut().poll(&mut context).is_pending());
+    let mut second =
+        Box::pin(runtime.refresh_provider(&store, &host, CatalogProvider::Openrouter, false));
+    assert!(second.as_mut().poll(&mut context).is_pending());
+    assert_eq!(host.requests.get(), 1);
+    host.blocked.set(false);
+    let first = run(first)?.ok_or("First discovery did not complete")?;
+    let second = run(second)?.ok_or("Shared discovery did not complete")?;
+    assert_eq!(first.models, second.models);
+    assert_eq!(host.requests.get(), 1);
+    Ok(())
+}
+
+#[test]
+fn cancelled_pending_discovery_releases_its_singleflight() -> TestResult {
+    let (store, host, runtime) = (Store::default(), Host::new(reply()), CatalogRuntime::new());
+    host.blocked.set(true);
+    let mut pending =
+        Box::pin(runtime.refresh_provider(&store, &host, CatalogProvider::Openrouter, false));
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(pending.as_mut().poll(&mut context).is_pending());
+    assert_eq!(host.requests.get(), 1);
+    drop(pending);
+    host.blocked.set(false);
+    let next = run(runtime.refresh_provider(&store, &host, CatalogProvider::Openrouter, false))?
+        .ok_or("Cancelled discovery retained ownership")?;
+    assert_eq!(next.models.len(), 1);
+    assert_eq!(host.requests.get(), 2);
     Ok(())
 }
