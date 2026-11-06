@@ -21,6 +21,7 @@ import {
   revalidateManagedAdoptionInput,
 } from "../tools/cloudflare/managed-native-operator-io.ts";
 import { CODEX_AUTH_POOL_KV_KEY } from "../src/codex/auth.ts";
+import { BUN_RUNTIMES } from "../ops/bun-runtime.ts";
 
 const input = () => ({
   v: 1,
@@ -265,4 +266,116 @@ test("untrusted launcher facts and direct CLI cannot create an operator binding 
   assert.equal(output, "");
   assert.match(errors, /immutable private launcher/);
   assert.ok(!errors.includes("synthetic-sensitive"));
+});
+
+/** Metadata-only fixture: no native backend/helper is invoked and no real service is queried. */
+const preparedFixture = (root: string, name: string, primary: boolean): PreparedManagedAdoption => {
+  const sourceSha = "c".repeat(40),
+    release = join(root, ".data", "releases", sourceSha);
+  mkdirSync(join(release, "ops"), { recursive: true, mode: 0o700 });
+  mkdirSync(join(root, "ops"), { recursive: true, mode: 0o700 });
+  for (const path of [join(root, "ops", "launch-vps.sh"), join(release, "ops", "launch-vps.sh")]) writeFileSync(path, "fixture-launcher", { mode: 0o600 });
+  const current = join(root, ".data", "current");
+  if (!existsSync(current)) symlinkSync(release, current);
+  for (const file of ["kv-bun.sqlite3", "deploy.lock"]) {
+    const path = join(root, ".data", file);
+    if (!existsSync(path)) writeFileSync(path, "", { mode: 0o600 });
+  }
+  const manifest = {
+    schema: 3,
+    git_sha: sourceSha,
+    platform: "linux",
+    architecture: "arm64",
+    runtime: BUN_RUNTIMES.linux,
+    native_kv: {
+      tree_sha256: "a".repeat(64),
+      artifact_sha256: "a".repeat(64),
+      provenance_sha256: "a".repeat(64),
+      inputs_sha256: "a".repeat(64),
+      inputs_manifest: "tools/native-kv/inputs.json",
+    },
+  };
+  const bytes = JSON.stringify(manifest);
+  writeFileSync(join(release, ".uos-release.json"), bytes, { mode: 0o600 });
+  const home = join(root, name),
+    output = join(root, ".data", "private-output");
+  mkdirSync(home, { mode: 0o700 });
+  mkdirSync(output, { recursive: true, mode: 0o700 });
+  const helper = join(home, "synthetic-unused-helper");
+  writeFileSync(helper, "fixture", { mode: 0o500 });
+  const facts = {
+    root,
+    home,
+    outputDirectory: output,
+    accountSha256: bytesSha256(Buffer.from(name)),
+    sourceSha,
+    sourceManifestSha256: bytesSha256(Buffer.from(bytes)),
+    observer: { path: helper, sha256: bytesSha256(Buffer.from("fixture")), home, uid: process.getuid?.() ?? -1, pid: 77 },
+  };
+  return primary ? PreparedManagedAdoption.fromOwnedPrimaryLauncher(facts) : PreparedManagedAdoption.fromLauncher(facts);
+};
+
+test("one opaque shared real lease authorizes exactly two prepared roles and expires after callback", async () => {
+  const root = temporary();
+  const a = preparedFixture(root, "primary", true),
+    b = preparedFixture(root, "secondary", false),
+    third = preparedFixture(root, "third", false);
+  try {
+    assert.throws(() => {
+      a.assertDeploymentLease();
+    }, /deployment_lease_required/);
+    await PreparedManagedAdoption.withFullPoolDeploymentLock(a, b, async () => {
+      a.assertDeploymentLease();
+      b.assertDeploymentLease();
+      assert.equal(JSON.stringify(a), "{}");
+      assert.throws(() => {
+        third.assertDeploymentLease();
+      }, /deployment_lease_required/);
+      assert.throws(() => {
+        a.dispose();
+      }, /active_deployment_lease/);
+      await assert.rejects(
+        b.withDeploymentLock(() => Promise.resolve()),
+        /nested_deployment_lease/
+      );
+      const child = Bun.spawn(["/usr/bin/flock", "-n", join(root, ".data", "deploy.lock"), "/bin/true"], { env: {}, stdout: "ignore", stderr: "ignore" });
+      assert.notEqual(await child.exited, 0, "one actual POSIX lease is held");
+      const sameOutputs = decodeManagedAdoptionInput(JSON.stringify(input()));
+      await assert.rejects(PreparedManagedAdoption.executeFullPool(a, b, sameOutputs, sameOutputs), /output_overlap/);
+    });
+    for (const binding of [a, b, third])
+      assert.throws(() => {
+        binding.assertDeploymentLease();
+      }, /deployment_lease_required/);
+    const child = Bun.spawn(["/usr/bin/flock", "-n", join(root, ".data", "deploy.lock"), "/bin/true"], { env: {}, stdout: "ignore", stderr: "ignore" });
+    assert.equal(await child.exited, 0);
+  } finally {
+    for (const binding of [a, b, third]) binding.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("full-pool lease rejects cross-root, wrong-role and duplicate prepared membership before locking", async () => {
+  const root = temporary(),
+    other = temporary();
+  const a = preparedFixture(root, "primary", true),
+    b = preparedFixture(root, "secondary", false),
+    foreign = preparedFixture(other, "foreign", false);
+  try {
+    for (const [first, second] of [
+      [a, foreign],
+      [b, a],
+      [a, a],
+    ] as const)
+      await assert.rejects(
+        PreparedManagedAdoption.withFullPoolDeploymentLock(first, second, () => Promise.resolve()),
+        /full_pool_binding_scope/
+      );
+    const valid = decodeManagedAdoptionInput(JSON.stringify(input()));
+    await assert.rejects(PreparedManagedAdoption.executeFullPool(a, b, valid, valid), /deployment_lease_required/);
+  } finally {
+    for (const binding of [a, b, foreign]) binding.dispose();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true });
+  }
 });

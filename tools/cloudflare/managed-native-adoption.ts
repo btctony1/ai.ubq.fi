@@ -8,10 +8,12 @@ import { type Kv, openKv, prepareNativeKvBackend } from "#kv";
 import { CODEX_AUTH_POOL_KV_KEY, parseCodexAuthFromAuthJson } from "../../src/codex/auth.ts";
 import {
   executeManagedNativeAdoption,
+  executeOwnedPrimaryNativeAdoption,
   ManagedAdoptionError,
   type ManagedAdoptionPort,
   type ManagedAdoptionReceipt,
 } from "../../src/codex/managed-native-adoption.ts";
+import { executeFullPoolNativeAdoption, type FullPoolAdoptionReceipt } from "../../src/codex/full-pool-native-adoption.ts";
 import { createNativeSnapshotReader, verifyNativeSchema } from "../../src/kv-conversion/native-schema.ts";
 import { CutoverHost, boundedCutoverHolderCheck } from "../../ops/cutover-host.ts";
 import { readCutoverExecStart, assertCutoverExecStart } from "../../ops/cutover-unit.ts";
@@ -62,6 +64,9 @@ export const managedAdoptionKvPort = (kv: Pick<Kv, "get" | "atomic">, hooks: Omi
   commit: async (versionstamp, pool) => (await kv.atomic().check({ key: CODEX_AUTH_POOL_KV_KEY, versionstamp }).set(CODEX_AUTH_POOL_KV_KEY, pool).commit()).ok,
 });
 const prepared = new WeakSet<PreparedManagedAdoption>();
+type AdoptionRole = "owned-primary" | "unowned-secondary";
+type DeploymentLease = Readonly<{ root: string; sourceSha: string; manifestSha256: string; members: readonly PreparedManagedAdoption[] }>;
+const activeLeases = new WeakSet<DeploymentLease>();
 const inside = (path: string, root: string): boolean => path === root || path.startsWith(root + "/");
 
 export class PreparedManagedAdoption {
@@ -71,14 +76,16 @@ export class PreparedManagedAdoption {
   readonly #db: string;
   readonly #dbIdentity: string;
   readonly #output: PrivateOutputAnchor;
-  #held = false;
+  readonly #role: AdoptionRole;
+  #lease: DeploymentLease | null = null;
   #opened = false;
   #nativeIdentity: string | null = null;
   #nativeHash: string | null = null;
   #peer: NativeOwnerObservation | null = null;
-  private constructor(facts: ManagedAdoptionLauncherFacts, observer: NativeOwnerObserver) {
+  private constructor(facts: ManagedAdoptionLauncherFacts, observer: NativeOwnerObserver, role: AdoptionRole) {
     this.#facts = Object.freeze({ ...facts, observer: Object.freeze({ ...facts.observer }) });
     this.#observer = observer;
+    this.#role = role;
     this.#host = new CutoverHost(facts.root);
     this.#db = join(facts.root, ".data/kv-bun.sqlite3");
     this.#dbIdentity = this.#databaseIdentity();
@@ -87,6 +94,12 @@ export class PreparedManagedAdoption {
   }
   /** Source literals in the accepted immutable private launcher are the authority, never stdin. */
   static fromLauncher(facts: ManagedAdoptionLauncherFacts): PreparedManagedAdoption {
+    return PreparedManagedAdoption.#fromLauncher(facts, "unowned-secondary");
+  }
+  static fromOwnedPrimaryLauncher(facts: ManagedAdoptionLauncherFacts): PreparedManagedAdoption {
+    return PreparedManagedAdoption.#fromLauncher(facts, "owned-primary");
+  }
+  static #fromLauncher(facts: ManagedAdoptionLauncherFacts, role: AdoptionRole): PreparedManagedAdoption {
     let binding: PreparedManagedAdoption | undefined;
     try {
       if (
@@ -106,7 +119,7 @@ export class PreparedManagedAdoption {
         facts.observer.home !== facts.home
       )
         adoptionRefused("binding_scope");
-      binding = new PreparedManagedAdoption(facts, NativeOwnerObserver.fromLauncher(facts.observer));
+      binding = new PreparedManagedAdoption(facts, NativeOwnerObserver.fromLauncher(facts.observer), role);
       binding.#source();
       return binding;
     } catch {
@@ -165,7 +178,7 @@ export class PreparedManagedAdoption {
     assertCutoverExecStart(await readCutoverExecStart(this.#facts.root, this.#host.system.run), ["/bin/sh", join(this.#facts.root, "ops/launch-vps.sh")]);
   }
   async #guard(): Promise<void> {
-    if (!this.#held) adoptionRefused("deployment_lease_required");
+    this.assertDeploymentLease();
     this.#output.assert();
     this.#source();
     await this.#unit();
@@ -195,29 +208,117 @@ export class PreparedManagedAdoption {
     this.#peer = await this.#observer.observe();
     if (this.#native().sha256 !== before.sha256) adoptionRefused("native_file_changed");
   }
-  async withDeploymentLock<T>(callback: () => Promise<T>): Promise<T> {
-    if (this.#held) adoptionRefused("nested_deployment_lease");
-    this.#source();
-    readBoundFile(join(this.#facts.root, ".data/deploy.lock"), 4096, true);
-    const release = await acquireDeployLock(join(this.#facts.root, ".data/deploy.lock"));
-    this.#held = true;
+  assertDeploymentLease(): void {
+    const lease = this.#lease;
+    if (
+      !lease ||
+      !activeLeases.has(lease) ||
+      !lease.members.includes(this) ||
+      lease.root !== this.#facts.root ||
+      lease.sourceSha !== this.#facts.sourceSha ||
+      lease.manifestSha256 !== this.#facts.sourceManifestSha256
+    )
+      adoptionRefused("deployment_lease_required");
+  }
+  dispose(): void {
+    if (this.#lease && activeLeases.has(this.#lease)) adoptionRefused("active_deployment_lease");
+    this.#output.close();
+    prepared.delete(this);
+  }
+  static #fullPoolMembers(primary: PreparedManagedAdoption, secondary: PreparedManagedAdoption): readonly PreparedManagedAdoption[] {
+    if (!prepared.has(primary) || !prepared.has(secondary)) adoptionRefused("immutable_launcher_required");
+    if (
+      primary === secondary ||
+      primary.#role !== "owned-primary" ||
+      secondary.#role !== "unowned-secondary" ||
+      primary.#facts.root !== secondary.#facts.root ||
+      primary.#facts.sourceSha !== secondary.#facts.sourceSha ||
+      primary.#facts.sourceManifestSha256 !== secondary.#facts.sourceManifestSha256 ||
+      primary.#dbIdentity !== secondary.#dbIdentity ||
+      primary.#facts.home === secondary.#facts.home ||
+      primary.#facts.accountSha256 === secondary.#facts.accountSha256
+    )
+      adoptionRefused("full_pool_binding_scope");
+    return [primary, secondary];
+  }
+  static async #withLease<T>(members: readonly PreparedManagedAdoption[], callback: () => Promise<T>): Promise<T> {
+    if (members.length < 1 || members.length > 2 || typeof callback !== "function" || members.some((member) => !prepared.has(member)))
+      adoptionRefused("deployment_lease_scope");
+    if (members.some((member) => member.#lease !== null)) adoptionRefused("nested_deployment_lease");
+    for (const member of members) {
+      member.#source();
+      member.#output.assert();
+    }
+    const first = members[0];
+    readBoundFile(join(first.#facts.root, ".data/deploy.lock"), 4096, true);
+    const release = await acquireDeployLock(join(first.#facts.root, ".data/deploy.lock"));
+    const lease = Object.freeze({
+      root: first.#facts.root,
+      sourceSha: first.#facts.sourceSha,
+      manifestSha256: first.#facts.sourceManifestSha256,
+      members: Object.freeze([...members]),
+    });
+    activeLeases.add(lease);
+    for (const member of members) member.#lease = lease;
     const terminal = `window-terminal-${randomUUID()}.json`;
     try {
       const result = await callback();
-      this.#output.write(terminal, { v: 1, kind: "managed_adoption_window", status: "callback_completed", source_sha: this.#facts.sourceSha });
+      first.#output.write(terminal, { v: 1, kind: "managed_adoption_window", status: "callback_completed", source_sha: first.#facts.sourceSha });
       return result;
     } catch {
-      this.#output.write(terminal, { v: 1, kind: "managed_adoption_window", status: "callback_failed_recovery_required", source_sha: this.#facts.sourceSha });
-      adoptionRefused("window_failed_recovery_required");
+      first.#output.write(terminal, { v: 1, kind: "managed_adoption_window", status: "callback_failed_recovery_required", source_sha: first.#facts.sourceSha });
+      return adoptionRefused("window_failed_recovery_required");
     } finally {
-      this.#held = false;
+      activeLeases.delete(lease);
+      for (const member of members) member.#lease = null;
       release();
-      this.#output.close();
+      for (const member of members) member.dispose();
     }
+  }
+  withDeploymentLock<T>(callback: () => Promise<T>): Promise<T> {
+    return PreparedManagedAdoption.#withLease([this], callback);
+  }
+  static async withFullPoolDeploymentLock<T>(primary: PreparedManagedAdoption, secondary: PreparedManagedAdoption, callback: () => Promise<T>): Promise<T> {
+    return await PreparedManagedAdoption.#withLease(PreparedManagedAdoption.#fullPoolMembers(primary, secondary), callback);
+  }
+  static async executeFullPool(
+    primary: PreparedManagedAdoption,
+    secondary: PreparedManagedAdoption,
+    primaryValue: ManagedAdoptionInput,
+    secondaryValue: ManagedAdoptionInput
+  ): Promise<FullPoolAdoptionReceipt> {
+    const members = PreparedManagedAdoption.#fullPoolMembers(primary, secondary);
+    for (const member of members) member.assertDeploymentLease();
+    if (primary.#lease !== secondary.#lease) adoptionRefused("foreign_deployment_lease");
+    const a = revalidateManagedAdoptionInput(primaryValue),
+      b = revalidateManagedAdoptionInput(secondaryValue);
+    if (primary.#facts.outputDirectory === secondary.#facts.outputDirectory && new Set([...Object.values(a.outputs), ...Object.values(b.outputs)]).size !== 6)
+      adoptionRefused("full_pool_output_overlap");
+    for (const [member, input] of [
+      [primary, a],
+      [secondary, b],
+    ] as const)
+      for (const path of Object.values(input.outputs)) if (member.#output.exists(path)) adoptionRefused("output_exists");
+    const record = `full-pool-partial-${randomUUID()}.json`;
+    return await executeFullPoolNativeAdoption(
+      {
+        primary: () => primary.execute(a),
+        secondary: (expected) => secondary.execute({ ...b, expected }),
+        verifyBoth: async () => {
+          await primary.#guard();
+          await secondary.#guard();
+        },
+        recordPartial: (receipt) => {
+          primary.#output.write(record, receipt);
+          return Promise.resolve();
+        },
+      },
+      b.expected.nativeSha256
+    );
   }
   async execute(value: ManagedAdoptionInput): Promise<ManagedAdoptionReceipt> {
     const input = revalidateManagedAdoptionInput(value);
-    if (!this.#held) adoptionRefused("deployment_lease_required");
+    this.assertDeploymentLease();
     for (const path of Object.values(input.outputs)) if (this.#output.exists(path)) adoptionRefused("output_exists");
     let kv: Kv | undefined;
     let phase = "before_open";
@@ -260,7 +361,8 @@ export class PreparedManagedAdoption {
         },
       });
       const commit = port.commit;
-      const result = await executeManagedNativeAdoption(
+      const execute = this.#role === "owned-primary" ? executeOwnedPrimaryNativeAdoption : executeManagedNativeAdoption;
+      const result = await execute(
         {
           ...port,
           commit: async (stamp, pool) => {
@@ -268,7 +370,7 @@ export class PreparedManagedAdoption {
             return await commit(stamp, pool);
           },
         },
-        { accountSha256: this.#facts.accountSha256, slot: 2, home: this.#facts.home },
+        { accountSha256: this.#facts.accountSha256, slot: this.#role === "owned-primary" ? 1 : 2, home: this.#facts.home },
         input.expected,
         Date.now()
       );
